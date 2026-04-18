@@ -1,3 +1,4 @@
+<meta name="google-site-verification" content="DEIN_LANGER_CODE_HIER" />
 # ORÓMA (Offline-Realtime-Organic-Memory-AI)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19596002.svg)](https://doi.org/10.5281/zenodo.19596002)
 
