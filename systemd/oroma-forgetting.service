@@ -1,0 +1,60 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-forgetting.service
+# Projekt:  ORÓMA v3.8 – Forgetting Worker (Snap-Verblassen & Komprimierung)
+# Stand:    2025-11-30
+# Autor:    ORÓMA · KI-JWG-X1
+# =============================================================================
+
+[Unit]
+Description=ORÓMA v3.8 – Forgetting Worker (Komprimierung & Verblassen)
+After=network-online.target oroma.service
+Wants=network-online.target
+ConditionPathExists=!/opt/ai/oroma/.use_orchestrator
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai/oroma
+SyslogIdentifier=oroma-forgetting
+
+User=oroma
+Group=oroma
+UMask=002
+
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=UTF-8
+Environment=TZ=Europe/Berlin
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/opt/hailo/bin
+Environment=LD_LIBRARY_PATH=/usr/local/lib:/usr/lib:/opt/hailo/lib
+Environment=PYTHONPATH=/opt/ai/oroma
+Environment=OROMA_LOG_DIR=/opt/ai/oroma/logs
+Environment=OROMA_SNAPCHAINS=/opt/ai/oroma/data/snapchains
+Environment=OROMA_SNAP_DIR=/opt/ai/oroma/data/snaps
+Environment=OROMA_BASE=/opt/ai/oroma
+
+ExecStartPre=/usr/bin/env bash -lc 'mkdir -p /opt/ai/oroma/logs /opt/ai/oroma/data /opt/ai/oroma/data/snaps /opt/ai/oroma/data/snapchains'
+ExecStartPre=/usr/bin/env bash -lc 'touch /opt/ai/oroma/logs/forgetting.out.log /opt/ai/oroma/logs/forgetting.err.log'
+
+ExecStart=/usr/bin/python3 -m core.forgetting_worker
+
+StandardOutput=append:/opt/ai/oroma/logs/forgetting.out.log
+StandardError=append:/opt/ai/oroma/logs/forgetting.err.log
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+RestrictRealtime=yes
+ReadWritePaths=/opt/ai/oroma/logs \
+               /opt/ai/oroma/data \
+               /opt/ai/oroma/data/snaps \
+               /opt/ai/oroma/data/snapchains
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,58 @@
+# ==============================================================================
+# Datei:     /etc/systemd/system/oroma-stats-repair.service
+# Projekt:   ORÓMA – Stats Repair / Audit Snapshot Service
+# Version:   v3.7.5
+# Stand:     2026-04-08
+# Autor:     ORÓMA · GPT-5.4 Thinking
+# ==============================================================================
+#
+# Zweck
+# -----
+#   Führt tools/stats_snapshot.py bewusst SELTEN als Repair-/Audit-/Rebuild-Pfad aus.
+#   Dieser Service ist NICHT fuer den regulaeren, engen Fast-Path gedacht.
+#   Der laufende Tagesbetrieb erfolgt ueber tools/stats_event_aggregator.py.
+#
+# Einsatzfaelle
+# -------------
+#   - periodischer Audit-Lauf
+#   - Konsistenzpruefung / Nachziehen historischer Werte
+#   - manueller Repair nach Schema-/Import-/Migrationsarbeiten
+#
+# Aktivierung:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now oroma-stats-repair.timer
+#
+# Manueller Start:
+#   sudo systemctl start oroma-stats-repair.service
+#
+# Logs:
+#   journalctl -u oroma-stats-repair.service -n 120 --no-pager
+# ==============================================================================
+
+[Unit]
+Description=ORÓMA – Stats Repair / Audit Snapshot
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/opt/ai/oroma/.use_orchestrator
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai/oroma
+
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=OROMA_DBW_ENABLE=1
+
+User=oroma
+Group=oroma
+UMask=002
+
+ExecStart=/usr/bin/env PYTHONPATH=/opt/ai/oroma /usr/bin/python3 /opt/ai/oroma/tools/stats_snapshot.py --once
+
+Nice=15
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+[Install]
+WantedBy=multi-user.target

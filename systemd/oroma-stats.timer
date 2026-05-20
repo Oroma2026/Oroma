@@ -1,0 +1,26 @@
+# ==============================================================================
+# Datei:     /etc/systemd/system/oroma-stats.timer
+# Projekt:   ORÓMA – Stats Snapshot Timer
+# Version:   v3.7.5
+# Stand:     2025-12-20
+# Autor:     ORÓMA · KI-JWG-X1 + GPT-5.2 Thinking
+# ==============================================================================
+#
+# Zweck
+# -----
+#   Ruft oroma-stats.service regelmäßig auf.
+# ==============================================================================
+
+[Unit]
+Description=ORÓMA – Stats Snapshot Timer (every 2 minutes)
+
+[Timer]
+OnBootSec=75s
+OnUnitActiveSec=120s
+Persistent=true
+RandomizedDelaySec=45s
+AccuracySec=30s
+Unit=oroma-stats.service
+
+[Install]
+WantedBy=timers.target

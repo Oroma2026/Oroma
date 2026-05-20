@@ -1,0 +1,11 @@
+[Unit]
+Description=ORÓMA v3.8 – Forgetting Worker monatlich
+
+[Timer]
+OnCalendar=monthly
+Unit=oroma-forgetting.service
+Persistent=true
+
+RandomizedDelaySec=2h
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,50 @@
+# Core
+Flask==2.2.2
+Werkzeug==2.2.2
+itsdangerous==2.1.2
+Jinja2==3.1.2
+click==8.1.3
+psutil==7.1.0
+requests==2.32.5
+python-dotenv==0.21.0
+python-json-logger==3.3.0
+Pillow==9.4.0
+numpy==2.2.6
+pandas==2.3.3
+simplejson==3.18.3
+tqdm==4.64.1
+PyYAML==6.0
+typing_extensions==4.15.0
+python-dateutil==2.9.0.post0
+pytz==2022.7.1
+tzdata==2025.2
+rich==14.1.0
+
+# Vektor/ANN
+annoy==1.17.3
+faiss-cpu==1.12.0
+
+# Kamera/Video (Headless)
+opencv-python==4.12.0.88
+imageio==2.37.0
+av==12.3.0
+simplejpeg==1.8.1
+
+# Raspberry-Pi Hardware (Headless)
+gpiozero==2.0
+RPi.GPIO==0.7.1a4
+lgpio==0.2.2.0
+pigpio==1.78
+smbus2==0.4.2
+spidev==3.5
+netifaces==0.11.0
+netaddr==0.8.0
+
+# Sonstiges nützlich
+python-prctl==1.8.1
+urllib3==1.26.12
+chardet==5.2.0
+charset-normalizer==3.0.1
+
+# NPU (falls genutzt; Wheel muss zum System passen)
+hailort==4.20.0

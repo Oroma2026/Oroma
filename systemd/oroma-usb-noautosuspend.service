@@ -1,0 +1,50 @@
+# =============================================================================
+# Pfad:    /etc/systemd/system/oroma-usb-noautosuspend.service
+# Quelle:  /opt/ai/oroma/systemd/oroma-usb-noautosuspend.service
+# Projekt: ORÓMA – Headless Lern-KI (Edge)
+# Version: v3.7.3
+# Stand:   2026-01-30
+# Autor:   Jörg + GPT-5.2 Thinking
+# =============================================================================
+#
+# Zweck
+# -----
+# Ergänzende, defensive Boot/Restart-Applikation für USB Runtime-PM Settings.
+# Falls udev-Regeln (99-oroma-usb-noautosuspend.rules) aus Gründen wie Race-Conditions
+# oder frühen Enumerations nicht greifen, stellt dieses oneshot Service sicher,
+# dass power/control für die bekannten Geräte auf "on" gesetzt wird.
+#
+# Design
+# ------
+# - Minimal-invasiv: keine Abhängigkeit von X11/Qt, reine sysfs Schreiboperation.
+# - Fail-closed: wenn Geräte nicht vorhanden, endet das Service erfolgreich.
+# - Sichtbarkeit: schreibt ins Journal via StandardOutput/StandardError.
+#
+# Hinweis Orchestrator-Modus
+# --------------------------
+# ORÓMA läuft oft im Orchestrator-Modus. Dieses Service ist unabhängig davon und
+# darf systemweit aktiv sein. Es hat keinen Einfluss auf ORÓMA-Prozesse außer
+# der Stabilisierung des USB-Runtime-PM.
+#
+# Installation (durch User)
+# -------------------------
+# - Datei nach /etc/systemd/system kopieren
+# - systemctl daemon-reload
+# - systemctl enable --now oroma-usb-noautosuspend.service
+#
+# =============================================================================
+
+[Unit]
+Description=ORÓMA USB No-Autosuspend (EMEET PIXY + Jabra)
+After=systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/bin/bash -lc '/opt/ai/oroma/tools/usb_noautosuspend_apply.sh'
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

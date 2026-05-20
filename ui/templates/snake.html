@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% block content %}
+<main style="padding:1rem; margin:auto; text-align:center;">
+  <h1>🐍 ORÓMA Snake Arena</h1>
+
+  <!-- Policy Badge + ε-Slider -->
+  <div class="d-flex flex-wrap justify-content-center align-items-center gap-3 mb-3">
+    <span id="policyBadge" class="badge rounded-pill bg-secondary px-3 py-2">Policy: off</span>
+    <div>
+      <label for="epsRange" class="form-label mb-0 me-2">ε:</label>
+      <input type="range" id="epsRange" min="0" max="0.5" step="0.01" value="0.07" style="vertical-align:middle; width:220px;"
+             oninput="epsChanged(this.value)" onchange="epsCommit(this.value)">
+      <span id="epsVal" class="ms-1">0.07</span>
+    </div>
+    <div class="form-check form-switch ms-3">
+      <input class="form-check-input" type="checkbox" id="autoplaySwitch" onchange="toggleAutoplay(this.checked)">
+      <label class="form-check-label" for="autoplaySwitch">Autoplay</label>
+    </div>
+  </div>
+
+  <!-- Modusauswahl -->
+  <div class="mb-3">
+    <label class="fw-bold me-2">Modus:</label>
+    <select id="modeSelect" onchange="changeMode()" class="form-select d-inline-block w-auto fs-5">
+      <option value="ki_vs_oroma">KI vs ORÓMA</option>
+      <option value="oroma_vs_oroma_explore">ORÓMA vs ORÓMA (explore)</option>
+      <option value="oroma_vs_oroma_policy">ORÓMA vs ORÓMA (policy)</option>
+      <option value="oroma_vs_human">ORÓMA vs Human</option>
+    </select>
+    <button class="btn btn-sm btn-outline-primary ms-2" onclick="togglePolicy()">Policy ON/OFF</button>
+  </div>
+
+  <!-- Spielfeld -->
+  <div style="display:flex;justify-content:center;">
+    <canvas id="snakeCanvas"
+            width="960" height="540"
+            style="max-width:95vw; aspect-ratio:16/9;
+                   background:#000;border:2px solid #333;
+                   border-radius:6px; box-shadow:0 0 20px #222;">
+    </canvas>
+  </div>
+
+  <!-- Steuerung -->
+  <div class="mt-3">
+    <button class="btn btn-success btn-sm mx-1" onclick="startGame()">Start</button>
+    <button class="btn btn-warning btn-sm mx-1" onclick="pauseGame()">Pause</button>
+    <button class="btn btn-secondary btn-sm mx-1" onclick="resetGame()">Reset</button>
+  </div>
+
+  <p class="text-muted mt-3 fs-6">
+    Steuerung (nur Human-Modus): Pfeiltasten ↑ ↓ ← → &nbsp;|&nbsp;
+    Blau = ORÓMA, Grün = Gegner, Rot = Food
+  </p>
+
+  <!-- Statistikleiste -->
+  <div id="stats" class="mt-4 text-light small" style="font-family:monospace;">
+    <span id="statMode">Mode: -</span> · 
+    <span id="statGames">Games: 0</span> · 
+    <span id="statTime">Time: 00:00</span> · 
+    <span id="statHigh">Highscore: 0</span> ·
+    <span id="statEps">ε: 0.00</span> ·
+    <span id="statTick">tick: 150ms</span> ·
+    <span id="statPolicy">Regeln: 0 · Archiv: 0</span> ·
+    <span id="statDb">Exports: 0 · DB(ns): 0 / total: 0</span>
+  </div>
+</main>
+
+<script>
+const cvs = document.getElementById("snakeCanvas");
+const ctx = cvs.getContext("2d");
+let state=null, scale=1.0, gameStart=null, elapsedMs=0, timerInterval=null;
+
+document.addEventListener("keydown", e=>{
+  if(!state || state.mode!=="oroma_vs_human") return;
+  const map={ArrowUp:{dx:0,dy:-1},ArrowDown:{dx:0,dy:1},ArrowLeft:{dx:-1,dy:0},ArrowRight:{dx:1,dy:0}};
+  if(map[e.key]) sendCmd("dir",map[e.key]);
+});
+
+document.addEventListener("DOMContentLoaded", () => {
+  resizeCanvas();
+  loadPolicy();  // init badge/ε/autoplay
+  loadState();
+  setInterval(loadState, 350);
+  draw();
+});
+
+function resizeCanvas(){
+  const w=window.innerWidth, h=window.innerHeight;
+  const baseW=1280, baseH=720;
+  scale=Math.min(w/baseW, h/baseH, 1.0);
+  cvs.width=Math.floor(baseW*scale);
+  cvs.height=Math.floor(baseH*scale);
+}
+window.addEventListener("resize",resizeCanvas);
+
+// ======= Backend-Calls =======
+async function loadState(){
+  try{
+    const r=await fetch("/games/snake/state");
+    if(!r.ok)return;
+    state=await r.json();
+
+    document.getElementById("modeSelect").value=state.mode;
+    document.getElementById("statMode").innerText = `Mode: ${state.mode}`;
+    document.getElementById("statGames").innerText = `Games: ${state.games_played}`;
+    document.getElementById("statHigh").innerText = `Highscore: ${state.highscore_time}`;
+    document.getElementById("statEps").innerText = `ε: ${Number(state.eps||0).toFixed(3)}`;
+    document.getElementById("statTick").innerText = `tick: ${state.tick_ms||150}ms`;
+    document.getElementById("statPolicy").innerText = `Regeln: ${(state.policy?.policy_rules_count)||0} · Archiv: ${(state.policy?.archiv_rules_count)||0}`;
+    document.getElementById("statDb").innerText = `Exports: ${state.exports_session||0} · DB(ns): ${state.snapchains_in_db||0} / total: ${state.snaps_total_db||0}`;
+
+    // Zeit
+    updateTimeDisplay((state.seconds||0)*1000);
+
+    // Policy Badge & ε
+    updatePolicyBadge(state.policy?.enabled);
+    setEpsDisplay(state.policy?.eps ?? state.eps);
+
+    // Autoplay UI
+    document.getElementById("autoplaySwitch").checked = !!state.autoplay;
+  }catch(e){console.log(e);}
+}
+
+async function loadPolicy(){
+  try{
+    const r=await fetch("/games/snake/policy");
+    if(!r.ok)return;
+    const p=await r.json();
+    updatePolicyBadge(p.enabled);
+    setEpsDisplay(p.eps);
+  }catch(e){console.log(e);}
+}
+
+async function sendCmd(cmd,data={}){
+  try{
+    await fetch("/games/snake/cmd",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({cmd,...data})});
+  }catch(e){console.log(e);}
+}
+
+async function togglePolicy(){
+  try{
+    const badge = document.getElementById("policyBadge");
+    const enabled = !badge.classList.contains("bg-success");
+    const r=await fetch("/games/snake/policy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled})});
+    const p=await r.json();
+    updatePolicyBadge(p.enabled);
+  }catch(e){console.log(e);}
+}
+
+async function epsCommit(val){
+  try{
+    const v = Number(val||0);
+    await fetch("/games/snake/policy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({eps:v})});
+  }catch(e){console.log(e);}
+}
+
+async function toggleAutoplay(on){
+  try{
+    await fetch("/games/snake/auto",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:!!on})});
+  }catch(e){console.log(e);}
+}
+
+// ======= UI Helpers =======
+function updatePolicyBadge(enabled){
+  const el = document.getElementById("policyBadge");
+  if(enabled){
+    el.classList.remove("bg-secondary");
+    el.classList.add("bg-success");
+    el.textContent="Policy: on";
+  }else{
+    el.classList.remove("bg-success");
+    el.classList.add("bg-secondary");
+    el.textContent="Policy: off";
+  }
+}
+
+function setEpsDisplay(v){
+  const vv = Number(v||0).toFixed(2);
+  const slider = document.getElementById("epsRange");
+  const label = document.getElementById("epsVal");
+  slider.value = vv;
+  label.textContent = vv;
+}
+function epsChanged(v){
+  document.getElementById("epsVal").textContent = Number(v||0).toFixed(2);
+}
+
+// ======= Controls =======
+async function startGame(){ gameStart = Date.now(); startTimer(); await sendCmd("start"); }
+async function pauseGame(){ stopTimer(); await sendCmd("pause"); }
+async function resetGame(){ stopTimer(); updateTimeDisplay(0); await sendCmd("reset"); await loadState(); }
+async function changeMode(){ const m=document.getElementById("modeSelect").value; stopTimer(); updateTimeDisplay(0); await sendCmd("mode",{mode:m}); await loadState(); }
+
+// ======= Zeitsteuerung =======
+function startTimer(){ stopTimer(); timerInterval = setInterval(()=>{ if(!gameStart) gameStart=Date.now(); updateTimeDisplay(Date.now()-gameStart); },1000); }
+function stopTimer(){ if(timerInterval){ clearInterval(timerInterval); timerInterval=null; } }
+function updateTimeDisplay(ms){
+  const totalSec=Math.floor(ms/1000);
+  const min=Math.floor(totalSec/60);
+  const sec=totalSec%60;
+  document.getElementById("statTime").innerText = `Time: ${String(min).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+}
+
+// ======= Rendering =======
+function draw(){
+  requestAnimationFrame(draw);
+  if(!state)return;
+
+  const w=state.width, h=state.height;
+  const cw=cvs.width/w, ch=cvs.height/h;
+
+  ctx.fillStyle="#000";
+  ctx.fillRect(0,0,cvs.width,cvs.height);
+
+  // Food
+  ctx.fillStyle=(state.legend?.food_color)||"#f33";
+  ctx.fillRect(state.food.x*cw, state.food.y*ch, cw, ch);
+
+  // Gegner
+  if(state.snake && state.snake.length){
+    ctx.fillStyle=(state.legend?.op_color)||"#0f0";
+    state.snake.forEach(s=>ctx.fillRect(s.x*cw,s.y*ch,cw-1,ch-1));
+  }
+
+  // ORÓMA
+  ctx.fillStyle=(state.legend?.oroma_color)||"#09f";
+  (state.snake_ai||[]).forEach(s=>ctx.fillRect(s.x*cw,s.y*ch,cw-1,ch-1));
+
+  // HUD Balken
+  ctx.fillStyle="rgba(0,0,0,0.6)";
+  ctx.fillRect(0,0,cvs.width,50*scale);
+  ctx.fillStyle="#fff";
+  ctx.font=`${16*scale}px monospace`;
+  ctx.fillText(`Mode: ${state.mode}`,15*scale,25*scale);
+  ctx.fillText(`Ticks: ${state.ticks}`,300*scale,25*scale);
+  ctx.fillText(`Games: ${state.games_played}`,520*scale,25*scale);
+  ctx.fillText(`Highscore: ${state.highscore_time}`,720*scale,25*scale);
+}
+</script>
+{% endblock %}

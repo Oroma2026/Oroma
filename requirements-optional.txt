@@ -1,0 +1,18 @@
+# ============================================================
+# ORÓMA v3.5 – Optionale Requirements
+# ============================================================
+
+# --- Audio I/O (alternative Engines) ---
+pyaudio
+
+# --- DeGirum NPU ---
+degirum
+
+# --- GStreamer-Python (braucht Systempakete via apt) ---
+PyGObject>=3.46
+
+# --- Spiele / Locals ---
+pygame>=2.5
+
+# --- OpenCV mit GUI (statt headless, nur wenn nötig) ---
+opencv-python

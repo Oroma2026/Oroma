@@ -1,0 +1,173 @@
+<!-- =============================================================================
+  Datei:   /opt/ai/oroma/ui/templates/classic_memory_game.html
+  Projekt: ORÓMA
+  Version: v3.7 (Classic Memory – UI)
+  Stand:   2025-10-02
+
+  Zweck / Rolle
+  ─────────────
+  - Web-UI für das klassische Memory-Spiel (Kartenpaare aufdecken).
+  - Nutzt das Blueprint `classic_memory_game` (url_prefix="/classic-memory").
+  - Kommuniziert ausschließlich über die API:
+      • GET  /classic-memory/api/state   → aktueller Spielzustand
+      • POST /classic-memory/api/pick    → Karte aufdecken {idx}
+      • POST /classic-memory/api/reset   → neues Spiel
+
+  Abhängigkeiten
+  ──────────────
+  - Erweitert `base.html` (globale Navigation, Styles, Badges).
+  - Styling via `/static/style.css` (Dark UI, Buttons, Karten, Badges).
+  - Optionaler API-Schutz: Wenn `OROMA_UI_TOKEN` gesetzt ist, wird er
+    automatisch als Header `X-OROMA-TOKEN` mitgesendet.
+
+  UI-Hinweise
+  ───────────
+  - Responsives Grid (8×8 max. vorbereitet, default 4×4).
+  - Große, klickbare Buttons; "?“ für verdeckte Karten, Buchstabe bei Treffer.
+  - Infobereich zeigt Züge & gefundene Paare.
+  - „Neues Spiel“ setzt den Zustand zurück.
+
+  Integration
+  ───────────
+  - Die Spiel-Blueprint-Registrierung erfolgt über `games_ui.register_games(app)`.
+    (Empfohlen: Alle Spiele *immer* über `games_ui` einbinden.)
+============================================================================= -->
+{% extends "base.html" %}
+{% block title %}ORÓMA · Classic Memory Game{% endblock %}
+{% block content %}
+<div class="container mt-4">
+
+  <div class="card shadow">
+    <div class="card-header d-flex align-items-center justify-content-between">
+      <div>
+        <h2 class="m-0">🧩 Classic Memory</h2>
+        <small class="text-muted">Finde die Paare — decke zwei identische Karten nacheinander auf.</small>
+      </div>
+      <div>
+        <button id="cmg-reset" class="btn btn-danger btn-sm">Neues Spiel</button>
+      </div>
+    </div>
+
+    <div class="card-body">
+      <!-- Info-Leiste -->
+      <div class="d-flex flex-wrap align-items-center mb-3">
+        <div id="cmg-info" class="me-3 status-ok">Züge: – · Paare: –</div>
+        <span id="cmg-msg" class="badge badge-off">Bereit</span>
+      </div>
+
+      <!-- Spielfeld -->
+      <div id="cmg-board"
+           class="d-grid"
+           style="grid-template-columns: repeat(4, 60px); gap: 6px; width: max-content;">
+        <!-- Karten werden per JS erzeugt -->
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(() => {
+  // -------------------------------
+  // Config & Helpers
+  // -------------------------------
+  const API_BASE = "/classic-memory";
+  const TOKEN = (window && window.OROMA_UI_TOKEN) ? String(window.OROMA_UI_TOKEN) : "";
+
+  async function api(path, opts = {}) {
+    const headers = opts.headers ? {...opts.headers} : {};
+    if (TOKEN) headers["X-OROMA-TOKEN"] = TOKEN;
+    if (opts.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
+    const r = await fetch(`${API_BASE}${path}`, {...opts, headers});
+    let j;
+    try { j = await r.json(); } catch { j = { ok:false, error: "Ungültige API-Antwort" }; }
+    return j;
+  }
+
+  function setMsg(text, cls = "badge-off") {
+    const el = document.getElementById("cmg-msg");
+    el.className = `badge ${cls}`;
+    el.textContent = text;
+  }
+
+  function gridColsForSize(size) {
+    // Erwartet quadratisches Board; default 4 → 4 Spalten
+    // Falls später andere Größen kommen, hier dynamisch anpassen.
+    return size;
+  }
+
+  // -------------------------------
+  // Rendering
+  // -------------------------------
+  function drawBoard(state) {
+    const boardEl = document.getElementById("cmg-board");
+    boardEl.innerHTML = "";
+
+    // Grid dynamisch anpassen
+    const size = Number(state.size || 4);
+    const cols = gridColsForSize(size);
+    boardEl.style.gridTemplateColumns = `repeat(${cols}, 60px)`;
+
+    // Karten rendern
+    (state.board || []).forEach((val, idx) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn btn-secondary";
+      b.style.width = "60px";
+      b.style.height = "60px";
+      b.style.fontWeight = "bold";
+      b.style.fontSize = "1.1rem";
+      b.textContent = val === "?" ? "?" : String(val);
+      b.onclick = () => pick(idx);
+      boardEl.appendChild(b);
+    });
+
+    // Info
+    const info = document.getElementById("cmg-info");
+    const turns = Number(state.turns || 0);
+    const pairs = Number(state.found_pairs || 0);
+    info.textContent = `Züge: ${turns} · Paare: ${pairs}`;
+  }
+
+  // -------------------------------
+  // API Calls
+  // -------------------------------
+  async function loadState() {
+    const j = await api("/api/state");
+    if (!j.ok) { setMsg(j.error || "Fehler beim Laden", "badge-fail"); return; }
+    drawBoard(j);
+    setMsg("Bereit", "badge-ok");
+  }
+
+  async function pick(idx) {
+    setMsg("Zug wird ausgeführt …", "badge-warn");
+    const j = await api("/api/pick", { method: "POST", body: JSON.stringify({ idx }) });
+    if (!j.ok) { setMsg(j.error || "Ungültiger Zug", "badge-fail"); return; }
+    // Server liefert den neuen State bereits zurück
+    if (j.board) {
+      // Kompat: falls nur Teilzustand, frisch laden
+      await loadState();
+    } else {
+      await loadState();
+    }
+  }
+
+  async function resetGame() {
+    setMsg("Neues Spiel wird gestartet …", "badge-warn");
+    const j = await api("/api/reset", { method: "POST" });
+    if (!j.ok) { setMsg(j.error || "Reset fehlgeschlagen", "badge-fail"); return; }
+    await loadState();
+  }
+
+  // -------------------------------
+  // Events
+  // -------------------------------
+  document.getElementById("cmg-reset").addEventListener("click", resetGame);
+  document.addEventListener("DOMContentLoaded", loadState);
+  // Falls dieses Skript *nach* DOM geladen wird, einmal sofort laden:
+  if (document.readyState === "complete" || document.readyState === "interactive") {
+    loadState();
+  }
+})();
+</script>
+{% endblock %}

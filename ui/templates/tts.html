@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container-fluid mt-4">
+  <h2>🗣️ Text-to-Speech</h2>
+  <p class="text-muted">ORÓMA spricht Text über den TTS-Wrapper (pyttsx3 / espeak / pico2wave).</p>
+
+  <div class="card bg-dark text-light shadow">
+    <div class="card-body">
+      <form id="ttsForm" class="row g-2">
+        <div class="col-md-10">
+          <input type="text" id="ttsText" class="form-control"
+                 placeholder="Text eingeben, den ORÓMA sprechen soll…" />
+        </div>
+        <div class="col-md-2 d-grid">
+          <button type="button" id="btnSpeak" class="btn btn-primary">▶️ Sprechen</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="mt-3">
+    <pre id="ttsResult" class="bg-black text-white p-2 rounded small">Noch nichts ausgegeben…</pre>
+  </div>
+</div>
+
+<script>
+document.getElementById("btnSpeak").onclick = async () => {
+  const text = document.getElementById("ttsText").value;
+  if (!text) {
+    document.getElementById("ttsResult").textContent = "❌ Bitte Text eingeben!";
+    return;
+  }
+  document.getElementById("ttsResult").textContent = "⏳ Sprechen...";
+  try {
+    const r = await fetch("/tts/api/speak", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({text})
+    });
+    const j = await r.json();
+    document.getElementById("ttsResult").textContent = j.ok ? "✅ Gesprochen" : "❌ Fehler: " + (j.error||"");
+  } catch(e) {
+    document.getElementById("ttsResult").textContent = "❌ API-Fehler: " + e;
+  }
+};
+</script>
+{% endblock %}

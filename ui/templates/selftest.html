@@ -1,0 +1,70 @@
+<!-- =============================================================================
+     Pfad:    /opt/ai/oroma/ui/templates/selftest.html
+     Projekt: ORÓMA
+     Version: v3.5patch2 (final+ENV-Flags)
+     Stand:   2025-09-25
+     Zweck:
+       - Selftest-Dashboard für Empathy & Coverage
+       - Buttons triggern API-Calls
+       - Anzeige von Ergebnissen oder Warnungen bei deaktivierten Features
+============================================================================= -->
+{% extends "base.html" %}
+{% block title %}Selftest – ORÓMA{% endblock %}
+
+{% block content %}
+<div class="container">
+  <h2>🛠 Selftest (Patch 2)</h2>
+
+  <!-- Empathy -->
+  <div class="card">
+    <div class="card-header">Empathy</div>
+    <div class="card-body">
+      {% if not enabled_empathy %}
+        <div class="alert alert-warning">
+          ⚠️ Empathy ist deaktiviert (<code>OROMA_ENABLE_EMPATHY=false</code>).
+        </div>
+      {% else %}
+        <button onclick="runEmpathy()" class="btn btn-success">Empathy Test</button>
+        <pre id="emp-out">–</pre>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Coverage -->
+  <div class="card" style="margin-top:1em;">
+    <div class="card-header">Coverage</div>
+    <div class="card-body">
+      {% if not enabled_cov %}
+        <div class="alert alert-warning">
+          ⚠️ Coverage ist deaktiviert (<code>OROMA_ENABLE_COVERAGE=false</code>).
+        </div>
+      {% else %}
+        <button onclick="runCoverage()" class="btn btn-info">Coverage Test</button>
+        <pre id="cov-out">–</pre>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<script>
+async function runEmpathy() {
+  try {
+    const r = await fetch("/selftest/api/empathy", {method:"POST"});
+    const j = await r.json();
+    document.getElementById("emp-out").textContent = JSON.stringify(j, null, 2);
+  } catch(e) {
+    document.getElementById("emp-out").textContent = "API Fehler: " + e;
+  }
+}
+
+async function runCoverage() {
+  try {
+    const r = await fetch("/selftest/api/coverage", {method:"POST"});
+    const j = await r.json();
+    document.getElementById("cov-out").textContent = JSON.stringify(j, null, 2);
+  } catch(e) {
+    document.getElementById("cov-out").textContent = "API Fehler: " + e;
+  }
+}
+</script>
+{% endblock %}

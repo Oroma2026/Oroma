@@ -1,0 +1,31 @@
+[Unit]
+Description=ORÓMA DB Writer (Global Single-Writer Daemon)
+After=network.target
+Before=oroma.service oroma-orchestrator.service oroma-dream.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ai/oroma
+
+# Writer only – receives write-requests via Unix Domain Socket
+Environment=OROMA_DBW_ENABLE=1
+Environment=OROMA_DBW_SOCKET=/opt/ai/oroma/data/state/db_writer.sock
+Environment=OROMA_DBW_SOCKET_MODE=660
+Environment=OROMA_DBW_SOCKET_GROUP=oroma
+
+# Multi-DB Allowlist (security: only these logical DBs are accepted)
+Environment=OROMA_DBW_ALLOW_DBS=oroma,stats,knowledge,registry
+
+# Keep consistent busy_timeout and WAL behavior
+Environment=OROMA_DB_BUSY_TIMEOUT_MS=60000
+
+ExecStart=/usr/bin/python3 -m core.db_writer
+Restart=always
+RestartSec=2
+
+# Hardening (headless)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

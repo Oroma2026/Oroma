@@ -1,0 +1,403 @@
+{% extends "base.html" %}
+{% block title %}Sudoku{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width: 980px;">
+  <h2>Sudoku</h2>
+  <p style="opacity:0.85">
+    Headless Sudoku (ORÓMA). iPhone/Safari: Tippe ein Feld an → Ziffern-Tastatur erscheint automatisch.
+  </p>
+
+  <div style="display:flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px;">
+    <label for="diff" style="min-width: 140px;">Difficulty:</label>
+    <select id="diff">
+      <option value="easy">easy (mehr Hinweise)</option>
+      <option value="medium" selected>medium</option>
+      <option value="hard">hard (weniger Hinweise)</option>
+    </select>
+
+    <button class="btn" id="btnNew">Neues Puzzle</button>
+    <button class="btn" id="btnCheck">Check</button>
+    <button class="btn" id="btnClear">Leere Felder löschen</button>
+    <button class="btn" id="btnHint">Hint (markiertes Feld)</button>
+
+    <span style="width: 10px;"></span>
+
+    <label for="speed" style="min-width: 120px;">ORÓMA Speed:</label>
+    <select id="speed">
+      <option value="60">sehr schnell</option>
+      <option value="120">schnell</option>
+      <option value="220" selected>normal</option>
+      <option value="400">langsam</option>
+      <option value="700">sehr langsam</option>
+    </select>
+
+    <button class="btn" id="btnOromaStart">ORÓMA spielt</button>
+    <button class="btn" id="btnOromaStop">Stop</button>
+
+    <span id="status" style="margin-left: 10px; font-weight: 600;"></span>
+  </div>
+
+  <!-- iOS/Safari Keyboard Trigger: offscreen input must exist + be focusable -->
+  <input id="kbd"
+         type="text"
+         inputmode="numeric"
+         pattern="[0-9]*"
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"
+         style="position:absolute; left:-1000px; top:-1000px; width:1px; height:1px; opacity:0;" />
+
+  <div id="meta" style="margin: 6px 0 12px 0; font-size: 0.95em; opacity: 0.85;"></div>
+
+  <div id="boardWrap" style="overflow:auto;">
+    <table id="board" style="border-collapse: collapse; user-select: none;"></table>
+  </div>
+
+  <details style="margin-top: 14px; opacity:0.9;">
+    <summary>Hinweise / Bedienung</summary>
+    <ul>
+      <li>Tippe ein Feld an und gib 1..9 ein (0/Backspace/Delete leert das Feld).</li>
+      <li><b>Check</b> prüft Konsistenz und ob gelöst.</li>
+      <li><b>Hint</b> gibt für das markierte <i>leere</i> Feld die korrekte Zahl.</li>
+      <li><b>ORÓMA spielt</b> füllt Schritt-für-Schritt. <b>Stop</b> beendet sofort.</li>
+      <li>Fixe Puzzle-Zahlen sind grau und nicht editierbar.</li>
+    </ul>
+  </details>
+</div>
+
+<script>
+(() => {
+  const boardEl = document.getElementById('board');
+  const statusEl = document.getElementById('status');
+  const metaEl = document.getElementById('meta');
+  const diffEl = document.getElementById('diff');
+  const speedEl = document.getElementById('speed');
+  const kbd = document.getElementById('kbd');
+
+  const btnOromaStart = document.getElementById('btnOromaStart');
+  const btnOromaStop  = document.getElementById('btnOromaStop');
+
+  let puzzleId = null;
+  let puzzle = null;     // 9x9 numbers (0..9) -> fix fields
+  let selected = {r: -1, c: -1};
+
+  let oromaPlaying = false;
+  let oromaTimer = null;
+
+  function setStatus(msg, ok=null) {
+    statusEl.textContent = msg || '';
+    statusEl.style.color = ok === null ? '' : (ok ? 'var(--ok,#3bb273)' : 'var(--err,#ff4d4d)');
+  }
+
+  function cellKey(r,c){ return `r${r}c${c}`; }
+
+  function renderBoard(grid) {
+    boardEl.innerHTML = '';
+    for (let r=0; r<9; r++) {
+      const tr = document.createElement('tr');
+      for (let c=0; c<9; c++) {
+        const td = document.createElement('td');
+        td.style.border = '1px solid rgba(255,255,255,0.20)';
+        td.style.width = '38px';
+        td.style.height = '38px';
+        td.style.textAlign = 'center';
+        td.style.verticalAlign = 'middle';
+        td.style.fontSize = '18px';
+        td.style.cursor = 'pointer';
+        td.style.background = 'rgba(255,255,255,0.03)';
+
+        if (c % 3 === 0) td.style.borderLeftWidth = '3px';
+        if (r % 3 === 0) td.style.borderTopWidth = '3px';
+        if (c === 8) td.style.borderRightWidth = '3px';
+        if (r === 8) td.style.borderBottomWidth = '3px';
+
+        const v = grid[r][c] || 0;
+        const fixed = puzzle && puzzle[r][c] !== 0;
+        td.dataset.r = String(r);
+        td.dataset.c = String(c);
+        td.id = cellKey(r,c);
+
+        if (fixed) {
+          td.textContent = String(puzzle[r][c]);
+          td.style.background = 'rgba(255,255,255,0.08)';
+          td.style.fontWeight = '700';
+          td.style.cursor = 'default';
+        } else {
+          td.textContent = v === 0 ? '' : String(v);
+        }
+
+        td.addEventListener('click', () => {
+          if (fixed) return;
+          selectCell(r,c);
+        });
+        tr.appendChild(td);
+      }
+      boardEl.appendChild(tr);
+    }
+  }
+
+  function selectCell(r,c) {
+    if (selected.r >= 0) {
+      const old = document.getElementById(cellKey(selected.r, selected.c));
+      if (old) old.style.outline = '';
+    }
+    selected = {r, c};
+    const el = document.getElementById(cellKey(r,c));
+    if (el) {
+      el.style.outline = '2px solid rgba(255,255,255,0.7)';
+      el.style.outlineOffset = '-2px';
+    }
+
+    // iOS/Safari: Soft-Keyboard erscheint zuverlässig nur bei echtem Input-Focus
+    try {
+      kbd.value = '';
+      kbd.focus({preventScroll:true});
+    } catch (e) {}
+  }
+
+  function getCurrentGrid() {
+    const g = [];
+    for (let r=0; r<9; r++) {
+      const row = [];
+      for (let c=0; c<9; c++) {
+        const fixed = puzzle && puzzle[r][c] !== 0;
+        if (fixed) {
+          row.push(puzzle[r][c]);
+        } else {
+          const el = document.getElementById(cellKey(r,c));
+          const txt = (el && el.textContent || '').trim();
+          const v = txt === '' ? 0 : parseInt(txt,10);
+          row.push(isNaN(v) ? 0 : v);
+        }
+      }
+      g.push(row);
+    }
+    return g;
+  }
+
+  function setCellValue(r,c,v) {
+    const el = document.getElementById(cellKey(r,c));
+    if (!el) return;
+    const fixed = puzzle && puzzle[r][c] !== 0;
+    if (fixed) return;
+    el.textContent = (v === 0) ? '' : String(v);
+  }
+
+  async function newPuzzle() {
+    stopOromaLocalOnly();
+    setStatus('lade…');
+    const diff = diffEl.value;
+    const res = await fetch(`/sudoku/api/new?difficulty=${encodeURIComponent(diff)}`);
+    const j = await res.json();
+    if (!j.ok) {
+      setStatus('Fehler beim Laden', false);
+      return;
+    }
+    puzzleId = j.puzzle_id;
+    puzzle = j.puzzle;
+    selected = {r:-1,c:-1};
+    metaEl.textContent = `seed=${j.seed} · difficulty=${j.difficulty} · clues=${j.clues} · unique=${j.unique}`;
+    renderBoard(puzzle);
+    setStatus('Puzzle bereit ✅', true);
+  }
+
+  async function checkPuzzle() {
+    if (!puzzleId) {
+      setStatus('Bitte erst "Neues Puzzle"', false);
+      return;
+    }
+    const grid = getCurrentGrid();
+    const res = await fetch('/sudoku/api/check', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({puzzle_id: puzzleId, grid})
+    });
+    const j = await res.json();
+    if (!j.ok) {
+      setStatus(j.error || 'Fehler', false);
+      return;
+    }
+    if (!j.valid) {
+      setStatus(`Nicht konsistent: ${j.error || 'Konflikt'}`, false);
+      return;
+    }
+    setStatus(j.solved ? 'Gelöst 🎉' : 'Konsistent ✅ (noch nicht gelöst)', true);
+  }
+
+  function clearNonFixed() {
+    if (!puzzle) return;
+    for (let r=0; r<9; r++) {
+      for (let c=0; c<9; c++) {
+        if (puzzle[r][c] === 0) setCellValue(r,c,0);
+      }
+    }
+    setStatus('Leere Felder gelöscht', true);
+  }
+
+  async function hint() {
+    if (!puzzleId) {
+      setStatus('Bitte erst "Neues Puzzle"', false);
+      return;
+    }
+    if (selected.r < 0) {
+      setStatus('Bitte ein leeres Feld anklicken', false);
+      return;
+    }
+    const res = await fetch('/sudoku/api/hint', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({puzzle_id: puzzleId, r: selected.r, c: selected.c})
+    });
+    const j = await res.json();
+    if (!j.ok) {
+      setStatus(j.error || 'Hint-Fehler', false);
+      return;
+    }
+    setCellValue(j.r, j.c, j.value);
+    setStatus(`Hint: r${j.r+1} c${j.c+1} = ${j.value}`, true);
+  }
+
+  // Keyboard: Desktop/Hardware + iOS Soft Keyboard input
+  document.addEventListener('keydown', (ev) => {
+    if (!puzzleId || selected.r < 0) return;
+    const k = ev.key;
+    if (k >= '1' && k <= '9') {
+      setCellValue(selected.r, selected.c, parseInt(k,10));
+      ev.preventDefault();
+    } else if (k === '0' || k === 'Backspace' || k === 'Delete') {
+      setCellValue(selected.r, selected.c, 0);
+      ev.preventDefault();
+    }
+  });
+
+  // iOS Soft Keyboard: reads typed digits from hidden input
+  kbd.addEventListener('input', () => {
+    if (!puzzleId || selected.r < 0) return;
+    const s = (kbd.value || '').trim();
+    if (!s) return;
+    const ch = s.slice(-1);
+    if (ch >= '1' && ch <= '9') {
+      setCellValue(selected.r, selected.c, parseInt(ch, 10));
+    } else if (ch === '0') {
+      setCellValue(selected.r, selected.c, 0);
+    }
+    kbd.value = '';
+  });
+
+  kbd.addEventListener('keydown', (ev) => {
+    if (!puzzleId || selected.r < 0) return;
+    if (ev.key === 'Backspace' || ev.key === 'Delete') {
+      setCellValue(selected.r, selected.c, 0);
+      ev.preventDefault();
+    }
+  });
+
+  function stopOromaLocalOnly() {
+    oromaPlaying = false;
+    if (oromaTimer) {
+      clearTimeout(oromaTimer);
+      oromaTimer = null;
+    }
+  }
+
+  async function oromaStart() {
+    if (!puzzleId) {
+      setStatus('Bitte erst "Neues Puzzle"', false);
+      return;
+    }
+    stopOromaLocalOnly();
+    setStatus('ORÓMA startet…');
+
+    const grid = getCurrentGrid();
+    const res = await fetch('/sudoku/api/oroma/start', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({puzzle_id: puzzleId, grid, mode: "fill_empty"})
+    });
+    const j = await res.json();
+    if (!j.ok) {
+      setStatus(j.error || 'ORÓMA Start-Fehler', false);
+      return;
+    }
+
+    oromaPlaying = true;
+    setStatus(`ORÓMA läuft… (0/${j.total})`, true);
+    scheduleNext();
+  }
+
+  async function oromaStop() {
+    stopOromaLocalOnly();
+    if (!puzzleId) return;
+    try {
+      await fetch('/sudoku/api/oroma/stop', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({puzzle_id: puzzleId})
+      });
+    } catch (e) {}
+    setStatus('ORÓMA gestoppt.', false);
+  }
+
+  function scheduleNext() {
+    if (!oromaPlaying) return;
+    const delay = parseInt(speedEl.value, 10) || 220;
+    oromaTimer = setTimeout(oromaNext, delay);
+  }
+
+  async function oromaNext() {
+    if (!oromaPlaying) return;
+    if (!puzzleId) return;
+
+    const grid = getCurrentGrid();
+    const res = await fetch('/sudoku/api/oroma/next', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({puzzle_id: puzzleId, grid})
+    });
+    const j = await res.json();
+    if (!j.ok) {
+      setStatus(j.error || 'ORÓMA Fehler', false);
+      stopOromaLocalOnly();
+      return;
+    }
+
+    if (!j.playing && j.done) {
+      setStatus('ORÓMA fertig ✅', true);
+      stopOromaLocalOnly();
+      // optional: Check ausführen, damit solved sofort sichtbar wird
+      await checkPuzzle();
+      return;
+    }
+
+    if (!j.playing && !j.done) {
+      setStatus('ORÓMA gestoppt.', false);
+      stopOromaLocalOnly();
+      return;
+    }
+
+    if (j.move) {
+      setCellValue(j.move.r, j.move.c, j.move.value);
+    }
+
+    const cur = j.cursor ?? 0;
+    const total = j.total ?? 0;
+    setStatus(`ORÓMA läuft… (${cur}/${total})`, true);
+
+    // nur Stop beendet – ansonsten weiter
+    scheduleNext();
+  }
+
+  document.getElementById('btnNew').addEventListener('click', newPuzzle);
+  document.getElementById('btnCheck').addEventListener('click', checkPuzzle);
+  document.getElementById('btnClear').addEventListener('click', clearNonFixed);
+  document.getElementById('btnHint').addEventListener('click', hint);
+
+  btnOromaStart.addEventListener('click', oromaStart);
+  btnOromaStop.addEventListener('click', oromaStop);
+
+  newPuzzle();
+})();
+</script>
+{% endblock %}

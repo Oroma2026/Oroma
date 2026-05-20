@@ -1,0 +1,13 @@
+[Unit]
+Description=Run ORÓMA Snake Policy Trainer periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+
+RandomizedDelaySec=60s
+Unit=oroma-train-snake.service
+[Install]
+WantedBy=timers.target

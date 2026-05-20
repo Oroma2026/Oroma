@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}Modelle – ORÓMA{% endblock %}
+{% block content %}
+<div class="container-fluid mt-4">
+  <h2>🧩 Modelle</h2>
+  <p class="text-muted">Verwalte Sprachmodelle (LLM), Vision- und Audio-Modelle.</p>
+
+  <!-- LLM -->
+  <div class="card bg-dark text-light mb-4">
+    <div class="card-header">LLM-Modelle</div>
+    <div class="card-body">
+      <form id="llmForm" class="row g-2">
+        <div class="col-md-8">
+          <select id="llmSelect" class="form-select">
+            {% for llm in (cfg.llm or []) %}
+              <option value="{{ llm }}">{{ llm }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-4">
+          <button type="button" id="llmLoadBtn" class="btn btn-primary w-100">LLM laden</button>
+        </div>
+      </form>
+      <div id="llmStatus" class="mt-2 small text-info">Noch kein LLM geladen…</div>
+    </div>
+  </div>
+
+  <!-- Vision -->
+  <div class="card bg-dark text-light mb-4">
+    <div class="card-header">Vision-Modelle</div>
+    <div class="card-body">
+      <form id="visionForm" class="row g-2">
+        <div class="col-md-6">
+          <select id="visionSelect" class="form-select">
+            {% for v in (cfg.vision or []) %}
+              <option value="{{ v }}">{{ v }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-4">
+          <select id="visionBackend" class="form-select">
+            <option value="onnx">ONNX</option>
+            <option value="hailo">Hailo</option>
+            <option value="degirum">DeGirum</option>
+          </select>
+        </div>
+        <div class="col-md-2">
+          <button type="button" id="visionLoadBtn" class="btn btn-primary w-100">Laden</button>
+        </div>
+      </form>
+      <div id="visionStatus" class="mt-2 small text-info">Noch kein Vision-Modell geladen…</div>
+    </div>
+  </div>
+
+  <!-- Audio -->
+  <div class="card bg-dark text-light mb-4">
+    <div class="card-header">Audio-Modelle</div>
+    <div class="card-body">
+      <form id="audioForm" class="row g-2">
+        <div class="col-md-6">
+          <select id="audioSelect" class="form-select">
+            {% for a in (cfg.audio or []) %}
+              <option value="{{ a }}">{{ a }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-4">
+          <select id="audioKind" class="form-select">
+            <option value="whisper">Whisper</option>
+            <option value="vad">VAD</option>
+            <option value="asr">ASR</option>
+          </select>
+        </div>
+        <div class="col-md-2">
+          <button type="button" id="audioLoadBtn" class="btn btn-primary w-100">Laden</button>
+        </div>
+      </form>
+      <div id="audioStatus" class="mt-2 small text-info">Noch kein Audio-Modell geladen…</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// -------- Token/Fetch-Utils (lokal & robust) ---------------
+function getCookie(name){
+  const m = document.cookie.match(new RegExp('(?:^|; )'+name.replace(/([.$?*|{}()[\\]\\/+^])/g,'\\$1')+'=([^;]*)'));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+function getToken(){
+  return window.OROMA_UI_TOKEN || localStorage.getItem('OROMA_UI_TOKEN') || getCookie('OROMA_UI_TOKEN') || "";
+}
+function authHeaders(h={}){ const t=getToken(); if(t) h['X-OROMA-TOKEN']=t; return h; }
+
+async function apiPost(path, data) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: authHeaders({"Content-Type": "application/json"}),
+    body: JSON.stringify(data || {})
+  });
+  let js=null; try{ js=await res.json(); }catch{}
+  return js || { ok:false, error: "invalid json" };
+}
+
+async function refreshStatus(){
+  try {
+    const res = await fetch("/models/api/status", {cache: "no-store"});
+    const js = await res.json();
+    if(!js || js.ok === false) return;
+    const st = js.status || {};
+    document.getElementById("llmStatus").textContent    = st.llm    ? `Aktiv: ${st.llm}`       : "Noch kein LLM geladen…";
+    document.getElementById("visionStatus").textContent = st.vision ? `Aktiv: ${st.vision}`    : "Noch kein Vision-Modell geladen…";
+    document.getElementById("audioStatus").textContent  = st.audio  ? `Aktiv: ${st.audio}`     : "Noch kein Audio-Modell geladen…";
+  } catch(e){
+    console.error("Status-Fehler:", e);
+  }
+}
+
+(function(){
+  const llmSel = document.getElementById("llmSelect");
+  const llmBtn = document.getElementById("llmLoadBtn");
+  const vSel   = document.getElementById("visionSelect");
+  const vBack  = document.getElementById("visionBackend");
+  const vBtn   = document.getElementById("visionLoadBtn");
+  const aSel   = document.getElementById("audioSelect");
+  const aKind  = document.getElementById("audioKind");
+  const aBtn   = document.getElementById("audioLoadBtn");
+
+  if (llmBtn) llmBtn.addEventListener("click", async ()=>{
+    if (!llmSel.value) return;
+    document.getElementById("llmStatus").textContent = "⏳ Lade LLM…";
+    const js = await apiPost("/models/api/llm/load", {name: llmSel.value});
+    document.getElementById("llmStatus").textContent = js.ok ? "✅ LLM geladen" : ("❌ Fehler: " + (js.error || "unbekannt"));
+    refreshStatus();
+  });
+
+  if (vBtn) vBtn.addEventListener("click", async ()=>{
+    if (!vSel.value) return;
+    document.getElementById("visionStatus").textContent = "⏳ Lade Vision…";
+    const js = await apiPost("/models/api/vision/load", {name: vSel.value, backend: vBack.value});
+    document.getElementById("visionStatus").textContent = js.ok ? "✅ Vision geladen" : ("❌ Fehler: " + (js.error || "unbekannt"));
+    refreshStatus();
+  });
+
+  if (aBtn) aBtn.addEventListener("click", async ()=>{
+    if (!aSel.value) return;
+    document.getElementById("audioStatus").textContent = "⏳ Lade Audio…";
+    const js = await apiPost("/models/api/audio/load", {name: aSel.value, kind: aKind.value});
+    document.getElementById("audioStatus").textContent = js.ok ? "✅ Audio geladen" : ("❌ Fehler: " + (js.error || "unbekannt"));
+    refreshStatus();
+  });
+
+  refreshStatus();
+  setInterval(refreshStatus, 10000);
+})();
+</script>
+{% endblock %}

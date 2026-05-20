@@ -1,0 +1,24 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-archive.timer
+# Projekt:  ORÓMA v3.8 – Monatlicher Archivierungs-Timer
+# Version:  v3.8-r2
+# Stand:    2025-10-21
+# Autor:    ORÓMA · KI-JWG-X1
+# =============================================================================
+#
+# Zweck
+# ─────
+#   Triggert die monatliche Archivierung (Oneshot-Service) planmäßig.
+# =============================================================================
+
+[Unit]
+Description=ORÓMA v3.8 – Timer für monatliche Archivierung (03:15, 1. des Monats)
+
+[Timer]
+OnCalendar=*-*-01 03:15:00
+RandomizedDelaySec=2h
+Persistent=true
+Unit=oroma-archive.service
+
+[Install]
+WantedBy=timers.target

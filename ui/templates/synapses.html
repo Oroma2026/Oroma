@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block content %}
+<!--
+===============================================================================
+Datei:    /opt/ai/oroma/ui/templates/synapses.html
+Projekt:  🧠 ORÓMA v3.8 – Synapsen-Graph (DB-gestützt)
+Stand:    2025-10-11
+Autor:    ORÓMA · KI-JWG-X1
+===============================================================================
+
+Zweck
+-----
+Visualisierung der SnapChains / Episoden als dynamisches Netzwerk (vis-network).
+Zeigt Zusammenhänge, Qualität (= Gewicht) und Herkunft (origin) an.
+
+Benötigte API:
+  GET /synapses/api/data?n=20&ev=2&sim=0.35 → { ok, nodes, edges }
+===============================================================================
+-->
+<div class="container-fluid">
+  <h2>🧠 Synapsen-Graph (v3.8)</h2>
+  <p class="text-muted">
+    Visualisiert Lernverbindungen aus <code>snapchains</code> oder <code>episodic</code>.
+  </p>
+
+  <div class="card bg-dark text-light mb-3">
+    <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+      <span>Graph-Einstellungen</span>
+      <div class="d-flex gap-3 flex-wrap">
+        <label class="form-label m-0">N Episoden:
+          <input id="inpN" type="number" min="1" max="200" value="20"
+                 class="form-control form-control-sm d-inline-block" style="width:80px;">
+        </label>
+        <label class="form-label m-0">Events/Episode:
+          <input id="inpEV" type="number" min="0" max="10" value="2"
+                 class="form-control form-control-sm d-inline-block" style="width:80px;">
+        </label>
+        <label class="form-label m-0">min. Ähnlichkeit:
+          <input id="inpSIM" type="number" min="0" max="1" step="0.01" value="0.35"
+                 class="form-control form-control-sm d-inline-block" style="width:80px;">
+        </label>
+        <button id="btnReload" class="btn btn-sm btn-primary">🔄 Neu laden</button>
+      </div>
+    </div>
+    <div class="card-body p-0" style="height:600px;">
+      <div id="graph" style="width:100%;height:100%;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Offline-first: vis-network wird lokal aus ui/static/vendor/vis-network/ geladen (keine Internet-Abhängigkeit). -->
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/vis-network/vis-network.min.css') }}">
+<script src="{{ url_for('static', filename='vendor/vis-network/vis-network.min.js') }}"></script>
+
+<script>
+function colorForType(t){
+  if(t==='episode') return '#60a5fa';
+  if(t==='event')   return '#f59e0b';
+  if(t==='snap')    return '#a78bfa';
+  if(t==='chain')   return '#22c55e';
+  return '#9aa4b2';
+}
+function widthForWeight(w){ const x=Math.max(0,Math.min(1,Number(w)||0)); return 1+x*7; }
+
+let network=null;
+async function loadData(){
+  const n=Number(document.getElementById('inpN').value||20);
+  const ev=Number(document.getElementById('inpEV').value||2);
+  const sim=Number(document.getElementById('inpSIM').value||0.35);
+  const res=await fetch(`/synapses/api/data?n=${n}&ev=${ev}&sim=${sim}`);
+  const j=await res.json();
+  if(!j.ok){ console.warn("API Fehler:",j.error); return {nodes:[],edges:[]}; }
+  return j;
+}
+function buildGraph(el,nodes,edges){
+  const visNodes=nodes.map(n=>({
+    id:n.id,label:n.label||String(n.id),
+    color:{background:colorForType(n.type),border:'#0f172a'},
+    shape:'dot',size:n.type==='episode'?18:10
+  }));
+  const visEdges=edges.map(e=>({
+    from:e.source,to:e.target,
+    color:{color:'#94a3b8'},
+    width:widthForWeight(e.weight),
+    smooth:{enabled:true,type:'dynamic'}
+  }));
+  const options={
+    physics:{
+      enabled:true,solver:'forceAtlas2Based',
+      forceAtlas2Based:{gravitationalConstant:-50,centralGravity:0.005,springLength:110,springConstant:0.09,damping:0.4},
+      stabilization:{iterations:200}
+    },
+    nodes:{font:{color:'#e6e6e6',size:12}},
+    interaction:{hover:true,zoomView:true,dragView:true}
+  };
+  if(network) network.destroy();
+  network=new vis.Network(el,{nodes:new vis.DataSet(visNodes),edges:new vis.DataSet(visEdges)},options);
+}
+
+async function refresh(){
+  const d=await loadData();
+  buildGraph(document.getElementById("graph"),d.nodes,d.edges);
+}
+document.getElementById("btnReload").addEventListener("click",refresh);
+document.addEventListener("DOMContentLoaded",refresh);
+</script>
+{% endblock %}

@@ -1,0 +1,61 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-health.service
+# Projekt:  ORÓMA v3.8 – Headless Healthcheck
+# Stand:    2025-11-30
+# Autor:    ORÓMA · KI-JWG-X1
+# =============================================================================
+
+[Unit]
+Description=ORÓMA v3.8 – Headless System-Healthcheck
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai/oroma
+SyslogIdentifier=oroma-health
+
+User=oroma
+Group=oroma
+UMask=002
+
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+
+ExecStartPre=/usr/bin/env bash -lc 'mkdir -p /opt/ai/oroma/logs && touch /opt/ai/oroma/logs/health.log'
+
+ExecStart=/usr/bin/env bash -lc '\
+  LOG="/opt/ai/oroma/logs/health.log"; \
+  echo "==== [HEALTH] $(date \"+%Y-%m-%d %H:%M:%S\") ====" >> \"$LOG\"; \
+  echo "CPU/RAM:" >> \"$LOG\"; \
+  top -bn1 | head -n5 >> \"$LOG\"; \
+  echo "" >> \"$LOG\"; \
+  echo "Disk:" >> \"$LOG\"; \
+  df -h /opt/ai/oroma >> \"$LOG\"; \
+  echo "" >> \"$LOG\"; \
+  echo "GPU/NPU:" >> \"$LOG\"; \
+  if command -v nvidia-smi >/dev/null 2>&1; then \
+      nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv >> \"$LOG\" 2>&1; \
+  elif command -v intel_gpu_top >/dev/null 2>&1; then \
+      intel_gpu_top -J -s 100 -o /opt/ai/oroma/logs/health_gpu.json || echo \"intel_gpu_top Fehler\" >> \"$LOG\"; \
+  else \
+      echo \"Keine dedizierte GPU erkannt\" >> \"$LOG\"; \
+  fi; \
+  echo \"------------------------------------------\" >> \"$LOG\" \
+'
+
+StandardOutput=append:/opt/ai/oroma/logs/health.out.log
+StandardError=append:/opt/ai/oroma/logs/health.err.log
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+RestrictRealtime=yes
+ReadWritePaths=/opt/ai/oroma/logs
+
+[Install]
+WantedBy=multi-user.target

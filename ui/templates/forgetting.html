@@ -1,0 +1,682 @@
+<!-- =============================================================================
+ * Pfad:    /opt/ai/oroma/ui/templates/forgetting.html
+ * Projekt: ORÓMA – Headless UI
+ * Version: v3.7.3 (State + History · self-contained fetch · Legende · Charts)
+ * Stand:   2026-02-18
+ *
+ * Zweck
+ * ─────
+ * Dashboard „Forgetting / Kompression“:
+ *   • Live-Status aus /forgetting/api/state (window-basiert, schnell)
+ *   • Historische Trends (24h/7d/30d) aus /forgetting/api/history (stats.db Cache)
+ *
+ * Design-Prinzipien
+ * ─────────────────
+ *   • Headless/Offline: Chart.js wird lokal über base.html eingebunden.
+ *   • Robustheit: UI zeigt Fehler/Timeouts sichtbar, keine silent failures.
+ *   • Keine Spekulation: Legende definiert die Werte eindeutig (Formeln/Modi).
+ * ============================================================================= -->
+{% extends "base.html" %}
+{% block title %}Forgetting – ORÓMA{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+  <h2>🧠 Forgetting / Kompression</h2>
+  <p class="text-muted">
+    Biologisch inspiriertes Vergessen – Übersicht über Qualität, aktive/komprimierte Snaps und MetaSnaps.
+    <small class="ms-2">
+      API: <code>/forgetting/api/state</code> · <code>/forgetting/api/history</code>
+      {% if public %}<span class="badge bg-success ms-1">PUBLIC</span>{% else %}<span class="badge bg-secondary ms-1">Token</span>{% endif %}
+    </small>
+  </p>
+
+  <div class="card shadow mb-3">
+    <div class="card-header d-flex align-items-center justify-content-between">
+      <span>Status</span>
+      <button type="button" class="btn btn-outline-secondary btn-sm" id="btn-sample-now" title="Jetzt samplen: schreibt einen History-Punkt in stats.db (stats_points).">Ermitteln</button>
+    </div>
+    <div class="card-body">
+      <ul class="list-unstyled mb-0">
+        <li>Ø Qualität: <span id="avg-quality" class="badge bg-secondary">…</span></li>
+        <li>p90 Qualität: <span id="p90-quality" class="badge bg-secondary">…</span></li>
+        <li>p99 Qualität: <span id="p99-quality" class="badge bg-secondary">…</span></li>
+        <li>Top-1000 Ø Qualität: <span id="topk-quality" class="badge bg-secondary">…</span></li>
+        <li>Top-100 Ø Qualität: <span id="top100-quality" class="badge bg-secondary">…</span></li>
+        <li>Aktive Snaps: <span id="n-active" class="badge bg-secondary">…</span></li>
+        <li>Komprimierte Snaps: <span id="n-compressed" class="badge bg-secondary">…</span></li>
+        <li>MetaSnaps: <span id="n-meta" class="badge bg-secondary">…</span></li>
+        <li>Kompressionsrate: <span id="compr-rate" class="badge bg-secondary">…</span></li>
+      </ul>
+
+      <details class="mt-3">
+        <summary><strong>Legende / Wie werden die Werte berechnet?</strong></summary>
+        <div class="small mt-2">
+          <ul class="mb-0">
+            <li><strong>Ø Qualität</strong>: Mittelwert der <code>quality</code>-Werte im Qualitäts-Fenster (recent, begrenzt). „Alltagsdurchschnitt“ über viele Episoden.</li>
+            <li><strong>p90 / p99 Qualität</strong>: Quantile der Qualitätswerte im selben Fenster. p90 = Schwelle, ab der die besten 10% beginnen; p99 = Schwelle, ab der die besten 1% beginnen.</li>
+            <li><strong>Top-1000 Ø Qualität</strong>: Durchschnitt der besten 1000 Qualitätswerte im Fenster („Peak-Qualität“).</li>
+            <li><strong>Top-100 Ø Qualität</strong>: Durchschnitt der besten 100 Qualitätswerte im Fenster (noch „spitzer“ als Top-1000).</li>
+            <li><strong>Aktive / Komprimierte Snaps</strong>: Anzahl der letzten <code>counts_window</code> SnapChains mit <code>status=active</code> bzw. <code>status=compressed</code> (kein globaler Vollscan).</li>
+            <li><strong>MetaSnaps</strong>: <code>MAX(id)</code> aus <code>meta_snaps</code> (schneller Proxy; kann von echter Zeilenanzahl abweichen, vermeidet aber teure <code>COUNT(*)</code>-Scans).</li>
+            <li><strong>Kompressionsrate</strong>: <code>n_compressed / (n_active + n_compressed)</code> im Window.</li>
+            <li><strong>mode=recent_window</strong>: UI nutzt bewusst ein großes Recent-Fenster, um auch unter Last/Locks schnell zu antworten.</li>
+          </ul>
+        </div>
+      </details>
+
+      <div id="authHint" class="small text-warning mt-2 d-none">
+        API: TOKEN REQUIRED. Öffne die Seite mit <code>?token=DEIN_TOKEN</code> oder setze einmalig:
+        <code>localStorage.setItem('OROMA_UI_TOKEN','DEIN_TOKEN')</code>.
+      </div>
+    </div>
+  </div>
+
+  <div class="card shadow mb-3">
+    <div class="card-header d-flex align-items-center justify-content-between">
+      <span>Historisch</span>
+      <div class="d-flex gap-2">
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="hist-toggle-scale" title="Y-Achse (Quality) automatisch auf Wertebereich zoomen (0..1 wirkt auf Mobile oft 'flach').">Auto-Scale</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="hist-toggle-table">Tabelle</button>
+        <div class="btn-group btn-group-sm" role="group" aria-label="history range">
+          <button type="button" class="btn btn-outline-secondary" data-range="24h" id="rng-24h">24h</button>
+          <button type="button" class="btn btn-outline-secondary" data-range="7d" id="rng-7d">1 week</button>
+          <button type="button" class="btn btn-outline-secondary" data-range="30d" id="rng-30d">30d</button>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <!--
+        iOS/Safari: Ein responsive Chart.js Canvas ohne festen Parent kann (bei Reflow/Reload)
+        "nach unten wachsen". Daher nutzen wir einen festen Wrapper mit definierter Höhe.
+      -->
+      <div id="historyChartWrap" style="position:relative; width:100%; height:260px; max-height:260px; overflow:hidden;">
+        <canvas id="forgettingChart" style="width:100% !important; height:100% !important;"></canvas>
+      </div>
+      <div id="hist-table-wrap" class="mt-3" style="display:none; overflow:auto; max-height:360px;">
+        <table class="table table-sm table-striped table-hover mb-0" style="min-width:1200px;">
+          <thead>
+            <tr>
+              <th>Zeit</th>
+              <th>Ø</th>
+              <th>p90</th>
+              <th>p99</th>
+              <th>Top-1000</th>
+              <th>Top-100</th>
+              <th>Active</th>
+              <th>Compressed</th>
+              <th>Mode</th>
+              <th>Compression %</th>
+            </tr>
+          </thead>
+          <tbody id="hist-table-body">
+            <tr><td colspan="10" class="text-muted">Noch keine Daten.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="small text-muted mt-2" id="history-note">–</div>
+    </div>
+  </div>
+
+  <div class="card shadow">
+    <div class="card-header">Letzte Aktualisierung</div>
+    <div class="card-body">
+      <pre id="forgetting-log" class="bg-black text-white p-2 rounded small mb-0">–</pre>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  // =============================================================================
+  // ORÓMA – Forgetting UI (robust, self-contained fetch)
+  // - Keine Abhängigkeit von globalen Helpers
+  // - iOS/Safari-freundlich: Timeout + sichtbare Fehlerausgabe
+  // - Token optional (nur falls Gate aktiv)
+  // =============================================================================
+
+  function getCookie(name){
+    try{
+      const m = document.cookie.match(new RegExp('(?:^|; )'+name.replace(/([.$?*|{}()[\]\/+^])/g,'\\$1')+'=([^;]*)'));
+      return m ? decodeURIComponent(m[1]) : null;
+    }catch(_){ return null; }
+  }
+
+  function getToken(){
+    return (
+      (window.OROMA_UI_TOKEN && String(window.OROMA_UI_TOKEN)) ||
+      document.querySelector('meta[name="oroma-token"]')?.content ||
+      localStorage.getItem('OROMA_UI_TOKEN') ||
+      getCookie('OROMA_UI_TOKEN') ||
+      ""
+    );
+  }
+
+  function setBadge(id, value){
+    const el = document.getElementById(id);
+    if (el) el.textContent = String(value);
+  }
+
+  function setAuthHint(show){
+    const el = document.getElementById('authHint');
+    if (!el) return;
+    el.style.display = show ? '' : 'none';
+  }
+
+  function setLog(txt){
+    const el = document.getElementById('forgetting-log');
+    if (el) el.textContent = txt;
+  }
+
+  function setHistoryNote(txt){
+    const el = document.getElementById('history-note');
+    if (el) el.textContent = txt;
+  }
+
+  async function fetchWithTimeout(url, timeoutMs){
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort('timeout'), timeoutMs);
+
+    const token = getToken();
+    const finalUrl = token ? (url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token)) : url;
+
+    try{
+      const r = await fetch(finalUrl, {
+        method: 'GET',
+        cache: 'no-store',
+        credentials: 'same-origin',
+        headers: {'Accept': 'application/json'},
+        signal: ctrl.signal
+      });
+      return r;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  function fmt4(x){
+    try{
+      const v = Number(x);
+      if (!isFinite(v)) return '0.0000';
+      return v.toFixed(4);
+    }catch(_){ return String(x); }
+  }
+
+  // ------------------------------ STATE --------------------------------------
+
+  async function loadForgetting(){
+    setLog('Lade…');
+    try{
+      const r = await fetchWithTimeout('/forgetting/api/state', 3500);
+      if (r.status === 401){
+        setAuthHint(true);
+        setLog('HTTP 401 · Token erforderlich');
+        return;
+      }
+      setAuthHint(false);
+
+      if (!r.ok){
+        const txt = await r.text().catch(()=> '');
+        setLog('HTTP ' + r.status + ' · ' + (txt ? txt.slice(0,200) : ''));
+        return;
+      }
+
+      const j = await r.json();
+      if (!j || j.ok !== true){
+        setLog('API Fehler: ' + (j && j.error ? j.error : 'unbekannt'));
+        return;
+      }
+
+      setBadge('avg-quality', fmt4(j.avg_quality ?? j.avg_weight ?? 0));
+      setBadge('p90-quality', fmt4(j.p90_quality ?? 0));
+      setBadge('p99-quality', fmt4(j.p99_quality ?? 0));
+      setBadge('topk-quality', fmt4(j.avg_top_k_quality ?? 0));
+      setBadge('top100-quality', fmt4(j.avg_top_100_quality ?? 0));
+
+      setBadge('n-active', j.n_active ?? 0);
+      setBadge('n-compressed', j.n_compressed ?? 0);
+      setBadge('n-meta', j.n_meta ?? 0);
+
+      const rate = (j.compression_rate ?? 0) * 100.0;
+      setBadge('compr-rate', rate.toFixed(1) + ' %');
+
+      const ts = (j.ts ? (j.ts*1000) : Date.now());
+      const extra = (j.counts_mode ? (' · mode=' + j.counts_mode) : '');
+      const win = (j.counts_window ? (' · win=' + j.counts_window) : '');
+      setLog('HTTP 200 · Stand: ' + new Date(ts).toLocaleString() + extra + win);
+    }catch(e){
+      const msg = (e && (e.name === 'AbortError' || String(e).includes('timeout'))) ? 'Timeout' : String(e);
+      setLog('Verbindungsfehler: ' + msg);
+    }
+  }
+
+  // Manuelles Sampling: schreibt einen History-Punkt (stats_points) über
+  // /forgetting/api/state?sample=1. Diese Aktion soll NICHT periodisch an
+  // offene UI gekoppelt sein – daher expliziter Button.
+  async function sampleNow(){
+    const btn = document.getElementById('btn-sample-now');
+    if (btn){ btn.disabled = true; btn.textContent = '…'; }
+    try{
+      const u = apiStateUrl + (apiStateUrl.includes('?') ? '&' : '?') + 'sample=1';
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), 10000);
+      const r = await fetch(u, { signal: ac.signal });
+      clearTimeout(t);
+      // Wir erwarten JSON; Fehler ist ok, wir zeigen es unten.
+      let j = null;
+      try{ j = await r.json(); }catch(_){ j = null; }
+      if (!r.ok || !j || !j.ok){
+        setLastUpdate('HTTP ' + r.status + ' · Sampling fehlgeschlagen' + (j && j.error ? (' · ' + j.error) : ''));
+      } else {
+        setLastUpdate('HTTP ' + r.status + ' · Sample OK · ' + new Date((j.ts?j.ts*1000:Date.now())).toLocaleString());
+      }
+    }catch(e){
+      const msg = (e && (e.name === 'AbortError' || String(e).includes('timeout'))) ? 'Timeout' : String(e);
+      setLastUpdate('Sampling Fehler: ' + msg);
+    }finally{
+      if (btn){ btn.disabled = false; btn.textContent = 'Ermitteln'; }
+      // Nach Sampling: State + Historie einmal frisch laden.
+      try{ await loadForgetting(); }catch(_){ }
+      try{ await loadHistory(_range); }catch(_){ }
+    }
+  }
+
+  // ----------------------------- HISTORY -------------------------------------
+
+  let _chart = null;
+  let _range = '7d';
+  let _showTable = false;
+  let _autoScale = true; // default: auto-zoom Quality axis (0..1 otherwise looks flat on mobile)
+
+  function toggleHistoryTable(){
+    _showTable = !_showTable;
+    const wrap = document.getElementById('hist-table-wrap');
+    if (wrap) wrap.style.display = _showTable ? '' : 'none';
+  }
+
+  let _historyMeta = {counts_window_default: null, counts_window_fallback: null};
+
+  function renderHistoryTable(series){
+    const body = document.getElementById('hist-table-body');
+    if (!body) return;
+
+    function mapSeries(arr){
+      const m = new Map();
+      if (!arr) return m;
+      for (const p of arr){
+        const ts = Number(p[0]);
+        const v = Number(p[1]);
+        if (!isFinite(ts) || !isFinite(v)) continue;
+        m.set(ts, v);
+      }
+      return m;
+    }
+
+    const m_avg = mapSeries(series['forgetting/avg_quality']);
+    const m_p90 = mapSeries(series['forgetting/p90_quality']);
+    const m_p99 = mapSeries(series['forgetting/p99_quality']);
+    const m_tk  = mapSeries(series['forgetting/avg_top_k_quality']);
+    const m_t100= mapSeries(series['forgetting/avg_top_100_quality']);
+    const m_cr  = mapSeries(series['forgetting/compression_rate']);
+    const m_na  = mapSeries(series['forgetting/n_active']);
+    const m_nc  = mapSeries(series['forgetting/n_compressed']);
+
+    const tsSet = new Set();
+    for (const m of [m_avg, m_p90, m_p99, m_tk, m_t100, m_cr, m_na, m_nc]){
+      for (const ts of m.keys()) tsSet.add(ts);
+    }
+    const tss = Array.from(tsSet).sort((a,b)=> b-a);
+    const maxRows = 80;
+
+    function get(m, ts){
+      return m.has(ts) ? m.get(ts) : NaN;
+    }
+    function fmt(v, digits){
+      return (isFinite(v) ? Number(v).toFixed(digits) : '');
+    }
+
+    if (!tss.length){
+      body.innerHTML = '<tr><td colspan="10" class="text-muted">Noch keine Daten.</td></tr>';
+      return;
+    }
+
+    const rows = [];
+    for (const ts of tss.slice(0, maxRows)){
+      const dt = new Date(ts*1000);
+      const cr = get(m_cr, ts);
+      const na = get(m_na, ts);
+      const nc = get(m_nc, ts);
+      const total = (isFinite(na) ? na : 0) + (isFinite(nc) ? nc : 0);
+
+      let mode = '';
+      const winDefault = (typeof _historyMeta.counts_window_default === 'number') ? _historyMeta.counts_window_default : null;
+      const winFallback = (typeof _historyMeta.counts_window_fallback === 'number') ? _historyMeta.counts_window_fallback : null;
+      if (winDefault && total > 0){
+        // Heuristik: wenn Total deutlich kleiner ist als Standard-Window, war sehr wahrscheinlich Fallback aktiv.
+        if (total < Math.floor(winDefault * 0.80)){
+          mode = (winFallback && total <= (winFallback + 5000)) ? 'fallback' : 'small-win';
+        } else {
+          mode = 'default';
+        }
+      }
+
+      rows.push(
+        '<tr>' +
+        '<td>' + dt.toLocaleString() + '</td>' +
+        '<td>' + fmt(get(m_avg, ts), 4) + '</td>' +
+        '<td>' + fmt(get(m_p90, ts), 4) + '</td>' +
+        '<td>' + fmt(get(m_p99, ts), 4) + '</td>' +
+        '<td>' + fmt(get(m_tk, ts), 4) + '</td>' +
+        '<td>' + fmt(get(m_t100, ts), 4) + '</td>' +
+        '<td>' + (isFinite(na) ? Math.round(na) : '') + '</td>' +
+        '<td>' + (isFinite(nc) ? Math.round(nc) : '') + '</td>' +
+        '<td>' + mode + '</td>' +
+        '<td>' + (isFinite(cr) ? (cr*100.0).toFixed(2) : '') + '</td>' +
+        '</tr>'
+      );
+    }
+    body.innerHTML = rows.join('');
+  }
+
+  function setRangeButtons(rng){
+    const ids = {'24h':'rng-24h','7d':'rng-7d','30d':'rng-30d'};
+    Object.keys(ids).forEach(k => {
+      const el = document.getElementById(ids[k]);
+      if (!el) return;
+      if (k === rng) el.classList.add('active');
+      else el.classList.remove('active');
+    });
+  }
+
+  function setScaleButton(){
+    const btn = document.getElementById('hist-toggle-scale');
+    if (!btn) return;
+    btn.classList.toggle('active', !!_autoScale);
+    btn.textContent = _autoScale ? 'Auto-Scale' : '0..1';
+  }
+
+  function makeDataset(label, data, yAxisID){
+    // WHY THIS EXISTS
+    // ---------------
+    // Chart.js defaults often use very dark (near-black) stroke colors.
+    // On ORÓMA's dark UI theme (esp. iOS/Safari) that can make lines look
+    // "missing" although the chart is actually rendered.
+    //
+    // Additionally, setting parsing:false with primitive number arrays can
+    // lead to datasets not being rendered on some Chart.js builds.
+    // We therefore:
+    //  1) enforce a high-contrast palette (full alpha), and
+    //  2) DO NOT set parsing:false here.
+
+    const palette = {
+      'Ø Qualität':       { border: 'rgba( 80, 170, 255, 1.00)', bg: 'rgba( 80, 170, 255, 0.12)' },
+      'p90':             { border: 'rgba(255, 120, 210, 1.00)', bg: 'rgba(255, 120, 210, 0.12)' },
+      'p99':             { border: 'rgba(255, 170,  70, 1.00)', bg: 'rgba(255, 170,  70, 0.12)' },
+      'Top-1000 Ø':      { border: 'rgba(255, 220,  90, 1.00)', bg: 'rgba(255, 220,  90, 0.12)' },
+      'Top-100 Ø':       { border: 'rgba(110, 240, 220, 1.00)', bg: 'rgba(110, 240, 220, 0.12)' },
+      'Kompressionsrate':{ border: 'rgba(170, 120, 255, 1.00)', bg: 'rgba(170, 120, 255, 0.10)' },
+    };
+    const c = palette[label] || { border: 'rgba(230,230,230,1.0)', bg: 'rgba(230,230,230,0.10)' };
+
+    return {
+      label: label,
+      data: data,
+      // parsing:false intentionally NOT set.
+      fill: false,
+      borderWidth: 2,
+      borderColor: c.border,
+      backgroundColor: c.bg,
+      pointRadius: 1,
+      pointHoverRadius: 3,
+      tension: 0.15,
+      yAxisID: yAxisID || 'y'
+    };
+  }
+
+  async function loadHistory(rng){
+    _range = rng || _range;
+    setRangeButtons(_range);
+    setHistoryNote('Lade Historie…');
+
+    try{
+      const r = await fetchWithTimeout('/forgetting/api/history?range=' + encodeURIComponent(_range), 3500);
+      if (r.status === 401){
+        setHistoryNote('HTTP 401 · Token erforderlich');
+        return;
+      }
+      if (!r.ok){
+        const txt = await r.text().catch(()=> '');
+        setHistoryNote('HTTP ' + r.status + ' · ' + (txt ? txt.slice(0,200) : ''));
+        return;
+      }
+
+      const j = await r.json();
+      if (!j || j.ok !== true){
+        setHistoryNote('API Fehler: ' + (j && j.error ? j.error : 'unbekannt'));
+        return;
+      }
+
+      // Meta-Infos (Window-Größen) für Tabellen-Interpretation
+      _historyMeta = {
+        counts_window_default: (typeof j.counts_window_default === 'number') ? j.counts_window_default : null,
+        counts_window_fallback: (typeof j.counts_window_fallback === 'number') ? j.counts_window_fallback : null,
+      };
+
+      const s = j.series || {};
+
+      // ---------------------------------------------------------------------
+      // Chart.js ohne Date-Adapter
+      // ---------------------------------------------------------------------
+      // Auf einigen ORÓMA-Deployments ist *kein* time-adapter (luxon/date-fns)
+      // eingebunden. Dann wirft Chart.js bei scale.type='time' den Fehler:
+      //   "This method is not implemented: Check that a complete date adapter is provided."
+      //
+      // Lösung (robust, ohne Zusatzlibs): wir rendern die X-Achse als
+      // Kategorie-Labels (formatierte Strings) und alignen alle Serien
+      // über einen gemeinsamen Timestamp-Index.
+      // ---------------------------------------------------------------------
+
+      function collectTs(seriesObj){
+        const set = new Set();
+        for (const k in seriesObj){
+          const arr = seriesObj[k];
+          if (!arr) continue;
+          for (const p of arr){
+            const ts = Number(p[0]);
+            if (isFinite(ts)) set.add(ts);
+          }
+        }
+        return Array.from(set).sort((a,b)=> a-b);
+      }
+
+      function labelFor(tsSec){
+        const d = new Date(tsSec*1000);
+        // Range-abhängig: 24h eher Uhrzeit, sonst Datum+Uhrzeit.
+        if (_range === '24h' || _range === '1d' || _range === 'day'){
+          return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+        }
+        return d.toLocaleString([], {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
+      }
+
+      const tss = collectTs(s);
+      const labels = tss.map(labelFor);
+
+      function seriesToAligned(seriesKey, transform){
+        const arr = s[seriesKey] || [];
+        const m = new Map();
+        for (const p of arr){
+          const ts = Number(p[0]);
+          const v = Number(p[1]);
+          if (!isFinite(ts) || !isFinite(v)) continue;
+          m.set(ts, (transform ? transform(v) : v));
+        }
+        const out = [];
+        for (const ts of tss){
+          out.push(m.has(ts) ? m.get(ts) : null);
+        }
+        return out;
+      }
+
+      const ds = [];
+
+      // Keep the aligned arrays so we can compute a good Y-range for Quality (auto-zoom).
+      const qAvg = s['forgetting/avg_quality'] ? seriesToAligned('forgetting/avg_quality') : null;
+      const qP90 = s['forgetting/p90_quality'] ? seriesToAligned('forgetting/p90_quality') : null;
+      const qP99 = s['forgetting/p99_quality'] ? seriesToAligned('forgetting/p99_quality') : null;
+      const qTopK = s['forgetting/avg_top_k_quality'] ? seriesToAligned('forgetting/avg_top_k_quality') : null;
+      const qTop100 = s['forgetting/avg_top_100_quality'] ? seriesToAligned('forgetting/avg_top_100_quality') : null;
+
+      if (qAvg) ds.push(makeDataset('Ø Qualität', qAvg, 'y'));
+      if (qP90) ds.push(makeDataset('p90', qP90, 'y'));
+      if (qP99) ds.push(makeDataset('p99', qP99, 'y'));
+      if (qTopK) ds.push(makeDataset('Top-1000 Ø', qTopK, 'y'));
+      if (qTop100) ds.push(makeDataset('Top-100 Ø', qTop100, 'y'));
+
+      const compPct = s['forgetting/compression_rate'] ? seriesToAligned('forgetting/compression_rate', v => v*100.0) : null;
+      if (compPct) ds.push(makeDataset('Kompressionsrate', compPct, 'y2'));
+
+      // Compute Quality axis bounds (0..1) – auto-zoom to make small deltas visible.
+      function computeQualityBounds(){
+        if (!_autoScale) return {min: 0.0, max: 1.0};
+        const arrays = [qAvg, qP90, qP99, qTopK, qTop100];
+        let minV = null, maxV = null;
+        for (const arr of arrays){
+          if (!arr) continue;
+          for (const v of arr){
+            if (v === null || v === undefined) continue;
+            const x = Number(v);
+            if (!Number.isFinite(x)) continue;
+            if (minV === null || x < minV) minV = x;
+            if (maxV === null || x > maxV) maxV = x;
+          }
+        }
+        if (minV === null || maxV === null) return {min: 0.0, max: 1.0};
+        let span = maxV - minV;
+        if (!Number.isFinite(span) || span < 0.02) span = 0.02;
+        const pad = Math.max(0.02, span * 0.15);
+        let lo = Math.max(0.0, minV - pad);
+        let hi = Math.min(1.0, maxV + pad);
+        if (hi - lo < 0.02){
+          const mid = (hi + lo) / 2.0;
+          lo = Math.max(0.0, mid - 0.02);
+          hi = Math.min(1.0, mid + 0.02);
+        }
+        return {min: lo, max: hi};
+      }
+
+      const qBounds = computeQualityBounds();
+
+      const ctx = document.getElementById('forgettingChart');
+      if (!ctx){
+        setHistoryNote('Chart-Canvas fehlt.');
+        return;
+      }
+
+      // Destroy existing chart (robust gegen Mehrfach-Init / Reload)
+      try{
+        const existing = (window.Chart && Chart.getChart) ? Chart.getChart(ctx) : null;
+        if (existing){
+          existing.destroy();
+        }
+      }catch(_){}
+      if (_chart){
+        try{ _chart.destroy(); }catch(_){}
+        _chart = null;
+      }
+
+      _chart = new Chart(ctx, {
+        type: 'line',
+        data: { labels: labels, datasets: ds },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          interaction: { mode: 'index', intersect: false },
+          elements: {
+            point: { radius: 0, hitRadius: 6 },
+            line: { tension: 0 }
+          },
+          scales: {
+            x: {
+              type: 'category',
+              ticks: {
+                autoSkip: true,
+                maxTicksLimit: 8,
+                maxRotation: 55,
+                minRotation: 35,
+              }
+            },
+            y: {
+              position: 'left',
+              // Auto-zoom makes small deltas visible (otherwise lines can look "flat" on mobile).
+              min: qBounds.min,
+              max: qBounds.max,
+              title: { display: true, text: 'Quality (0..1)' }
+            },
+            y2: {
+              position: 'right',
+              suggestedMin: 0,
+              suggestedMax: 100,
+              grid: { drawOnChartArea: false },
+              title: { display: true, text: 'Compression %' }
+            }
+          },
+          plugins: {
+            legend: { display: true }
+          }
+        }
+      });
+
+      const ts = (j.ts ? (j.ts*1000) : Date.now());
+      setHistoryNote('Historie ok · range=' + (j.range || _range) + ' · Stand: ' + new Date(ts).toLocaleString());
+      try{ renderHistoryTable(s); }catch(_){}
+    }catch(e){
+      const msg = (e && (e.name === 'AbortError' || String(e).includes('timeout'))) ? 'Timeout' : String(e);
+      setHistoryNote('Verbindungsfehler: ' + msg);
+    }
+  }
+
+  function wireRangeButtons(){
+    document.querySelectorAll('button[data-range]').forEach(btn => {
+      btn.addEventListener('click', function(){
+        const rng = this.getAttribute('data-range') || '7d';
+        loadHistory(rng);
+      });
+    });
+  }
+
+  const tbtn = document.getElementById('hist-toggle-table');
+  if (tbtn){
+    tbtn.addEventListener('click', function(){
+      toggleHistoryTable();
+    });
+  }
+
+  const sbtn = document.getElementById('hist-toggle-scale');
+  if (sbtn){
+    sbtn.addEventListener('click', function(){
+      _autoScale = !_autoScale;
+      setScaleButton();
+      // Re-render chart with new Y-bounds.
+      if (!_showTable) loadHistory(_range);
+    });
+  }
+
+  const snbtn = document.getElementById('btn-sample-now');
+  if (snbtn){
+    snbtn.addEventListener('click', function(ev){
+      ev.preventDefault();
+      sampleNow();
+    });
+  }
+
+  // Start
+  wireRangeButtons();
+  setScaleButton();
+  loadForgetting();
+  loadHistory('7d');
+  setInterval(loadForgetting, 10000);
+  // Historie muss nicht so oft – 60s reicht, passt zur Snapshot-Frequenz
+  setInterval(function(){ loadHistory(_range); }, 60000);
+})();
+</script>
+{% endblock %}

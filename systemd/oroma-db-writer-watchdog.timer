@@ -1,0 +1,19 @@
+# =============================================================================
+# Pfad:      /opt/ai/oroma/systemd/oroma-db-writer-watchdog.timer
+# Projekt:   ORÓMA (Stufe C · Global Single Writer)
+# Zweck:     Trigger für oroma-db-writer-watchdog.service
+# Version:   v3.7.3+
+# Stand:     2026-03-04
+# =============================================================================
+
+[Unit]
+Description=ORÓMA DBWriter Watchdog Timer
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=oroma-db-writer-watchdog.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,12 @@
+# /etc/systemd/system/oroma-selftest.timer
+[Unit]
+Description=ORÓMA v3.8 – UI-Selftest alle 24h
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=24h
+Unit=oroma-selftest.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

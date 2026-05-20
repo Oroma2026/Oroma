@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block content %}
+<main style="padding:2rem; max-width:1000px; margin:auto; color:#eee;">
+  <h1>🌌 ORÓMA v3.7 – Headless Navigation</h1>
+  <p style="color:#aaa;">Minimal-Startseite für alle Module und Systembereiche</p>
+  <hr style="border-color:#333;">
+
+  <!-- System / Kern -->
+  <section>
+    <h2>⚙️ System & Basis</h2>
+    <ul>
+      <li><a href="/" class="link-light">🏠 Home (Diese Seite)</a></li>
+      <li><a href="/health" class="link-light">🔍 Health / Systemstatus</a></li>
+      <li><a href="/registry" class="link-light">📚 Model-Registry</a></li>
+      <li><a href="/replay" class="link-light">⏪ Replay / SnapChains</a></li>
+      <li><a href="/export" class="link-light">📦 Export / Archiv</a></li>
+      <li><a href="/import" class="link-light">📥 Import / Merge</a></li>
+      <li><a href="/models" class="link-light">🤖 Modelle (LLM / ASR / Vision)</a></li>
+      <li><a href="/knowledge" class="link-light">📘 Knowledge Import (RAG)</a></li>
+    </ul>
+  </section>
+
+  <!-- Lernen / Analyse -->
+  <section>
+    <h2>🧠 Lernen & Analyse</h2>
+    <ul>
+      <li><a href="/learning" class="link-light">📈 Lernkurve / Qualitäts-Tracking</a></li>
+      <li><a href="/gaps" class="link-light">📉 Knowledge Gaps (Unsicherheiten)</a></li>
+      <li><a href="/coverage" class="link-light">🩻 Coverage / Selbsttest</a></li>
+      <li><a href="/missions" class="link-light">🎯 Missions / Ziele</a></li>
+      <li><a href="/meta" class="link-light">🧩 Meta / Selbstbewertung</a></li>
+      <li><a href="/synapses" class="link-light">🕸 Synapses / Verknüpfungen</a></li>
+      <li><a href="/episodic" class="link-light">🪞 Episodic Memory / Erinnerungen</a></li>
+      <li><a href="/gaps/api/summary" class="link-light">🧾 API: Gaps Summary (JSON)</a></li>
+    </ul>
+  </section>
+
+  <!-- Tools -->
+  <section>
+    <h2>🛠 Werkzeuge / Utilities</h2>
+    <ul>
+      <li><a href="/setcalc" class="link-light">∪ SetCalc (Mengenlehre)</a></li>
+      <li><a href="/scicalc" class="link-light">🧮 SciCalc (Wissenschaftlicher Rechner)</a></li>
+      <li><a href="/calculator" class="link-light">➗ Einfacher Rechner</a></li>
+      <li><a href="/selftest" class="link-light">🧪 SelfTest / Diagnostics</a></li>
+      <li><a href="/coverage" class="link-light">📏 Coverage Analyse</a></li>
+    </ul>
+  </section>
+
+  <!-- Vision / Sensorik -->
+  <section>
+    <h2>📷 Vision / Sensorik</h2>
+    <ul>
+      <li><a href="/video" class="link-light">🎥 Live-Video / Kamera</a></li>
+      <li><a href="/picar" class="link-light">🚗 PiCar / Steuerung</a></li>
+    </ul>
+  </section>
+
+  <!-- Spiele -->
+  <section>
+    <h2>🎮 Spiele / Interaktive Module</h2>
+    <ul>
+      <li><a href="/snake" class="link-light">🐍 Snake</a></li>
+      <li><a href="/flappy" class="link-light">🐤 Flappy Bird</a></li>
+      <li><a href="/memorymaze" class="link-light">🧠 Memory Maze</a></li>
+      <li><a href="/classic_memory_game" class="link-light">🃏 Classic Memory Game</a></li>
+      <li><a href="/why" class="link-light">❓ Why / Explainability</a></li>
+      <li><a href="/meta" class="link-light">🧩 Meta-Simulation</a></li>
+      <li><a href="/missions" class="link-light">🎯 Missions</a></li>
+    </ul>
+  </section>
+
+  <!-- Audio -->
+  <section>
+    <h2>🎤 Audio / ASR</h2>
+    <ul>
+      <li><a href="/asr" class="link-light">🎙 ASR Status</a></li>
+      <li><a href="/asr/api/start" class="link-light">▶️ ASR Start (API)</a></li>
+      <li><a href="/asr/api/stop" class="link-light">⏹ ASR Stop (API)</a></li>
+    </ul>
+  </section>
+
+  <!-- Forschung / Spezial -->
+  <section>
+    <h2>🔬 Forschung / Erweiterte Module</h2>
+    <ul>
+      <li><a href="/research" class="link-light">🧠 Research Interface</a></li>
+      <li><a href="/bundle" class="link-light">📦 Bundle Manager</a></li>
+      <li><a href="/why" class="link-light">❓ Why / Erklärbarkeit</a></li>
+      <li><a href="/selfrec" class="link-light">🧭 Self-Recognition (Log)</a></li>
+    </ul>
+  </section>
+
+  <hr style="border-color:#333;">
+  <footer style="font-size:0.9em; color:#666; text-align:center;">
+    ORÓMA v3.7 Headless UI · © 2025 JWG-X1
+  </footer>
+</main>
+{% endblock %}

@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container-fluid mt-4">
+  <h2>💬 LLM Chat</h2>
+  <p class="text-muted">Interaktiver Dialog mit einem geladenen Sprachmodell.</p>
+
+  <!-- Modell-Auswahl -->
+  <div class="card bg-dark text-light mb-4 shadow">
+    <div class="card-header">Modell-Auswahl</div>
+    <div class="card-body">
+      <form id="chatModelForm" class="row g-2">
+        <div class="col-md-8">
+          <select id="chatModelSelect" class="form-select">
+            {% for m in models or [] %}
+              <option value="{{ m|e }}">{{ m }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-4">
+          <button type="button" id="chatLoadBtn" class="btn btn-primary w-100">LLM laden</button>
+        </div>
+      </form>
+      <div id="chatModelStatus" class="mt-2 small text-info">
+        Noch kein Modell geladen…
+      </div>
+    </div>
+  </div>
+
+  <!-- Chatfenster -->
+  <div class="card bg-dark text-light shadow">
+    <div class="card-header">Chat</div>
+    <div class="card-body">
+      <div id="chatBox" class="bg-black p-2 rounded small mb-2"
+           style="height:400px; overflow-y:auto;"></div>
+      <div class="input-group">
+        <input id="chatInput" type="text" class="form-control" placeholder="Nachricht eingeben…" autocomplete="off">
+        <button id="chatSend" class="btn btn-success">Senden</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// --- Token/Fetch-Utils ---
+function getCookie(name){
+  const m = document.cookie.match(new RegExp('(?:^|; )'+name.replace(/([.$?*|{}()[\\]\\/+^])/g,'\\$1')+'=([^;]*)'));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+function getToken(){
+  return window.OROMA_UI_TOKEN || localStorage.getItem('OROMA_UI_TOKEN') || getCookie('OROMA_UI_TOKEN') || "";
+}
+function authHeaders(h={}){ const t=getToken(); if(t) h['X-OROMA-TOKEN']=t; return h; }
+
+const sel = document.getElementById("chatModelSelect");
+const btnLoad = document.getElementById("chatLoadBtn");
+const status = document.getElementById("chatModelStatus");
+const inMsg = document.getElementById("chatInput");
+const btnSend = document.getElementById("chatSend");
+const box = document.getElementById("chatBox");
+
+function setStatus(msg, cls="info"){
+  status.textContent = msg;
+  status.className = "mt-2 small text-" + cls;
+}
+function appendChat(role, text){
+  const row = document.createElement("div");
+  row.className = "chatrow";
+  const bubble = document.createElement("div");
+  bubble.className = "chatbubble";
+  if(role === "user"){ bubble.classList.add("chat-user"); }
+  else if(role === "oroma"){ bubble.classList.add("chat-oroma"); }
+  else { bubble.classList.add("chat-system"); }
+  bubble.textContent = text;
+  row.appendChild(bubble);
+  box.appendChild(row);
+  box.scrollTop = box.scrollHeight;
+}
+
+async function loadModel(){
+  const path = sel ? sel.value : "";
+  if (!path){ appendChat("system","❌ Bitte Modell auswählen."); return; }
+  btnLoad.disabled = true;
+  setStatus("⏳ Lade Modell…", "info");
+  try{
+    const r = await fetch("/chat/api/load_model", {
+      method:"POST",
+      headers: authHeaders({"Content-Type":"application/json"}),
+      body: JSON.stringify({model_path: path})
+    });
+    const js = await r.json();
+    if(js.ok){ setStatus("✅ Modell geladen: " + (js.model||""), "success"); }
+    else     { setStatus("❌ Fehler: " + (js.error||""), "danger"); }
+  }catch(e){ setStatus("❌ API-Fehler: " + e, "danger"); }
+  finally{ btnLoad.disabled = false; }
+}
+
+async function sendMsg(){
+  const msg = (inMsg && inMsg.value || "").trim();
+  if (!msg) return;
+  appendChat("user", msg);
+  inMsg.value = "";
+  btnSend.disabled = true;
+  try{
+    const r = await fetch("/chat/api/send", {
+      method:"POST",
+      headers: authHeaders({"Content-Type":"application/json"}),
+      body: JSON.stringify({prompt: msg})
+    });
+    const js = await r.json();
+    appendChat("oroma", js.ok ? (js.response||"(leer)") : ("❌ " + (js.error||"")));
+  }catch(e){ appendChat("system", "❌ API-Fehler: " + e); }
+  finally{ btnSend.disabled = false; }
+}
+
+if (btnLoad) btnLoad.addEventListener("click", loadModel);
+if (btnSend) btnSend.addEventListener("click", sendMsg);
+if (inMsg) inMsg.addEventListener("keydown", ev => { if (ev.key==="Enter") sendMsg(); });
+</script>
+{% endblock %}

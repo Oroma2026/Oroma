@@ -1,0 +1,187 @@
+<!-- =============================================================================
+     Pfad:    /opt/ai/oroma/ui/templates/asr.html
+     Projekt: ORÓMA
+     Version: v3.7 (UI+UX Upgrade)
+     Stand:   2025-09-29
+
+     Zweck:
+       Verbessertes UI für Live-ASR (Whisper via AudioWrapper):
+         • Klarer Statusbereich (läuft/gestoppt, Modellname)
+         • Fehleranzeige aus /asr/api/status (falls vorhanden)
+         • Token-Header (X-OROMA-TOKEN) wird – falls vorhanden – automatisch gesendet
+         • Buttons werden passend (de-)aktiviert, kurze Ladehinweise
+         • Reaktiveres Polling (1s)
+
+     Hinweise:
+       • Token: Wird aus window.OROMA_UI_TOKEN oder dem Cookie "OROMA_UI_TOKEN" gelesen.
+       • Backend-Routen:
+           /asr/api/start   (POST)
+           /asr/api/stop    (POST)
+           /asr/api/status  (GET → { ok, status: { running, text, model?, error? } })
+============================================================================= -->
+{% extends "base.html" %}
+{% block content %}
+<div class="container-fluid mt-4">
+  <h2>🎤 ASR Live-Transkription</h2>
+  <p class="text-muted">
+    Audioaufnahme → AudioWrapper → Whisper → Textausgabe.
+  </p>
+
+  <!-- Statuszeile -->
+  <div class="d-flex align-items-center gap-2 mb-3">
+    <span id="asrStateBadge" class="badge badge-off">Status: unbekannt</span>
+    <span id="asrModel" class="text-secondary small">Modell: –</span>
+  </div>
+
+  <!-- Steuerung -->
+  <div class="card bg-dark text-light shadow mb-3">
+    <div class="card-header">Steuerung</div>
+    <div class="card-body">
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <button id="btnStart" class="btn btn-success">▶️ Start</button>
+        <button id="btnStop" class="btn btn-danger" disabled>⏹️ Stop</button>
+        <span id="busy" class="text-info small d-none">⏳ Bitte warten…</span>
+      </div>
+      <div id="asrMsg" class="mt-2 small text-info" role="status" aria-live="polite"></div>
+      <div id="asrErr" class="mt-1 small text-danger d-none"></div>
+    </div>
+  </div>
+
+  <!-- Transkript -->
+  <div class="card bg-dark text-light shadow">
+    <div class="card-header">Transkript</div>
+    <div class="card-body">
+      <pre id="asrOutput" class="bg-black p-2 rounded small text-white"
+           style="height:300px; overflow-y:auto; white-space:pre-wrap;">Noch nichts erkannt…</pre>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  // --- Elemente --------------------------------------------------------------
+  const elStart  = document.getElementById("btnStart");
+  const elStop   = document.getElementById("btnStop");
+  const elBusy   = document.getElementById("busy");
+  const elMsg    = document.getElementById("asrMsg");
+  const elErr    = document.getElementById("asrErr");
+  const elOut    = document.getElementById("asrOutput");
+  const elBadge  = document.getElementById("asrStateBadge");
+  const elModel  = document.getElementById("asrModel");
+
+  // --- Token-Handling --------------------------------------------------------
+  function readCookie(name){
+    const m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/([.$?*|{}()[\]\\/+^])/g,'\\$1') + '=([^;]*)'));
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+  function getToken(){
+    return (window.OROMA_UI_TOKEN && String(window.OROMA_UI_TOKEN).trim())
+        || readCookie('OROMA_UI_TOKEN') || '';
+  }
+  async function api(path, opts={}){
+    const headers = Object.assign({'Content-Type':'application/json'}, opts.headers||{});
+    const tok = getToken();
+    if (tok) headers['X-OROMA-TOKEN'] = tok;
+    const res = await fetch(path, Object.assign({}, opts, {headers}));
+    // Versuche JSON; wenn das fehlschlägt, wirf Original-Response
+    try { return await res.json(); } catch { return { ok:false, error:'Ungültige Server-Antwort' }; }
+  }
+
+  // --- UI-Helfer -------------------------------------------------------------
+  function setBusy(on){
+    elBusy.classList.toggle('d-none', !on);
+    elStart.disabled = on;
+    elStop.disabled  = on;
+  }
+  function setStatusBadge(running){
+    elBadge.textContent = running ? 'Status: läuft' : 'Status: gestoppt';
+    elBadge.classList.remove('badge-ok','badge-off');
+    elBadge.classList.add(running ? 'badge-ok' : 'badge-off');
+  }
+  function setModelName(name){
+    elModel.textContent = 'Modell: ' + (name || '–');
+  }
+  function showMsg(text, kind='info'){
+    elMsg.textContent = text || '';
+    elMsg.className = 'mt-2 small text-' + kind;
+  }
+  function showErr(text){
+    const t = String(text||'').trim();
+    elErr.textContent = t;
+    elErr.classList.toggle('d-none', t.length === 0);
+  }
+  function setButtons(running){
+    elStart.disabled = running;
+    elStop.disabled  = !running;
+  }
+
+  // --- Status-Polling --------------------------------------------------------
+  async function refreshStatus(){
+    try{
+      const j = await api('/asr/api/status');
+      if (!j || j.ok !== true) return;
+      const st = j.status || {};
+      // Text
+      const txt = (st.text || '').trim();
+      elOut.textContent = txt ? txt : 'Noch nichts erkannt…';
+      // Running / Model / Error
+      setStatusBadge(!!st.running);
+      setModelName(st.model || '');
+      setButtons(!!st.running);
+      showErr(st.error || '');
+    }catch(e){
+      // Leises Logging in der UI, aber nicht fluten
+      showErr('Statusfehler: ' + e);
+    }
+  }
+
+  // --- Start/Stop ------------------------------------------------------------
+  elStart?.addEventListener('click', async ()=>{
+    setBusy(true);
+    showMsg('Starte ASR…','info');
+    showErr('');
+    try{
+      const j = await api('/asr/api/start', { method:'POST', body:'{}' });
+      if (j.ok){
+        showMsg(j.msg || 'ASR gestartet.','success');
+      }else{
+        showMsg('Fehler beim Start.','danger');
+        showErr(j.error || '');
+      }
+    }catch(e){
+      showMsg('API-Fehler beim Start.','danger');
+      showErr(e);
+    }finally{
+      setBusy(false);
+      // Direkt Status ziehen, damit Buttons/Badge stimmen
+      refreshStatus();
+    }
+  });
+
+  elStop?.addEventListener('click', async ()=>{
+    setBusy(true);
+    showMsg('Stoppe ASR…','info');
+    try{
+      const j = await api('/asr/api/stop', { method:'POST', body:'{}' });
+      if (j.ok){
+        showMsg(j.msg || 'ASR gestoppt.','secondary');
+      }else{
+        showMsg('Fehler beim Stop.','danger');
+        showErr(j.error || '');
+      }
+    }catch(e){
+      showMsg('API-Fehler beim Stop.','danger');
+      showErr(e);
+    }finally{
+      setBusy(false);
+      refreshStatus();
+    }
+  });
+
+  // --- Initialisierung -------------------------------------------------------
+  refreshStatus();
+  // Reaktiver: alle 1s aktualisieren
+  const _poll = setInterval(refreshStatus, 1000);
+})();
+</script>
+{% endblock %}

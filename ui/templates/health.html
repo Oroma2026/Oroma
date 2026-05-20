@@ -1,0 +1,305 @@
+<!-- =============================================================================
+     Pfad:    /opt/ai/oroma/ui/templates/health.html
+     Projekt: ORÓMA
+     Version: v3.6
+     Stand:   2025-09-28
+     Zweck:
+       - Anzeige von CPU, RAM, Uptime, Agent, NPU/GPU
+       - Anzeige von DB-/Log-Dateigrößen und Partitionen
+       - Anzeige von OS-/HW-Infos
+       - Update-Check + Button zum Update-Run (manuell)
+       - Logs-Viewer
+       - Selftest (Button → Textausgabe)
+       - NEU: Live-Verlauf (Charts) für CPU, RAM, GPU-Temperatur
+     Abhängigkeiten:
+       - ui/health_ui.py (Blueprint & APIs)
+       - static/style.css (Dark-Styles, Badges)
+       - base.html (Navbar/Grundlayout)
+============================================================================= -->
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <h1 class="mb-3">💡 System-Health</h1>
+  <p class="text-muted">Ressourcen, Dateien, Partitionen, OS-Infos, Updates, Selftest & Live-Kurven.</p>
+
+  <div class="row">
+    <!-- Linke Spalte: Status, Dateien, Partitionen, OS/Hardware, Updates, Selftest -->
+    <div class="col-lg-6">
+      <!-- Status -->
+      <div class="card text-bg-dark mb-3">
+        <div class="card-header">Status</div>
+        <div class="card-body">
+          <ul class="mb-0">
+            <li>🖥️ CPU: <span id="cpu">…</span></li>
+            <li>💾 RAM: <span id="ram">…</span></li>
+            <li>⏱️ Uptime: <span id="uptime">…</span></li>
+            <li>🤖 AgentLoop: <span id="agent">…</span></li>
+            <li>⚡ NPU: <span id="npu">…</span></li>
+            <li>🎮 GPU: <span id="gpu">…</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- DBWriter (Stufe C) -->
+      <div class="card text-bg-dark mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          🧵 DBWriter Queue
+          <small class="text-muted">Single-Writer · Backpressure · Top-Tags</small>
+        </div>
+        <div class="card-body">
+          <pre id="dbw" class="mb-0">…</pre>
+        </div>
+      </div>
+
+      <!-- Dateien -->
+      <div class="card text-bg-dark mb-3">
+        <div class="card-header">Dateien (Größen)</div>
+        <div class="card-body">
+          <pre id="files" class="mb-0">…</pre>
+        </div>
+      </div>
+
+      <!-- Partitionen -->
+      <div class="card text-bg-dark mb-3">
+        <div class="card-header">Partitionen</div>
+        <div class="card-body">
+          <pre id="partitions" class="mb-0">…</pre>
+        </div>
+      </div>
+
+      <!-- OS / Hardware -->
+      <div class="card text-bg-dark mb-3">
+        <div class="card-header">OS / Hardware</div>
+        <div class="card-body">
+          <pre id="system" class="mb-0">…</pre>
+        </div>
+      </div>
+
+      <!-- Updates -->
+      <div class="card text-bg-dark mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          📦 Updates
+          <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-outline-info" onclick="loadUpdates()">🔎 Check</button>
+            <button class="btn btn-sm btn-warning" id="btn-updates" onclick="runUpdates()">⚡ Jetzt aktualisieren</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <pre id="updates" class="mb-0">…</pre>
+        </div>
+      </div>
+
+      <!-- Selftest -->
+      <div class="card text-bg-dark mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          🔍 Selftest
+          <button class="btn btn-sm btn-outline-warning" id="btn-selftest" onclick="runSelftest()">Starten</button>
+        </div>
+        <div class="card-body">
+          <pre id="selftest" class="mb-0 bg-black p-2 rounded small text-white">Noch kein Selftest ausgeführt.</pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Rechte Spalte: Live-Verlauf + Logs -->
+    <div class="col-lg-6">
+      <!-- Live-Verlauf -->
+      <div class="card text-bg-dark mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          📈 Live-Verlauf (letzte 24 h)
+          <small class="text-muted">CPU / RAM / GPU-Temp</small>
+        </div>
+        <div class="card-body" style="gap: 16px; display: flex; flex-direction: column;">
+          <div style="height:200px"><canvas id="chartCpu"></canvas></div>
+          <div style="height:200px"><canvas id="chartRam"></canvas></div>
+          <div style="height:200px"><canvas id="chartGpu"></canvas></div>
+        </div>
+      </div>
+
+      <!-- Logs -->
+      <div class="card text-bg-dark">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          Logs
+          <button class="btn btn-sm btn-outline-info" onclick="loadLogs()">🔄 Aktualisieren</button>
+        </div>
+        <div class="card-body p-0">
+          <pre id="logs" class="bg-black text-white small p-2" style="max-height:720px; overflow-y:auto;">…</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+/* Chart.js Dark Defaults */
+Chart.defaults.color = "#eee";
+Chart.defaults.borderColor = "#444";
+Chart.defaults.font.family = "'Segoe UI', Roboto, Arial, sans-serif";
+Chart.defaults.plugins.legend.display = false;
+Chart.defaults.scale.grid.color = "#444";
+Chart.defaults.scale.ticks.color = "#eee";
+
+/* ---------- Status / Infos / Logs / Updates / Selftest ---------- */
+async function loadHealth() {
+  try {
+    const r = await fetch("/health/api/health");
+    const j = await r.json();
+    document.getElementById("cpu").textContent = j.cpu_usage + " %";
+    document.getElementById("ram").textContent = j.ram_usage + " %";
+    document.getElementById("uptime").textContent = j.uptime_human;
+    document.getElementById("agent").textContent = j.agent_running ? "Läuft ✅" : "Gestoppt ⏹️";
+    document.getElementById("npu").textContent = j.npu_status || "unbekannt";
+    document.getElementById("gpu").textContent = j.gpu_status || "unbekannt";
+
+    document.getElementById("files").textContent =
+      "DB-Dateien (MB):\n" + JSON.stringify(j.db_files || {}, null, 2) +
+      "\n\nLogs (MB):\n" + JSON.stringify(j.log_files || {}, null, 2);
+
+    document.getElementById("partitions").textContent = JSON.stringify(j.partitions || [], null, 2);
+    document.getElementById("system").textContent = JSON.stringify(j.system || {}, null, 2);
+
+    // DBWriter state
+    const dbw = j.db_writer || null;
+    if (!dbw || dbw.ok === false) {
+      document.getElementById("dbw").textContent = "DBWriter: nicht verfügbar / deaktiviert\n" + JSON.stringify(dbw || {}, null, 2);
+    } else {
+      const lines = [];
+      lines.push(`sock: ${dbw.sock || "?"}`);
+      lines.push(`allow_dbs: ${(dbw.allow_dbs || []).join(",")}`);
+      lines.push(`uptime_s: ${dbw.uptime_s}`);
+      lines.push(`queue_total: ${dbw.queue_total}`);
+      lines.push(`queue_by_db: ${JSON.stringify(dbw.queue_by_db || {})}`);
+      lines.push(`processed_total: ${dbw.processed_total}`);
+      lines.push(`processed_by_db: ${JSON.stringify(dbw.processed_by_db || {})}`);
+      lines.push(`dropped_low_total: ${dbw.dropped_low_total}`);
+      if (dbw.last_error) lines.push(`last_error: ${dbw.last_error}`);
+      lines.push("\nTop Tags:");
+      const top = dbw.processed_top_tags || [];
+      for (const [tag, n] of top) {
+        lines.push(`  ${tag}: ${n}`);
+      }
+      document.getElementById("dbw").textContent = lines.join("\n");
+    }
+  } catch (e) {
+    console.error("Health-API Fehler:", e);
+  }
+}
+
+async function loadLogs() {
+  try {
+    const r = await fetch("/health/api/health/logs?n=300");
+    const t = await r.text();
+    const box = document.getElementById("logs");
+    box.textContent = t;
+    box.scrollTop = box.scrollHeight;
+  } catch (e) {
+    console.error("Logs-API Fehler:", e);
+  }
+}
+
+async function loadUpdates() {
+  try {
+    const r = await fetch("/health/api/updates/check");
+    document.getElementById("updates").textContent = JSON.stringify(await r.json(), null, 2);
+  } catch (e) {
+    document.getElementById("updates").textContent = "Fehler beim Update-Check: " + e;
+  }
+}
+
+async function runUpdates() {
+  if (!confirm("⚠️ System-Updates jetzt starten? (Achtung: benötigt Root-Rechte)")) return;
+  const btn = document.getElementById("btn-updates");
+  btn.disabled = true;
+  document.getElementById("updates").textContent = "⏳ Updates laufen…";
+  try {
+    const r = await fetch("/health/api/updates/run", { method: "POST" });
+    document.getElementById("updates").textContent = await r.text();
+  } catch (e) {
+    document.getElementById("updates").textContent = "Fehler beim Update-Run: " + e;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function runSelftest() {
+  const btn = document.getElementById("btn-selftest");
+  btn.disabled = true;
+  const out = document.getElementById("selftest");
+  out.textContent = "⏳ Selftest läuft…";
+  try {
+    const r = await fetch("/health/api/selftest");
+    out.textContent = await r.text();
+  } catch (e) {
+    out.textContent = "❌ Selftest-Fehler: " + e;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ---------- Live-Charts ---------- */
+let cpuChart, ramChart, gpuChart;
+
+function ensureCharts() {
+  if (!cpuChart) {
+    cpuChart = new Chart(document.getElementById("chartCpu"), {
+      type: "line",
+      options: { maintainAspectRatio: false, scales: { y: { beginAtZero: true, max: 100, title: { display: true, text: "CPU %" } } } },
+      data: { labels: [], datasets: [{ label: "CPU", data: [], borderWidth: 2, tension: 0.25, pointRadius: 0, borderColor: "lime" }] }
+    });
+  }
+  if (!ramChart) {
+    ramChart = new Chart(document.getElementById("chartRam"), {
+      type: "line",
+      options: { maintainAspectRatio: false, scales: { y: { beginAtZero: true, max: 100, title: { display: true, text: "RAM %" } } } },
+      data: { labels: [], datasets: [{ label: "RAM", data: [], borderWidth: 2, tension: 0.25, pointRadius: 0, borderColor: "deepskyblue" }] }
+    });
+  }
+  if (!gpuChart) {
+    gpuChart = new Chart(document.getElementById("chartGpu"), {
+      type: "line",
+      options: { maintainAspectRatio: false, scales: { y: { beginAtZero: true, title: { display: true, text: "GPU °C" } } } },
+      data: { labels: [], datasets: [{ label: "GPU Temp", data: [], borderWidth: 2, tension: 0.25, pointRadius: 0, borderColor: "orange" }] }
+    });
+  }
+}
+
+function updateChart(chart, labels, values) {
+  chart.data.labels = labels;
+  chart.data.datasets[0].data = values;
+  chart.update();
+}
+
+async function loadHistory() {
+  try {
+    const r = await fetch("/health/api/history?window_sec=86400"); // 24h
+    const j = await r.json();
+    const items = Array.isArray(j.items) ? j.items : [];
+
+    const labels = items.map(it => new Date(it.ts * 1000).toLocaleTimeString());
+    const cpu = items.map(it => it.cpu ?? null);
+    const ram = items.map(it => it.ram ?? null);
+    const gpu = items.map(it => it.gpu_temp ?? null); // null -> Lücke (z.B. kein vcgencmd)
+
+    ensureCharts();
+    updateChart(cpuChart, labels, cpu);
+    updateChart(ramChart, labels, ram);
+    updateChart(gpuChart, labels, gpu);
+  } catch (e) {
+    console.error("History-API Fehler:", e);
+  }
+}
+
+/* ---------- Initialisierung & Intervalle ---------- */
+loadHealth();
+loadLogs();
+loadUpdates();
+loadHistory();
+
+setInterval(loadHealth, 10000);
+setInterval(loadLogs, 15000);
+setInterval(loadUpdates, 60000);
+setInterval(loadHistory, 10000);
+</script>
+{% endblock %}

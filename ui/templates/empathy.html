@@ -1,0 +1,126 @@
+<!-- =============================================================================
+     Pfad:    /opt/ai/oroma/ui/templates/empathy.html
+     Projekt: ORÓMA
+     Version: v3.5patch2 (final+ENV-Flag)
+     Stand:   2025-09-25
+     Zweck:
+       - Empathy-Dashboard (Valence, Arousal, Confidence, Events, History)
+       - Deaktivierbar per ENV OROMA_ENABLE_EMPATHY
+============================================================================= -->
+{% extends "base.html" %}
+{% block title %}Empathy – ORÓMA{% endblock %}
+
+{% block content %}
+<div class="container">
+  <h2>🤝 Empathy Dashboard</h2>
+
+  {% if not enabled %}
+    <div class="alert alert-warning mt-3">
+      ⚠️ Empathy ist deaktiviert (<code>OROMA_ENABLE_EMPATHY=false</code>).
+    </div>
+  {% else %}
+    <!-- Aktueller Zustand -->
+    <div class="card">
+      <div class="card-header">Aktueller Zustand</div>
+      <div class="card-body">
+        <table class="table table-bordered" style="max-width:400px;">
+          <tr><th>Valence</th><td id="valence">–</td></tr>
+          <tr><th>Arousal</th><td id="arousal">–</td></tr>
+          <tr><th>Confidence</th><td id="confidence">–</td></tr>
+          <tr><th>Last Update</th><td id="lastupdate">–</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <!-- Events -->
+    <div class="card mt-3">
+      <div class="card-header">Events</div>
+      <div class="card-body">
+        <button onclick="sendEvent('reward')" class="btn btn-success">Reward</button>
+        <button onclick="sendEvent('gap')" class="btn btn-warning">Gap</button>
+        <button onclick="sendEvent('calculator')" class="btn btn-primary">Calculator</button>
+        <button onclick="sendEvent('game')" class="btn btn-info">Game</button>
+      </div>
+    </div>
+
+    <!-- Verlauf -->
+    <div class="card mt-3">
+      <div class="card-header">Verlauf</div>
+      <div class="card-body">
+        <table class="table table-striped">
+          <thead>
+            <tr>
+              <th>Zeit</th><th>Typ</th><th>ΔValence</th><th>ΔArousal</th><th>ΔConfidence</th>
+            </tr>
+          </thead>
+          <tbody id="history-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <script>
+    async function loadState() {
+      try {
+        const r = await fetch("/empathy/api/state");
+        const j = await r.json();
+        if (!j.ok) return;
+        const s = j.state;
+        document.getElementById("valence").textContent = s.valence.toFixed(2);
+        document.getElementById("arousal").textContent = s.arousal.toFixed(2);
+        document.getElementById("confidence").textContent = s.confidence.toFixed(2);
+        document.getElementById("lastupdate").textContent = new Date(s.last_update*1000).toLocaleString();
+      } catch(e) {
+        console.error("State error", e);
+      }
+    }
+
+    async function loadHistory() {
+      try {
+        const r = await fetch("/empathy/api/history?limit=20");
+        const j = await r.json();
+        if (!j.ok) return;
+        const body = document.getElementById("history-body");
+        body.innerHTML = "";
+        j.history.forEach(h => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${new Date(h.ts*1000).toLocaleString()}</td>
+            <td>${h.type || h.mood || "-"}</td>
+            <td>${(h.delta_valence ?? h.score ?? 0).toFixed(2)}</td>
+            <td>${(h.delta_arousal ?? 0).toFixed(2)}</td>
+            <td>${(h.delta_confidence ?? 0).toFixed(2)}</td>
+          `;
+          body.appendChild(tr);
+        });
+      } catch(e) {
+        console.error("History error", e);
+      }
+    }
+
+    async function sendEvent(type) {
+      try {
+        const r = await fetch("/empathy/api/event", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({type})
+        });
+        const j = await r.json();
+        if (j.ok) {
+          loadState();
+          loadHistory();
+        } else {
+          alert("Fehler: " + (j.error||"?"));
+        }
+      } catch(e) {
+        alert("API Fehler: " + e);
+      }
+    }
+
+    loadState();
+    loadHistory();
+    setInterval(loadState, 5000);
+    setInterval(loadHistory, 10000);
+    </script>
+  {% endif %}
+</div>
+{% endblock %}

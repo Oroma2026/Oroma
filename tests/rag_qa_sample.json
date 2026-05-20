@@ -1,0 +1,14 @@
+[
+  {
+    "question": "Wie heißt die Hauptstadt von Frankreich?",
+    "answers": ["Paris"]
+  },
+  {
+    "q": "Wer schrieb den Faust?",
+    "a": ["Goethe", "Johann Wolfgang von Goethe"]
+  },
+  {
+    "question": "In welcher Stadt steht der Eiffelturm?",
+    "answers": ["Paris"]
+  }
+]

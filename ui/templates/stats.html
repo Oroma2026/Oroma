@@ -1,0 +1,281 @@
+{% extends "base.html" %}
+{% block content %}
+<!--
+===============================================================================
+Pfad:    /opt/ai/oroma/ui/templates/stats.html
+Projekt: 🧠 ORÓMA v3.8 – Live Learning Dashboard
+Version: v3.8.5 (DB-Health + Live-Metriken Sektionen)
+Stand:   2025-11-03
+Autor:   ORÓMA · KI-JWG-X1
+===============================================================================
+-->
+<main class="container py-3">
+  <div class="d-flex align-items-center justify-content-between mb-2">
+    <h2 class="mb-0">📊 ORÓMA Live-Dashboard</h2>
+    <small id="updateTime" class="text-muted">—</small>
+  </div>
+  <p class="text-muted">Lernkurve, Speicher-/Regelstände, Traumzyklen, Replays, Systemstatus.</p>
+
+  <!-- KPI-Gürtel -->
+  <div class="row g-3" id="kpi-row"></div>
+
+  <!-- Lernkurve -->
+  <div class="card bg-dark text-light mt-3 mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>🧠 Lernkurve (Qualitätsscore SnapChains)</span>
+      <small id="chart-note" class="text-muted"></small>
+    </div>
+    <div class="card-body">
+      <canvas id="learningChart" height="110"></canvas>
+    </div>
+  </div>
+
+  <!-- Sektionen: Speicher/Traum/System -->
+  <div class="row g-3">
+    <div class="col-lg-4">
+      <div class="card bg-dark text-light h-100">
+        <div class="card-header">💾 Speicher & Regeln</div>
+        <ul id="storageList" class="list-group list-group-flush text-bg-dark small"></ul>
+      </div>
+    </div>
+    <div class="col-lg-4">
+      <div class="card bg-dark text-light h-100">
+        <div class="card-header">🌙 Traum & Replay</div>
+        <ul id="dreamList" class="list-group list-group-flush text-bg-dark small"></ul>
+      </div>
+    </div>
+    <div class="col-lg-4">
+      <div class="card bg-dark text-light h-100">
+        <div class="card-header">⚙️ System</div>
+        <ul id="sysList" class="list-group list-group-flush text-bg-dark small"></ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- NEU: DB-Health & Live-Metriken -->
+  <div class="row g-3 mt-1">
+    <div class="col-lg-6">
+      <div class="card bg-dark text-light h-100">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>🩺 Datenbank-Gesundheit</span>
+          <div>
+            <button id="btn-health-refresh" class="btn btn-sm btn-outline-info">Neu laden</button>
+            <button id="btn-health-copy" class="btn btn-sm btn-outline-secondary">Kopieren</button>
+          </div>
+        </div>
+        <ul id="healthList" class="list-group list-group-flush text-bg-dark small"></ul>
+        <div class="card-body">
+          <pre id="healthJSON" class="bg-black p-2 rounded small" style="min-height:90px; max-height:240px; overflow:auto;">—</pre>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="card bg-dark text-light h-100">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>📡 Live-Metriken</span>
+          <button id="btn-metrics-refresh" class="btn btn-sm btn-outline-info">Neu laden</button>
+        </div>
+        <ul id="metricsList" class="list-group list-group-flush text-bg-dark small"></ul>
+        <div class="card-body">
+          <pre id="metricsJSON" class="bg-black p-2 rounded small" style="min-height:90px; max-height:240px; overflow:auto;">—</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rohdaten -->
+  <div class="card bg-dark text-light mt-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>🧾 Rohdaten (JSON)</span>
+      <div>
+        <button id="btn-copy" class="btn btn-sm btn-outline-secondary">Kopieren</button>
+        <button id="btn-refresh" class="btn btn-sm btn-outline-info">Neu laden</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <pre id="jsonBox" class="bg-black p-2 rounded small" style="min-height:140px; max-height:300px; overflow:auto;">—</pre>
+    </div>
+  </div>
+</main>
+
+<style>
+  .kpi-card { background:#111; border:1px solid #333; border-radius:10px; padding:12px; }
+  .kpi-title { font-size:0.8rem; color:#bbb; margin-bottom:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .kpi-value { font-size:1.4rem; font-weight:700; line-height:1.1; }
+  .kpi-sub   { font-size:0.75rem; color:#8aa; }
+  .list-group-item { background:#0e0e0e; color:#e8e8e8; }
+  .badge-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; background:#666; vertical-align:middle; }
+  .dot-on { background:#2ecc71; } .dot-off { background:#e74c3c; }
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+let chart = null;
+
+function fmtInt(n){ if(n===null||n===undefined) return "–"; try{ return Number(n).toLocaleString(); }catch{ return String(n); } }
+function fmtPct01(x){ if(typeof x!=="number") return "–"; return (x*100).toFixed(1)+"%"; }
+function setText(id, html){ const el=document.getElementById(id); if(el) el.innerHTML = html; }
+function kpiTile(title, value, sub=""){
+  return `
+  <div class="col-6 col-md-4 col-lg-3">
+    <div class="kpi-card h-100">
+      <div class="kpi-title">${title}</div>
+      <div class="kpi-value">${value}</div>
+      ${sub?`<div class="kpi-sub">${sub}</div>`:""}
+    </div>
+  </div>`;
+}
+
+async function fetchJSON(url){
+  const r = await fetch(url, { cache:"no-store" });
+  const j = await r.json();
+  if(!j.ok) throw new Error(j.error||("API not ok: "+url));
+  return j;
+}
+
+async function fetchLive(){ return fetchJSON("/stats/api/live"); }
+async function fetchHealth(){ return fetchJSON("/stats/api/health"); }
+async function fetchMetrics(){ return fetchJSON("/stats/api/metrics"); }
+
+function renderKPIs(s){
+  const tiles =
+    kpiTile("SnapChains (DB)", fmtInt(s.snapchains_db)) +
+    kpiTile("Snaps (RAM)", fmtInt(s.snaps_ram)) +
+    kpiTile("Regeln aktiv", fmtInt(s.rules_active)) +
+    kpiTile("Regeln inaktiv", fmtInt(s.rules_inactive)) +
+    kpiTile("Exports (ok)", fmtInt(s.exports)) +
+    kpiTile("Traumphasen gesamt", fmtInt(s.dream_cycles)) +
+    kpiTile("Replays heute", fmtInt(s.replays_today)) +
+    kpiTile("Spiele heute", fmtInt(s.games_played)) +
+    kpiTile("Qualitätsdurchschnitt", fmtPct01(s.quality_avg)) +
+    kpiTile("Modus", (s.mode||"–").toUpperCase()) +
+    kpiTile("VectorDB", s.vector_db ? "✅ aktiv" : "❌ aus") +
+    kpiTile("Letzter Traum", s.last_dream||"–", "Uptime: "+(s.uptime||"–"));
+  document.getElementById("kpi-row").innerHTML = tiles;
+}
+
+function renderLists(s){
+  document.getElementById("storageList").innerHTML = `
+    <li class="list-group-item">Snaps (RAM): <b>${fmtInt(s.snaps_ram)}</b></li>
+    <li class="list-group-item">SnapChains (DB): <b>${fmtInt(s.snapchains_db)}</b></li>
+    <li class="list-group-item">Exports (ok): <b>${fmtInt(s.exports)}</b></li>
+    <li class="list-group-item">Regeln aktiv: <b>${fmtInt(s.rules_active)}</b></li>
+    <li class="list-group-item">Regeln inaktiv: <b>${fmtInt(s.rules_inactive)}</b></li>
+  `;
+  document.getElementById("dreamList").innerHTML = `
+    <li class="list-group-item">Traumphasen gesamt: <b>${fmtInt(s.dream_cycles)}</b></li>
+    <li class="list-group-item">Replays heute: <b>${fmtInt(s.replays_today)}</b></li>
+    <li class="list-group-item">Spiele heute: <b>${fmtInt(s.games_played)}</b></li>
+    <li class="list-group-item">Letzter Traum: <b>${s.last_dream||"–"}</b></li>
+  `;
+  document.getElementById("sysList").innerHTML = `
+    <li class="list-group-item">Modus: <b>${(s.mode||"–").toUpperCase()}</b></li>
+    <li class="list-group-item">VectorDB: <span class="badge-dot ${s.vector_db?'dot-on':'dot-off'}"></span>${s.vector_db?"aktiv":"aus"}</li>
+    <li class="list-group-item">Qualitätsdurchschnitt: <b>${fmtPct01(s.quality_avg)}</b></li>
+    <li class="list-group-item">Uptime: <b>${s.uptime||"–"}</b></li>
+  `;
+}
+
+function renderChart(c){
+  const noteEl = document.getElementById("chart-note");
+  const hasData = Array.isArray(c.labels) && c.labels.length>0 && Array.isArray(c.values) && c.values.length>0;
+  if(!chart){
+    const ctx=document.getElementById("learningChart");
+    chart = new Chart(ctx,{
+      type:"line",
+      data:{ labels: c.labels||[], datasets:[{ label:"Qualität", data:c.values||[], borderColor:"#4cc9f0", fill:false, tension:0.12, spanGaps:true }]},
+      options:{
+        animation:false,
+        scales:{ y:{ min:0, max:1, ticks:{ stepSize:0.25 } } },
+        plugins:{ legend:{ display:false } }
+      }
+    });
+  }else{
+    chart.data.labels = c.labels||[];
+    chart.data.datasets[0].data = c.values||[];
+    chart.update();
+  }
+  noteEl.textContent = hasData ? "" : "Keine Verlaufspunkte vorhanden";
+}
+
+function renderJSON(id, obj){
+  try{ document.getElementById(id).textContent = JSON.stringify(obj, null, 2); }
+  catch{ document.getElementById(id).textContent = String(obj); }
+}
+
+async function update(){
+  try{
+    const j = await fetchLive();
+    setText("updateTime", "Letztes Update: " + new Date().toLocaleTimeString());
+    renderKPIs(j.stats||{});
+    renderLists(j.stats||{});
+    renderChart(j.chart||{labels:[],values:[]});
+    renderJSON("jsonBox", j);
+  }catch(e){
+    console.warn("Dashboard-Update fehlgeschlagen:", e);
+    setText("updateTime", "Update fehlgeschlagen ("+new Date().toLocaleTimeString()+")");
+  }
+}
+
+async function updateHealth(){
+  try{
+    const h = await fetchHealth();
+    const db = h.db||{};
+    const pg = h.pragmas||{};
+    const usage = h.usage||{};
+    document.getElementById("healthList").innerHTML = `
+      <li class="list-group-item">Pfad: <b>${db.path||"–"}</b></li>
+      <li class="list-group-item">Journal Mode: <b>${pg.journal_mode||"unknown"}</b></li>
+      <li class="list-group-item">Größe: <b>${db.size_human||"–"}</b> (mtime: ${db.mtime||"–"})</li>
+      <li class="list-group-item">Seiten: <b>${fmtInt(pg.page_count||0)}</b> · Freiliste: <b>${fmtInt(pg.freelist_count||0)}</b></li>
+      <li class="list-group-item">Nutzung: <b>${(usage && typeof usage.used_pct==="number")?(usage.used_pct*100).toFixed(1)+"%":"–"}</b> (used_pages=${fmtInt(usage.used_pages||0)})</li>
+      <li class="list-group-item">WAL: ${db.wal_exists?"✅":"❌"} ${db.wal_exists?("("+ (db.wal_size_human||"") +")"):""}</li>
+      <li class="list-group-item">SHM: ${db.shm_exists?"✅":"❌"} ${db.shm_exists?("("+ (db.shm_size_human||"") +")"):""}</li>
+    `;
+    renderJSON("healthJSON", h);
+  }catch(e){
+    document.getElementById("healthList").innerHTML = `<li class="list-group-item text-danger">Health-API Fehler: ${e}</li>`;
+  }
+}
+
+async function updateMetrics(){
+  try{
+    const m = await fetchMetrics();
+    const s = m.summary||{};
+    const last = m.last||{};
+    document.getElementById("metricsList").innerHTML = `
+      <li class="list-group-item">Heartbeats (letzte Stunde): <b>${fmtInt(s.heartbeats_last_hour||0)}</b></li>
+      <li class="list-group-item">Events (letzte Stunde): <b>${fmtInt(s.events_last_hour||0)}</b></li>
+      <li class="list-group-item">Letzter Heartbeat: <b>${last.heartbeat_at||"–"}</b></li>
+      <li class="list-group-item">Letztes Event: <b>${last.event_at||"–"}</b></li>
+    `;
+    renderJSON("metricsJSON", m);
+  }catch(e){
+    document.getElementById("metricsList").innerHTML = `<li class="list-group-item text-danger">Metrics-API Fehler: ${e}</li>`;
+  }
+}
+
+document.addEventListener("DOMContentLoaded", ()=>{
+  // Hauptdaten
+  document.getElementById("btn-refresh").addEventListener("click", update);
+  document.getElementById("btn-copy").addEventListener("click", ()=>{
+    try{ navigator.clipboard.writeText(document.getElementById("jsonBox").textContent||""); }catch{}
+  });
+
+  // Health
+  document.getElementById("btn-health-refresh").addEventListener("click", updateHealth);
+  document.getElementById("btn-health-copy").addEventListener("click", ()=>{
+    try{ navigator.clipboard.writeText(document.getElementById("healthJSON").textContent||""); }catch{}
+  });
+
+  // Metrics
+  document.getElementById("btn-metrics-refresh").addEventListener("click", updateMetrics);
+
+  // Initial
+  update();
+  updateHealth();
+  updateMetrics();
+  setInterval(update, 10000);
+});
+</script>
+{% endblock %}

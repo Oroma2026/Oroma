@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container-fluid">
+  <div class="d-flex align-items-center justify-content-between flex-wrap" style="gap:10px;">
+    <div>
+      <h2 style="margin:0;">🙈 Hide &amp; Seek</h2>
+      <div class="text-muted" style="font-size:0.95rem;">Grid-World · UniversalPolicy · Default: Explore</div>
+    </div>
+    <div class="d-flex align-items-center" style="gap:10px; flex-wrap:wrap;">
+      <label class="d-flex align-items-center" style="gap:6px;">
+        <span class="text-muted">Mode</span>
+        <select id="hsMode" class="input" style="min-width:240px;">
+          <option value="oroma_vs_oroma_explore">oroma_vs_oroma_explore (eps&gt;0) [default]</option>
+          <option value="oroma_vs_oroma_policy">oroma_vs_oroma_policy (eps=0)</option>
+          <option value="human">human (WASD / Pfeile)</option>
+        </select>
+      </label>
+
+      <label class="d-flex align-items-center" style="gap:6px;">
+        <span class="text-muted">Autoplay</span>
+        <input id="hsAutoplay" type="checkbox" />
+      </label>
+
+      <label class="d-flex align-items-center" style="gap:6px;">
+        <span class="text-muted">Auto-Reset</span>
+        <input id="hsAutoReset" type="checkbox" checked />
+      </label>
+
+      <label class="d-flex align-items-center" style="gap:6px;">
+        <span class="text-muted">eps</span>
+        <input id="hsEps" class="input" style="width:90px;" value="0.08" />
+      </label>
+
+      <label class="d-flex align-items-center" style="gap:6px;">
+        <span class="text-muted">explore_moves</span>
+        <input id="hsExploreMoves" class="input" style="width:70px;" value="1" />
+      </label>
+
+      <button id="hsStart" class="btn btn-success btn-sm">Start</button>
+      <button id="hsStop" class="btn btn-warning btn-sm">Stop</button>
+      <button id="hsApply" class="btn btn-sm">Apply</button>
+      <button id="hsReset" class="btn btn-danger btn-sm">Reset</button>
+    </div>
+  </div>
+
+  <div class="row mt-3">
+    <div class="col-lg-8">
+      <canvas id="hsCanvas" width="900" height="600" class="border bg-white" style="max-width:100%;"></canvas>
+      <div class="mt-2 text-muted" style="font-size:0.95rem;">
+        Controls (human): <b>WASD</b> oder <b>Pfeile</b>. Seeker = rot, Hider = grün, Wall = grau.
+      </div>
+    </div>
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="d-flex justify-content-between">
+            <div>
+              <div class="text-muted">Status</div>
+              <div id="hsInfo" style="font-family:monospace; white-space:pre;">—</div>
+            </div>
+            <div class="text-end">
+              <div class="text-muted">Policy</div>
+              <div id="hsPolicy" style="font-family:monospace;">—</div>
+            </div>
+          </div>
+          <hr />
+          <div class="text-muted" style="font-size:0.95rem;">
+            Tipp: Stop pausiert den Tick-Loop (keine /step Calls). Auto-Reset startet bei done automatisch neu.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', ()=>{
+  const canvas = document.getElementById('hsCanvas');
+  if(!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  const elMode = document.getElementById('hsMode');
+  const elAutoplay = document.getElementById('hsAutoplay');
+  const elAutoReset = document.getElementById('hsAutoReset');
+  const elEps = document.getElementById('hsEps');
+  const elExploreMoves = document.getElementById('hsExploreMoves');
+  const elStart = document.getElementById('hsStart');
+  const elStop = document.getElementById('hsStop');
+  const elApply = document.getElementById('hsApply');
+  const elReset = document.getElementById('hsReset');
+  const elInfo = document.getElementById('hsInfo');
+  const elPolicy = document.getElementById('hsPolicy');
+
+  let running = true;
+  let lastDone = false;
+  let lastState = null;
+
+  function draw(st){
+    if(!st) return;
+    const w = st.w || 15;
+    const h = st.h || 10;
+    const grid = st.grid || [];
+    const cw = canvas.width / w;
+    const ch = canvas.height / h;
+
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    // walls
+    for(let y=0;y<h;y++){
+      for(let x=0;x<w;x++){
+        const v = (grid[y] && grid[y][x] !== undefined) ? grid[y][x] : 0;
+        if(v === 1){
+          ctx.fillStyle = '#9aa3ad';
+          ctx.fillRect(x*cw, y*ch, cw-1, ch-1);
+        }
+      }
+    }
+
+    // hiders
+    ctx.fillStyle = '#2aa84a';
+    (st.hiders || []).forEach(hd=>{
+      ctx.fillRect(hd.x*cw, hd.y*ch, cw-1, ch-1);
+    });
+
+    // seeker
+    const s = st.seeker || {x:0,y:0};
+    ctx.fillStyle = '#e03a3a';
+    ctx.fillRect(s.x*cw, s.y*ch, cw-1, ch-1);
+  }
+
+  async function refresh(){
+    const res = await apiGet('/hideseek/api/state');
+    if(!res || !res.ok) return;
+    const st = res.state;
+    lastState = st;
+    draw(st);
+
+    if(elMode) elMode.value = res.mode || 'oroma_vs_oroma_explore';
+    if(elAutoplay) elAutoplay.checked = !!res.autoplay;
+    if(elEps) elEps.value = String(res.eps ?? 0.08);
+    if(elExploreMoves) elExploreMoves.value = String(res.explore_moves_per_game ?? 1);
+    if(elInfo){
+      elInfo.textContent = `steps=${st.steps} / ${st.max_steps}\nfound=${st.found}  remaining=${(st.hiders||[]).length}\ndone=${st.done ? 'yes' : 'no'}`;
+    }
+    if(elPolicy){
+      elPolicy.textContent = `rules=${res.policy_rules||0}\nns=${res.namespace||'game:hideseek'}`;
+    }
+
+    // auto-reset when done
+    const doneNow = !!st.done;
+    if(elAutoReset && elAutoReset.checked){
+      if(!lastDone && doneNow && running){
+        setTimeout(async()=>{ try{ await apiPost('/hideseek/api/reset', {}); }catch(_){ } }, 200);
+      }
+    }
+    lastDone = doneNow;
+  }
+
+  async function step(){
+    if(!running) return;
+    await apiPost('/hideseek/api/step', {});
+  }
+
+  async function applySettings(){
+    const mode = elMode ? elMode.value : 'human';
+    await apiPost('/hideseek/api/mode', {mode});
+    const eps = parseFloat(elEps ? elEps.value : '0.08');
+    const explore_moves_per_game = parseInt(elExploreMoves ? elExploreMoves.value : '1');
+    await apiPost('/hideseek/api/settings', {eps, explore_moves_per_game});
+    await apiPost('/hideseek/api/toggle', {autoplay: !!(elAutoplay && elAutoplay.checked)});
+    await refresh();
+  }
+
+  async function startDefault(){
+    running = true;
+    if(elMode) elMode.value = 'oroma_vs_oroma_explore';
+    if(elAutoplay) elAutoplay.checked = true;
+    await apiPost('/hideseek/api/reset', {});
+    await applySettings();
+  }
+
+  async function stopLoop(){
+    running = false;
+    try{ await apiPost('/hideseek/api/toggle', {autoplay:false}); }catch(_){ }
+    if(elAutoplay) elAutoplay.checked = false;
+    await refresh();
+  }
+
+  // Human controls
+  function sendAction(a){ apiPost('/hideseek/api/action', {action:a}).catch(()=>{}); }
+  window.addEventListener('keydown', (ev)=>{
+    const k = ev.key;
+    if(k==='ArrowRight' || k==='d' || k==='D') sendAction(0);
+    if(k==='ArrowLeft'  || k==='a' || k==='A') sendAction(1);
+    if(k==='ArrowDown'  || k==='s' || k==='S') sendAction(2);
+    if(k==='ArrowUp'    || k==='w' || k==='W') sendAction(3);
+  });
+
+  if(elStart) elStart.addEventListener('click', startDefault);
+  if(elStop) elStop.addEventListener('click', stopLoop);
+  if(elApply) elApply.addEventListener('click', applySettings);
+  if(elReset) elReset.addEventListener('click', async()=>{ await apiPost('/hideseek/api/reset', {}); await refresh(); });
+
+  refresh().then(()=>{ startDefault(); }).catch(()=>{});
+  setInterval(async()=>{ try{ await step(); await refresh(); }catch(_){ } }, 140);
+});
+</script>
+{% endblock %}

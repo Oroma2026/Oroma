@@ -1,0 +1,39 @@
+<!-- =============================================================================
+     Pfad:    /opt/ai/oroma/ui/templates/knowledge_search.html
+     Projekt: ORÓMA
+     Version: v3.5
+     Stand:   2025-09-21
+     Zweck:
+       - Suchoberfläche für Knowledge-Modul (RAGStore)
+============================================================================= -->
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <h2 class="mb-3">🔎 Knowledge Search</h2>
+
+  <form method="POST" class="row g-2 mb-3">
+    <div class="col-md-10">
+      <input type="text" name="query" placeholder="Suchbegriff eingeben…" value="{{ query }}" class="form-control">
+    </div>
+    <div class="col-md-2">
+      <button type="submit" class="btn btn-primary w-100">Suchen</button>
+    </div>
+  </form>
+
+  {% if query %}
+    <h4 class="mt-3">Ergebnisse für: <code>{{ query }}</code></h4>
+    {% if results %}
+      <div class="list-group mt-3">
+        {% for r in results %}
+          <div class="list-group-item bg-dark text-light mb-2">
+            <small class="text-muted">Source: {{ r.source }} | ID: {{ r.id }}</small>
+            <pre class="mb-0">{{ r.content }}</pre>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="alert alert-warning mt-3">Keine Treffer gefunden.</div>
+    {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,380 @@
+{% extends "base.html" %}
+{% block content %}
+<!-- =============================================================================
+     Pfad:     /opt/ai/oroma/ui/templates/tetris.html
+     Projekt:  ORÓMA – Headless UI (Flask)
+     Modul:    Tetris – Standard-UI (wie TicTacToe-Referenz)
+     Version:  v1.2 (Standard-Layout + Policy/Explore Umschaltung + AI-Step)
+     Stand:    2026-02-23
+     Autor:    ORÓMA · KI-JWG-X1 (Integration nach TicTacToe-Standard)
+     Lizenz:   MIT
+     =============================================================================
+
+     ZWECK
+     ─────
+     Diese Seite folgt dem ORÓMA-„Game-Standard“ (TicTacToe als Referenz):
+       • Autoplay ist client-seitig getaktet (kein Thread im Service).
+       • Der Server stellt deterministische Step-Endpoints bereit.
+       • Policy/Explore ist explizit wählbar und wird als Badge angezeigt.
+
+     ENDPOINTS
+     ─────────
+       GET  /tetris/api/state    → Zustand + cfg + policy-badge
+       POST /tetris/api/apply    → cfg anwenden (mode, eps)
+       POST /tetris/api/ai_step  → 1 AI-Zug (Placement + hard_drop)
+       POST /tetris/api/cmd      → manuelle Kommandos (left/right/rotate/down/hard/reset)
+
+     HEADLESS / ROBUSTHEIT
+     ─────────────────────
+       • Kein serverseitiger Tick-Thread.
+       • Autoplay loop: setTimeout mit Overlap-Schutz.
+       • UI nutzt fetch() ohne externe Dependencies.
+============================================================================= -->
+
+<main style="padding:1rem;">
+
+  <style>
+    .badge { padding:0.35rem 0.5rem; border-radius:6px; }
+    .badge-ok { background:#2b9348; color:#fff; }
+    .badge-off { background:#6c757d; color:#fff; }
+    .wrap { max-width: 1100px; margin: 0 auto; }
+    .grid { background:#000; display:inline-block; padding:8px; border-radius:8px; }
+    canvas { display:block; }
+    .panel { background:#111; padding:10px 12px; border-radius:8px; color:#ddd; }
+    .legend { font-size:.92rem; color:#9aa; }
+  </style>
+
+  <div class="wrap">
+    <div class="d-flex flex-wrap justify-content-between align-items-center mb-2">
+      <h2 class="mb-2 mb-sm-0">🧱 ORÓMA Tetris</h2>
+
+      <div class="text-end">
+        <label class="fw-bold me-1">Modus:</label>
+        <select id="modeSelect" class="form-select d-inline-block w-auto">
+          <option value="explore">🧠 Explore (ε)</option>
+          <option value="policy">📌 Policy-only</option>
+        </select>
+
+        <span id="autoBadge" class="badge ms-3 badge-off">AUTOPLAY OFF</span>
+        <label class="ms-2" style="font-size:.92rem; color:#bbb;"><input type="checkbox" id="chkAnimate" checked> Animate AI</label>
+        <span id="policyBadge" class="badge ms-1 badge-off" title="Policy-Status">POLICY OFF</span>
+      </div>
+    </div>
+
+    <div class="panel legend mb-3">
+      Steuerung: ←/→ = Move · ↑/W = Rotate · ↓/S = Soft Drop · SPACE = Hard Drop · R = Reset
+      <br>
+      Hinweis: Autoplay wird client-seitig getaktet (kein Thread im Service). "Step" ist ein AI-Zug.
+    </div>
+
+    <div class="row g-3">
+      <div class="col-12 col-lg-7">
+        <div class="grid">
+          <canvas id="board" width="240" height="480" aria-label="Tetris Board"></canvas>
+        </div>
+      </div>
+
+      <div class="col-12 col-lg-5">
+        <div class="panel mb-3">
+          <div class="d-flex justify-content-between">
+            <div><b>Score:</b> <span id="score">0</span></div>
+            <div><b>Level:</b> <span id="level">0</span></div>
+            <div><b>Lines:</b> <span id="lines">0</span></div>
+          </div>
+          <div class="mt-2"><b>Nächster:</b> <span id="next">–</span></div>
+          <div><b>Status:</b> <span id="stat">–</span></div>
+        </div>
+
+        <div class="panel mb-3">
+          <div class="d-flex flex-wrap gap-2">
+            <button class="btn btn-primary btn-sm" onclick="doAIStep()">⏭ Step</button>
+            <button id="btnStart" class="btn btn-success btn-sm" onclick="startAutoplay()">▶ Start</button>
+            <button id="btnStop" class="btn btn-warning btn-sm" onclick="stopAutoplay()" disabled>⏹ Stop</button>
+            <button class="btn btn-secondary btn-sm" onclick="sendCmd('reset')">↻ Reset</button>
+          </div>
+          <hr>
+          <div class="d-flex flex-wrap gap-2">
+            <button class="btn btn-outline-light btn-sm" onclick="sendCmd('left')">←</button>
+            <button class="btn btn-outline-light btn-sm" onclick="sendCmd('right')">→</button>
+            <button class="btn btn-outline-light btn-sm" onclick="sendCmd('rotate')">⟳</button>
+            <button class="btn btn-outline-light btn-sm" onclick="sendCmd('down')">↓</button>
+            <button class="btn btn-danger btn-sm" onclick="sendCmd('hard')">HARD</button>
+          </div>
+        </div>
+
+        <div class="panel mb-3">
+          <h5 class="mb-2">⚙️ Parameter</h5>
+          <div class="d-flex align-items-center gap-2 mb-2">
+            <label class="fw-bold">ε (Explore)</label>
+            <input id="epsInput" type="number" min="0" max="1" step="0.01" value="0.08" class="form-control form-control-sm" style="width:120px;">
+            <button class="btn btn-success btn-sm" onclick="applyCfg()">✅ Apply</button>
+          </div>
+          <div class="small legend">Policy-only ignoriert ε. Explore nutzt ε für zufällige Placements.</div>
+        </div>
+
+        <div class="panel mb-3">
+          <h5 class="mb-2">📊 Statistik &amp; Speicher</h5>
+          <div id="statsText" class="small" style="line-height:1.35"></div>
+        </div>
+
+        <div class="panel">
+          <h5 class="mb-2">📦 Status (Debug)</h5>
+          <pre id="debug" class="small" style="white-space:pre-wrap;max-height:220px;overflow:auto;margin:0;"></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+const API_STATE = "/tetris/api/state";
+const API_APPLY = "/tetris/api/apply";
+const API_AI_STEP = "/tetris/api/ai_step";
+const API_AI_PLAN = "/tetris/api/ai_plan";
+const API_CMD = "/tetris/api/cmd";
+
+let autoplay = false;
+let autoplayTimer = null;
+let stepMs = 220;
+let _busy = false;
+function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+
+function getToken(){
+  try { return localStorage.getItem('OROMA_UI_TOKEN') || (document.cookie.match(/(?:^|; )OROMA_UI_TOKEN=([^;]*)/)||[])[1]; } catch(_){ return null; }
+}
+function authHeaders(h={}){ const t=getToken(); if(t) h['X-OROMA-TOKEN']=t; return h; }
+
+const W=10,H=20, CELL=24, PAD=2;
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+
+function colorFor(n){
+  const C = ["#18a0fb","#f7d038","#ab47bc","#66bb6a","#ef5350","#29b6f6","#ffa726"];
+  return n>=0 ? C[n%7] : "#000";
+}
+
+function kindToIdx(k){
+  return ["I","O","T","S","Z","J","L"].indexOf(k||"T");
+}
+
+function drawCell(x,y,border="#444",ghost=false, fillColor="#bbb"){
+  const px = x*CELL, py = y*CELL;
+  ctx.fillStyle = ghost ? "rgba(200,200,200,.08)" : fillColor;
+  ctx.fillRect(px+PAD, py+PAD, CELL-2*PAD, CELL-2*PAD);
+  ctx.strokeStyle = border;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(px+PAD, py+PAD, CELL-2*PAD, CELL-2*PAD);
+}
+
+function drawBoard(st){
+  ctx.fillStyle="#000"; ctx.fillRect(0,0,canvas.width,canvas.height);
+  if(st.board){
+    for(let y=0;y<H;y++){
+      for(let x=0;x<W;x++){
+        const v = st.board[y][x];
+        if(v>=0){
+          // FIX: previously the color was passed as the *border* argument.
+          // That made locked/placed pieces look nearly transparent/incorrect.
+          drawCell(x,y,"#222", false, colorFor(v));
+        }else{
+          drawCell(x,y,"#111", false, "#000");
+        }
+      }
+    }
+  }
+  if(st.ghost && st.ghost.length){
+    for(const [gx,gy] of st.ghost){ if(gy>=0) drawCell(gx,gy,"#333", true); }
+  }
+  if(st.cur && st.cur.cells){
+    for(const [cx,cy] of st.cur.cells){
+      if(cy>=0) drawCell(cx,cy,"#fff", false, colorFor(kindToIdx(st.cur.kind)));
+    }
+  }
+}
+
+function renderStats(st){
+  // TicTacToe-style "Statistik & Speicher" block (adapted for single-player).
+  const s = st.stats || {games:0,gameovers:0,best_score:0};
+  const pol = st.policy || {};
+  const policyCnt = pol.policy_rules_count ?? 0;
+  const archivCnt = pol.archiv_rules_count ?? 0;
+  let lines = [];
+  lines.push(`Spiele: ${s.games} · GameOver: ${s.gameovers} · Best-Score: ${s.best_score}`);
+  lines.push(`📚 Policy-Regeln (game:tetris): ${policyCnt} · Archiv-Regeln: ${archivCnt}`);
+  lines.push(`🧠 Memory-Snaps (RAM): ${st.snaps_in_ram || 0}`);
+  lines.push(`🗃️ DB-SnapChains: ${st.snapchains_in_db || 0} · DB-Snaps: ${st.snaps_total_db || 0}`);
+  const el = document.getElementById('statsText');
+  if(el) el.innerHTML = lines.join('<br>');
+}
+
+function maybeAutoRestartOnGameOver(st){
+  // If the engine reached game-over, auto-restart after a short delay.
+  const running = !!st.running;
+  const curKind = st?.cur?.kind;
+  if(running && curKind) return;
+
+  if(autoplay) stopAutoplay();
+  const stat = document.getElementById('stat');
+  if(stat) stat.textContent = 'GAME OVER';
+
+  setTimeout(async ()=>{
+    await sendCmd('reset');
+    await loadState();
+  }, 350);
+}
+
+function updateBadges(st){
+  const autoBadge = document.getElementById('autoBadge');
+  autoBadge.textContent = autoplay ? "AUTOPLAY ON" : "AUTOPLAY OFF";
+  autoBadge.className = "badge " + (autoplay ? "badge-ok" : "badge-off");
+
+  const p = st.policy || {};
+  const polBadge = document.getElementById('policyBadge');
+  if(p.enabled){
+    const ns = p.namespace ? ` (${p.namespace})` : "";
+    const cnt = (typeof p.policy_rules_count === 'number') ? ` • Regeln: ${p.policy_rules_count}` : "";
+    polBadge.textContent = `POLICY ON${ns}${cnt}`;
+    polBadge.className = "badge badge-ok";
+  }else{
+    polBadge.textContent = "POLICY OFF";
+    polBadge.className = "badge badge-off";
+  }
+}
+
+function updateInfo(st){
+  document.getElementById('score').textContent = st.score ?? "0";
+  document.getElementById('level').textContent = st.level ?? "0";
+  document.getElementById('lines').textContent = st.lines ?? "0";
+  document.getElementById('next').textContent  = st.next ?? "–";
+  document.getElementById('stat').textContent  = st.running ? "läuft" : "pausiert/Ende";
+
+  const cfg = st.cfg || {};
+  const ms = document.getElementById('modeSelect');
+  if(ms && cfg.mode) ms.value = cfg.mode;
+  const eps = document.getElementById('epsInput');
+  if(eps && typeof cfg.eps === 'number') eps.value = String(cfg.eps);
+
+  const dbg = document.getElementById('debug');
+  if(dbg){
+    const s2 = Object.assign({}, st);
+    // board arrays are huge; omit in debug.
+    delete s2.board; delete s2.ghost; if(s2.cur) delete s2.cur.cells;
+    dbg.textContent = JSON.stringify(s2, null, 2);
+  }
+
+  renderStats(st);
+}
+
+async function loadState(){
+  try{
+    const r = await fetch(API_STATE, {cache:"no-store"});
+    if(!r.ok) return;
+    const st = await r.json();
+    updateInfo(st);
+    updateBadges(st);
+    drawBoard(st);
+    maybeAutoRestartOnGameOver(st);
+  }catch(e){}
+}
+
+async function applyCfg(){
+  try{
+    const mode = document.getElementById('modeSelect').value;
+    const eps = parseFloat(document.getElementById('epsInput').value || '0.08');
+    const r = await fetch(API_APPLY, {
+      method:'POST',
+      headers: authHeaders({'Content-Type':'application/json'}),
+      body: JSON.stringify({mode, eps})
+    });
+    const st = await r.json();
+    updateInfo(st); updateBadges(st); drawBoard(st);
+  }catch(e){}
+}
+
+async function sendCmd(cmd){
+  try{
+    const r = await fetch(API_CMD, {
+      method:"POST",
+      headers: authHeaders({"Content-Type":"application/json"}),
+      body: JSON.stringify({cmd})
+    });
+    const st = await r.json();
+    updateInfo(st); updateBadges(st); drawBoard(st);
+    return st;
+  }catch(e){
+    return null;
+  }
+}
+
+async function doAIStep(){
+  if(_busy) return;
+  _busy = true;
+  try{
+    const animate = !!document.getElementById('chkAnimate')?.checked;
+    if(animate){
+      const rp = await fetch(API_AI_PLAN, {method:"POST", headers: authHeaders({"Content-Type":"application/json"}), body:"{}"});
+      const jp = await rp.json();
+      if(jp && jp.ok && Array.isArray(jp.cmds) && jp.cmds.length){
+        for(const cmd of jp.cmds){
+          const st = await sendCmd(cmd);
+          if(st) maybeAutoRestartOnGameOver(st);
+          // small delay so movement becomes visible (especially rotate/left/right)
+          await sleep(70);
+          // if game already ended, stop executing remaining cmds
+          if(st && (!st.running || !st?.cur?.kind)) break;
+        }
+      }else{
+        // fallback
+        const r = await fetch(API_AI_STEP, {method:"POST", headers: authHeaders({"Content-Type":"application/json"}), body:"{}"});
+        const st = await r.json();
+        updateInfo(st); updateBadges(st); drawBoard(st);
+        maybeAutoRestartOnGameOver(st);
+      }
+    }else{
+      const r = await fetch(API_AI_STEP, {method:"POST", headers: authHeaders({"Content-Type":"application/json"}), body:"{}"});
+      const st = await r.json();
+      updateInfo(st); updateBadges(st); drawBoard(st);
+      maybeAutoRestartOnGameOver(st);
+    }
+  }catch(e){}
+  _busy = false;
+}
+
+function startAutoplay(){
+  if(autoplay) return;
+  autoplay = true;
+  document.getElementById('btnStart').disabled = true;
+  document.getElementById('btnStop').disabled = false;
+  updateBadges({policy:{enabled:true,namespace:'game:tetris',policy_rules_count:0}});
+  const loop = async ()=>{
+    if(!autoplay) return;
+    await doAIStep();
+    autoplayTimer = setTimeout(loop, stepMs);
+  };
+  loop();
+}
+
+function stopAutoplay(){
+  autoplay = false;
+  if(autoplayTimer){ clearTimeout(autoplayTimer); autoplayTimer = null; }
+  document.getElementById('btnStart').disabled = false;
+  document.getElementById('btnStop').disabled = true;
+  updateBadges({policy:{enabled:true,namespace:'game:tetris',policy_rules_count:0}});
+}
+
+document.addEventListener('keydown', (ev)=>{
+  const k = ev.key;
+  if(k==="ArrowLeft" || k==="a" || k==="A") { ev.preventDefault(); sendCmd('left'); }
+  else if(k==="ArrowRight" || k==="d" || k==="D") { ev.preventDefault(); sendCmd('right'); }
+  else if(k==="ArrowUp" || k==="w" || k==="W") { ev.preventDefault(); sendCmd('rotate'); }
+  else if(k==="ArrowDown" || k==="s" || k==="S") { ev.preventDefault(); sendCmd('down'); }
+  else if(k===" "){ ev.preventDefault(); sendCmd('hard'); }
+  else if(k==="r" || k==="R"){ ev.preventDefault(); sendCmd('reset'); }
+});
+
+// Initial
+loadState();
+</script>
+
+{% endblock %}

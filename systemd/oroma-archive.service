@@ -1,0 +1,66 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-archive.service
+# Projekt:  ORÓMA v3.8 – Monatliche Archivierung/Export (Headless)
+# Version:  v3.8-r2 (systemweit, kein venv)
+# Stand:    2025-10-21
+# Autor:    ORÓMA · KI-JWG-X1
+# =============================================================================
+#
+# Zweck
+# ─────
+#   Erstellt monatlich ein versions- und datumsbasiertes ZIP-Archiv des
+#   ORÓMA-Verzeichnisses mit sinnvollen Ausschlüssen (Logs, venv, __pycache__, .git, etc.).
+#   Ausgabe nach /opt/ai/oroma/exports/.
+#
+# Merkmale
+# ────────
+#   • HEADLESS, ohne venv
+#   • Logging in Dateien (append) + Journald via SyslogIdentifier
+#   • Bootstrap: legt exports/ und logs/ an
+#   • Timer-kompatibel (siehe oroma-archive.timer)
+# =============================================================================
+
+[Unit]
+Description=ORÓMA v3.8 – Monatliche Archivierung/Export (oneshot)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/opt/ai/oroma/.use_orchestrator
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai/oroma
+
+User=oroma
+Group=oroma
+UMask=002
+
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+Environment=TZ=Europe/Berlin
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=OROMA_LOG_DIR=/opt/ai/oroma/logs
+SyslogIdentifier=oroma-archive
+
+# Bootstrap: Verzeichnisse & Logdateien
+ExecStartPre=/usr/bin/env bash -lc 'mkdir -p /opt/ai/oroma/exports /opt/ai/oroma/logs'
+ExecStartPre=/usr/bin/env bash -lc 'touch /opt/ai/oroma/logs/archive.out.log /opt/ai/oroma/logs/archive.err.log'
+
+# Hauptlauf: Script ausführen
+ExecStart=/usr/bin/env bash -lc '/opt/ai/oroma/tools/monthly_archive.sh'
+
+# Logging (systemd ≥ 240)
+StandardOutput=append:/opt/ai/oroma/logs/archive.out.log
+StandardError=append:/opt/ai/oroma/logs/archive.err.log
+
+# Sicherheit
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+ReadWritePaths=/opt/ai/oroma/exports /opt/ai/oroma/logs
+
+[Install]
+WantedBy=multi-user.target

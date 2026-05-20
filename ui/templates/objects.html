@@ -1,0 +1,520 @@
+{# =============================================================================
+  Datei:    ui/templates/objects.html
+  Projekt:  ORÓMA – ObjectGraph UI
+  Version:  v0.8
+  Stand:    2025-12-13
+  Autor:    Jörg Werner + GPT-5.1 Thinking
+  Zweck:
+    Web-UI für den ObjectGraph:
+      - Überblick über Objekt- und Relations-Statistik
+      - Anzeige von Top-Knoten (Labels & Grad)
+      - Filter (kind, focus_id)
+      - Tabellenansicht von ObjectNodes und ObjectRelations
+      - Fokus-Ego-Netz für einen ausgewählten Knoten (focus_id)
+
+  Erwartete Template-Variablen (aus ui/objects_ui.py):
+    - nodes: List[Dict]                 # ObjectNodes im aktuellen View (Stichprobe)
+    - nodes_by_id: Dict[int, Dict]      # Hilfs-Mapping (id → Node) für Relationen
+    - relations: List[Dict]             # ObjectRelations in der Stichprobe
+
+    - focus_id: int | None
+    - filter_kind: str                  # aktueller kind-Filter (oder "")
+
+    - total_nodes: int                  # Anzahl ObjectNodes passend zum Filter
+    - kinds_summary: List[(kind, count)]
+    - total_relations: int              # Anzahl ObjectRelations gesamt
+    - relations_summary: List[(relation, count)]
+
+    - top_object_labels: List[(label, count)]
+    - top_objects_degree: List[Dict]    # {id, kind, label, degree, rel_types}
+    - min_degree_for_top: int | None
+
+    - focus_degree_info: FocusDegreeInfo | None
+      • node_id: int
+      • degree: int
+      • relation_types: int
+      • neighbors: List[Dict]  # {id, kind, label}
+
+    - focus_relations: List[Dict]       # Relationen, in denen focus_id vorkommt
+
+    - health_status: str | None
+    - health_warnings_count: int
+    - health_errors_count: int
+============================================================================= #}
+
+{% extends "base.html" %}
+
+{% block title %}ObjectGraph – ORÓMA{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-3">
+  {# ------------------------------------------------------------
+    Headline & Kurzbeschreibung
+  ------------------------------------------------------------ #}
+  <div class="row">
+    <div class="col-12 d-flex align-items-center justify-content-between">
+      <div>
+        <h1>ObjectGraph – Objekte &amp; Relationen</h1>
+        <p class="text-muted mb-0">
+          Diese Ansicht zeigt die <strong>ObjectNodes</strong> und
+          <strong>ObjectRelations</strong>, die aus den SceneGraphs erzeugt wurden.
+          Sie bildet eine aggregierte Objekt-Ebene über verschiedenen Episoden und
+          MetaSnaps.
+        </p>
+      </div>
+
+      {# Health-Badge aus dem ObjectGraph-Selfcheck #}
+      <div class="ms-3">
+        {% if health_status == 'ok' %}
+          <span class="badge bg-success">
+            ObjectGraph OK
+          </span>
+        {% elif health_status == 'warning' %}
+          <span class="badge bg-warning text-dark">
+            ObjectGraph Warnung
+          </span>
+        {% elif health_status == 'error' %}
+          <span class="badge bg-danger">
+            ObjectGraph Fehler
+          </span>
+        {% else %}
+          <span class="badge bg-secondary">
+            ObjectGraph Status unbekannt
+          </span>
+        {% endif %}
+        <small class="text-muted d-block mt-1">
+          Warnings: {{ health_warnings_count }} &nbsp;|&nbsp;
+          Errors: {{ health_errors_count }}
+        </small>
+      </div>
+    </div>
+  </div>
+
+  {# ------------------------------------------------------------
+    High-Level Overview (Nodes / Relations / Hinweis Selfcheck)
+  ------------------------------------------------------------ #}
+  <div class="row mb-4 mt-3">
+    <div class="col-md-4">
+      <div class="card h-100">
+        <div class="card-header">
+          Überblick – Nodes
+        </div>
+        <div class="card-body">
+          <p class="card-text">
+            <strong>{{ total_nodes }}</strong> ObjectNodes passend zum aktuellen Filter.<br>
+            <small class="text-muted">
+              Davon werden hier max. {{ nodes|length }} Knoten als Stichprobe angezeigt.
+            </small>
+          </p>
+          {% if kinds_summary %}
+            <h6>Verteilung nach <code>kind</code> (im aktuellen View):</h6>
+            <ul class="list-unstyled mb-0">
+              {% for kind, cnt in kinds_summary %}
+                <li>
+                  <span class="badge bg-secondary">{{ kind }}</span>
+                  &nbsp; {{ cnt }}
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <p class="text-muted mb-0">Keine Nodes für die aktuelle Filterung.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-4 mt-3 mt-md-0">
+      <div class="card h-100">
+        <div class="card-header">
+          Überblick – Relationen
+        </div>
+        <div class="card-body">
+          <p class="card-text">
+            <strong>{{ total_relations }}</strong> ObjectRelations gesamt.<br>
+            <small class="text-muted">
+              In der aktuellen Stichprobe: {{ relations|length }} Relationen.
+            </small>
+          </p>
+          {% if relations_summary %}
+            <h6>Top Relationstypen (Stichprobe):</h6>
+            <ul class="list-unstyled mb-0">
+              {% for relation, cnt in relations_summary %}
+                <li>
+                  <span class="badge bg-info">{{ relation }}</span>
+                  &nbsp; {{ cnt }}
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <p class="text-muted mb-0">Keine Relationen für die aktuelle Filterung.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-4 mt-3 mt-md-0">
+      <div class="card h-100">
+        <div class="card-header">
+          Hinweis – CLI-Selfcheck
+        </div>
+        <div class="card-body">
+          <p class="card-text">
+            Für einen detaillierten Health-Check des ObjectGraph kannst du das
+            CLI-Tool <code>tools/objectgraph_selfcheck.py</code> verwenden:
+          </p>
+<pre style="font-size: 0.8rem; margin-bottom: 0.5rem;">
+PYTHONPATH=/opt/ai/oroma \
+  python3 tools/objectgraph_selfcheck.py \
+    --db-path /opt/ai/oroma/data/oroma.db \
+    --namespace-prefix object:auto: \
+    --json-only &gt; /tmp/objectgraph_report.json
+</pre>
+          <p class="card-text mb-0">
+            Dieses UI arbeitet auf denselben Tabellen
+            (<code>object_nodes</code>, <code>object_relations</code>) und ergänzt
+            den Selfcheck um eine interaktive Exploration.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ------------------------------------------------------------
+    Filter-Formular (kind, focus_id)
+  ------------------------------------------------------------ #}
+  <div class="card mb-4">
+    <div class="card-header">
+      Filter &amp; Fokus
+    </div>
+    <div class="card-body">
+      <form method="get" class="row g-3">
+        <div class="col-md-3">
+          <label for="kind" class="form-label">Kind-Filter</label>
+          <select id="kind" name="kind" class="form-select">
+            <option value="">(alle)</option>
+            <option value="object"    {% if filter_kind == 'object' %}selected{% endif %}>object</option>
+            <option value="snapchain" {% if filter_kind == 'snapchain' %}selected{% endif %}>snapchain</option>
+            <option value="meta"      {% if filter_kind == 'meta' %}selected{% endif %}>meta</option>
+            <option value="origin"    {% if filter_kind == 'origin' %}selected{% endif %}>origin</option>
+          </select>
+          <div class="form-text">
+            Filtert die Nodes auf DB-Ebene nach ihrem <code>kind</code>-Feld.
+          </div>
+        </div>
+
+        <div class="col-md-3">
+          <label for="focus_id" class="form-label">Focus-ID</label>
+          <input
+            type="number"
+            class="form-control"
+            id="focus_id"
+            name="focus_id"
+            value="{{ focus_id if focus_id is not none }}"
+            placeholder="z.B. 42"
+          />
+          <div class="form-text">
+            Wenn gesetzt, werden Relationen um diesen Knoten fokussiert
+            (Ego-Netz im unteren Bereich).
+          </div>
+        </div>
+
+        <div class="col-md-3 d-flex align-items-end">
+          <button type="submit" class="btn btn-primary w-100">
+            Anwenden
+          </button>
+        </div>
+
+        <div class="col-md-3 d-flex align-items-end">
+          <a href="{{ url_for('objects.objects_index') }}" class="btn btn-secondary w-100">
+            Reset
+          </a>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  {# ------------------------------------------------------------
+    Legende – Objektarten, Relationen & Hervorhebungen
+  ------------------------------------------------------------ #}
+  <div class="card mb-4">
+    <div class="card-header">
+      Legende ObjectGraph
+    </div>
+    <div class="card-body">
+      <div class="row">
+        <div class="col-md-4">
+          <h6>Knoten-Typen (<code>kind</code>)</h6>
+          <ul class="mb-2">
+            <li><code>object</code> – konkrete, aggregierte Objekte (z.B. <em>Tisch</em>, <em>Szene</em>).</li>
+            <li><code>snapchain</code> – Verweis auf ganze Episoden bzw. Chains.</li>
+            <li><code>meta</code> – Meta-Informationen zu Objekten oder Chains.</li>
+            <li><code>origin</code> – Ursprungs-Knoten (z.B. Sensorstrom / Quelle).</li>
+          </ul>
+        </div>
+        <div class="col-md-4">
+          <h6>Relationstypen (Beispiele)</h6>
+          <ul class="mb-2">
+            <li><code>origin</code> – SnapChain wurde von dieser Quelle erzeugt.</li>
+            <li><code>describes</code> – Meta-/Objektknoten beschreibt eine SnapChain.</li>
+            <li><code>meta_to_chain</code> – Kanten von Meta-Knoten zu Chains.</li>
+            <li><code>chain_to_origin</code> – Kanten von Chains zurück zur Quelle.</li>
+          </ul>
+        </div>
+        <div class="col-md-4">
+          <h6>UI-Hervorhebungen</h6>
+          <ul class="mb-0">
+            <li><span class="badge bg-warning text-dark">Gelb hinterlegt</span> – Zeilen mit aktueller <code>focus_id</code>.</li>
+            <li><strong>Degree</strong> – Anzahl aller eingehenden/ausgehenden Relationen eines Knotens (in der Stichprobe).</li>
+            <li><strong>Relationstypen</strong> – verschiedene Kantenarten, die bei einem Knoten anliegen.</li>
+            <li><strong>Ego-Netz</strong> – alle Nachbarn des Fokus-Knotens innerhalb der aktuellen Relationen-Stichprobe.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+  {# ------------------------------------------------------------
+    Top-Statistiken: Objekt-Labels & vernetzte Knoten
+  ------------------------------------------------------------ #}
+  <div class="row mb-4">
+    <div class="col-md-6">
+      <div class="card h-100">
+        <div class="card-header">
+          Top Objekt-Labels (kind = "object")
+        </div>
+        <div class="card-body">
+          {% if top_object_labels %}
+            <p class="card-text">
+              Häufigste Objekt-Labels in der aktuellen Nodes-Stichprobe
+              (Nodes-Stichprobe nach Kind-Filter):
+            </p>
+            <table class="table table-sm table-striped">
+              <thead>
+                <tr>
+                  <th>Label</th>
+                  <th class="text-end">Anzahl</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for label, cnt in top_object_labels %}
+                  <tr>
+                    <td>{{ label }}</td>
+                    <td class="text-end">{{ cnt }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <p class="text-muted mb-0">Keine Objekt-Labels auswertbar.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-6 mt-3 mt-md-0">
+      <div class="card h-100">
+        <div class="card-header">
+          Top vernetzte Knoten
+          {% if min_degree_for_top is not none %}
+            <small class="text-muted">(Degree &ge; {{ min_degree_for_top }})</small>
+          {% endif %}
+        </div>
+        <div class="card-body">
+          {% if top_objects_degree %}
+            <p class="card-text">
+              Knoten mit den meisten eingehenden/ausgehenden Relationen
+              (basierend auf der aktuellen Relationen-Stichprobe).
+            </p>
+            <table class="table table-sm table-striped">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Kind</th>
+                  <th>Label</th>
+                  <th class="text-end">Degree</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for n in top_objects_degree %}
+                  <tr{% if focus_id and n.id == focus_id %} class="table-warning"{% endif %}>
+                    <td>
+                      <a href="{{ url_for('objects.objects_index', focus_id=n.id, kind=filter_kind or None) }}">
+                        {{ n.id }}
+                      </a>
+                    </td>
+                    <td>{{ n.kind }}</td>
+                    <td>{{ n.label }}</td>
+                    <td class="text-end">{{ n.degree }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <p class="text-muted mb-0">Keine Degree-Statistik verfügbar.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ------------------------------------------------------------
+    Focus-Node Detail inkl. Ego-Netz (falls focus_id gesetzt)
+  ------------------------------------------------------------ #}
+  {% if focus_id and nodes_by_id.get(focus_id) %}
+    {% set focus_node = nodes_by_id.get(focus_id) %}
+    <div class="card mb-4">
+      <div class="card-header">
+        Fokus-Knoten: ID
+        <a href="{{ url_for('objects.objects_index', focus_id=focus_node.id, kind=filter_kind or None) }}">
+          {{ focus_node.id }}
+        </a>
+        ({{ focus_node.kind }})
+      </div>
+      <div class="card-body">
+        <div class="row">
+          <div class="col-md-6">
+            <p><strong>Label:</strong> {{ focus_node.label }}</p>
+            {% if focus_node.meta_json %}
+              <p><strong>meta_json:</strong></p>
+              <pre style="max-height: 200px; overflow: auto; font-size: 0.8rem;">
+{{ focus_node.meta_json }}
+              </pre>
+            {% else %}
+              <p class="text-muted mb-0">Kein meta_json vorhanden.</p>
+            {% endif %}
+          </div>
+
+          <div class="col-md-6">
+            {% if focus_degree_info %}
+              <h6>Ego-Netz (aktuelle Stichprobe)</h6>
+              <p class="mb-1">
+                <strong>Degree:</strong> {{ focus_degree_info.degree }}<br>
+                <strong>Relationstypen:</strong> {{ focus_degree_info.relation_types }}
+              </p>
+
+              {% if focus_degree_info.neighbors %}
+                <p class="mb-1">
+                  <strong>Nachbarn im aktuellen Sample:</strong>
+                </p>
+                <table class="table table-sm table-striped">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Kind</th>
+                      <th>Label</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for nb in focus_degree_info.neighbors %}
+                      <tr>
+                        <td>
+                          <a href="{{ url_for('objects.objects_index', focus_id=nb.id, kind=filter_kind or None) }}">
+                            {{ nb.id }}
+                          </a>
+                        </td>
+                        <td>{{ nb.kind }}</td>
+                        <td>{{ nb.label }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              {% else %}
+                <p class="text-muted mb-0">
+                  Keine Nachbarn im aktuellen Relationen-Sample gefunden.
+                </p>
+              {% endif %}
+            {% else %}
+              <p class="text-muted mb-0">
+                Keine Degree-Informationen für diesen Fokus-Knoten
+                (Entweder außerhalb des aktuellen Samples oder ohne Relationen).
+              </p>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  {# ------------------------------------------------------------
+    Tabellen: ObjectNodes & ObjectRelations
+  ------------------------------------------------------------ #}
+  <div class="row">
+    <div class="col-md-6">
+      <h2>ObjectNodes</h2>
+      {% if nodes %}
+        <table class="table table-sm table-striped table-hover">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Kind</th>
+              <th>Label</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for n in nodes %}
+              <tr{% if focus_id and n.id == focus_id %} class="table-warning"{% endif %}>
+                <td>
+                  <a href="{{ url_for('objects.objects_index', focus_id=n.id, kind=filter_kind or None) }}">
+                    {{ n.id }}
+                  </a>
+                </td>
+                <td>{{ n.kind }}</td>
+                <td>{{ n.label }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="text-muted">Keine ObjectNodes für die aktuelle Filterung.</p>
+      {% endif %}
+    </div>
+
+    <div class="col-md-6 mt-3 mt-md-0">
+      <h2>ObjectRelations</h2>
+      {% if relations %}
+        <table class="table table-sm table-striped table-hover">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Relation</th>
+              <th>A (Node)</th>
+              <th>B (Node)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in relations %}
+              <tr{% if focus_id and (r.a_id == focus_id or r.b_id == focus_id) %} class="table-warning"{% endif %}>
+                <td>{{ r.id }}</td>
+                <td>{{ r.relation }}</td>
+                <td>
+                  {% set a = nodes_by_id.get(r.a_id) %}
+                  {% if a %}
+                    [<a href="{{ url_for('objects.objects_index', focus_id=r.a_id, kind=filter_kind or None) }}">
+                      {{ r.a_id }}
+                    </a>]
+                    {{ a.kind }} – {{ a.label }}
+                  {% else %}
+                    [{{ r.a_id }}] <span class="text-muted">(unbekannt)</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% set b = nodes_by_id.get(r.b_id) %}
+                  {% if b %}
+                    [<a href="{{ url_for('objects.objects_index', focus_id=r.b_id, kind=filter_kind or None) }}">
+                      {{ r.b_id }}
+                    </a>]
+                    {{ b.kind }} – {{ b.label }}
+                  {% else %}
+                    [{{ r.b_id }}] <span class="text-muted">(unbekannt)</span>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="text-muted">Keine ObjectRelations für die aktuelle Filterung.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

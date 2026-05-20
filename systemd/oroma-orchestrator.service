@@ -1,0 +1,128 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-orchestrator.service
+# Projekt:  ORÓMA – Zentraler Job-Orchestrator (Modus B: serielle Worker-Steuerung)
+# Version:  v1.0
+# Stand:    2025-12-24
+# Autor:    ORÓMA · KI-JWG-X1 + GPT-5.2 Thinking
+# =============================================================================
+#
+# Zweck
+# ─────
+#   Startet den ORÓMA-Orchestrator als dauerhaften Daemon.
+#
+#   Motivation:
+#     In ORÓMA existieren viele systemd Timer/Oneshot-Services (stats, energy,
+#     dream, policy, kpi, exportgate, ...). Wenn mehrere davon dicht
+#     zusammen laufen, kommt es bei SQLite (trotz WAL) immer wieder zu
+#     konkurrierenden Writer-Commits und damit zu "database is locked".
+#
+#   Modus B (dieser Service):
+#     - ein einzelner Prozess plant und führt Jobs *seriell* aus
+#     - reduziert parallele Writer-Prozesse drastisch
+#     - ist kompatibel mit bestehenden Units, da diese (gepatcht) eine
+#       Condition besitzen und bei aktivem Orchestrator nicht ausgeführt werden
+#
+# Aktivierung / Deaktivierung
+# ───────────────────────────
+#   Dieses Setup ist absichtlich "Flag-gesteuert" und nicht destruktiv.
+#
+#   Aktivieren:
+#     sudo touch /opt/ai/oroma/.use_orchestrator
+#     sudo systemctl enable --now oroma-orchestrator.service
+#
+#   Deaktivieren:
+#     sudo systemctl disable --now oroma-orchestrator.service
+#     sudo rm -f /opt/ai/oroma/.use_orchestrator
+#
+# Hinweise
+# ────────
+#   - Wenn der Flag existiert, werden die geparkten Oneshot-Services (stats,
+#     energy, dream, ...) über ConditionPathExists=!/... übersprungen.
+#   - Der Orchestrator nutzt intern die gleichen ExecStart-Äquivalente
+#     (python -m core.* / tools/*.py --once), daher bleibt das Verhalten
+#     konsistent.
+# =============================================================================
+
+[Unit]
+Description=ORÓMA – Job Orchestrator (MASTER, Mode B, serial workers)
+
+# -----------------------------------------------------------------------------
+# MASTER-LOGIK (Orchestrator-Modus)
+#
+# Ziel:
+#   * "systemctl start oroma-orchestrator" startet auch die Engine (oroma.service)
+#   * "systemctl stop  oroma-orchestrator" stoppt auch die Engine + alle ORÓMA-Units,
+#     die per PartOf= an diesen Master gekoppelt sind.
+#
+# Umsetzung:
+#   * Requires/Wants: oroma.service wird automatisch mitgezogen.
+#   * BindsTo: Wenn die Engine manuell/unerwartet stoppt, wird der Orchestrator
+#     ebenfalls beendet (damit der Zustand konsistent bleibt).
+#
+# Hinweis:
+#   StartLimitBurst/StartLimitIntervalSec werden bewusst in einem Drop-In
+#   (systemd/oroma-orchestrator.service.d/10-restart.conf) gepflegt.
+# -----------------------------------------------------------------------------
+
+After=network-online.target oroma.service
+Wants=network-online.target oroma.service
+Requires=oroma.service
+BindsTo=oroma.service
+
+# Nur aktiv, wenn der Flag existiert
+ConditionPathExists=/opt/ai/oroma/.use_orchestrator
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ai/oroma
+SyslogIdentifier=oroma-orchestrator
+
+
+User=oroma
+Group=oroma
+UMask=002
+
+# ------------------------------------------------------------------------------
+# PRODUKTIONSFIX – File Descriptor Limit (NOFILE)
+# ------------------------------------------------------------------------------
+LimitNOFILE=8192
+
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=UTF-8
+Environment=TZ=Europe/Berlin
+Environment=PYTHONPATH=/opt/ai/oroma
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=OROMA_LOG_DIR=/opt/ai/oroma/logs
+Environment=OROMA_ORCH_ENABLE_CHESS2_CANON_DAILY_RUN=1
+
+# Orchestrator Defaults (können via ENV überschrieben werden)
+#Environment=OROMA_ORCH_TICK_SEC=5
+#Environment=OROMA_ORCH_LOCK=/tmp/oroma_orchestrator.lock
+
+ExecStartPre=/usr/bin/env bash -lc 'mkdir -p /opt/ai/oroma/logs /opt/ai/oroma/exports /opt/ai/oroma/uploads /opt/ai/oroma/archives'
+ExecStartPre=/usr/bin/env bash -lc 'touch /opt/ai/oroma/logs/orchestrator.out.log /opt/ai/oroma/logs/orchestrator.err.log'
+
+ExecStart=/usr/bin/python3 /opt/ai/oroma/tools/oroma_orchestrator.py
+
+KillMode=control-group
+
+# Bei "systemctl stop" NICHT neu starten, nur bei Crash/Failure.
+Restart=on-failure
+RestartSec=3
+
+StandardOutput=append:/opt/ai/oroma/logs/orchestrator.out.log
+StandardError=append:/opt/ai/oroma/logs/orchestrator.err.log
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+ReadWritePaths=/opt/ai/oroma/logs /opt/ai/oroma/data /opt/ai/oroma/exports /opt/ai/oroma/uploads /opt/ai/oroma/archives
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,138 @@
+<!-- =============================================================================
+     Pfad:    /opt/ai/oroma/ui/templates/coverage.html
+     Projekt: ORÓMA
+     Version: v3.5patch2 (final+ENV-Flag)
+     Stand:   2025-09-25
+     Zweck:
+       - Dashboard für Coverage-System
+       - Anzeige von coverage %, active, total
+       - Verlauf als Tabelle & Chart
+       - Deaktivierbar per ENV (OROMA_ENABLE_COVERAGE=false)
+============================================================================= -->
+{% extends "base.html" %}
+{% block title %}Coverage – ORÓMA{% endblock %}
+
+{% block content %}
+<div class="container">
+  <h2>📊 Coverage Dashboard</h2>
+
+  {% if not enabled %}
+    <div class="alert alert-warning mt-3">
+      ⚠️ Coverage ist deaktiviert (<code>OROMA_ENABLE_COVERAGE=false</code>).
+    </div>
+  {% else %}
+    <!-- Aktueller Zustand -->
+    <div class="card">
+      <div class="card-header">Aktueller Wert</div>
+      <div class="card-body">
+        <table class="table table-bordered" style="max-width:500px;">
+          <tr><th>Coverage</th><td id="coverage">–</td></tr>
+          <tr><th>Active</th><td id="active">–</td></tr>
+          <tr><th>Total</th><td id="total">–</td></tr>
+          <tr><th>Last Update</th><td id="lastupdate">–</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <!-- Verlauf Chart -->
+    <div class="card" style="margin-top:1em;">
+      <div class="card-header">Verlauf (Chart)</div>
+      <div class="card-body">
+        <canvas id="coverageChart" height="120"></canvas>
+        <div class="chart-legend">
+          <span class="legend-coverage">Coverage</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Verlauf Tabelle -->
+    <div class="card" style="margin-top:1em;">
+      <div class="card-header">Verlauf (Tabelle)</div>
+      <div class="card-body">
+        <table class="table table-striped">
+          <thead>
+            <tr><th>Zeit</th><th>Coverage</th><th>Active</th><th>Total</th></tr>
+          </thead>
+          <tbody id="history-body"></tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
+</div>
+
+{% if enabled %}
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+let coverageChart = null;
+let limit = 50;
+
+async function reloadCoverage() {
+  try {
+    const r = await fetch(`/coverage/api/history?limit=${limit}`);
+    const j = await r.json();
+    if (!j.ok) return;
+
+    if (j.history.length > 0) {
+      const last = j.history[0];
+      document.getElementById("coverage").textContent = last.coverage.toFixed(3);
+      document.getElementById("active").textContent = last.active;
+      document.getElementById("total").textContent = last.total;
+      document.getElementById("lastupdate").textContent = new Date(last.ts*1000).toLocaleString();
+    }
+
+    const body = document.getElementById("history-body");
+    body.innerHTML = "";
+    j.history.forEach(h => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${new Date(h.ts*1000).toLocaleString()}</td>
+        <td>${h.coverage.toFixed(3)}</td>
+        <td>${h.active}</td>
+        <td>${h.total}</td>
+      `;
+      body.appendChild(tr);
+    });
+
+    const labels = j.history.map(h => new Date(h.ts*1000).toLocaleTimeString());
+    const values = j.history.map(h => h.coverage);
+
+    if (!coverageChart) {
+      const ctx = document.getElementById("coverageChart").getContext("2d");
+      coverageChart = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels: labels.reverse(),
+          datasets: [{
+            label: "Coverage",
+            data: values.reverse(),
+            borderColor: "deepskyblue",
+            backgroundColor: "rgba(0,191,255,0.2)",
+            borderWidth: 2,
+            tension: 0.25,
+            pointRadius: 2
+          }]
+        },
+        options: {
+          responsive: true,
+          scales: {
+            y: { beginAtZero: true, max: 1.0 }
+          },
+          plugins: { legend: { position: "bottom" } }
+        }
+      });
+    } else {
+      coverageChart.data.labels = labels.reverse();
+      coverageChart.data.datasets[0].data = values.reverse();
+      coverageChart.update();
+    }
+  } catch(e) {
+    console.error("Coverage reload error", e);
+  }
+}
+
+reloadCoverage();
+setInterval(reloadCoverage, 10000);
+</script>
+{% endif %}
+{% endblock %}

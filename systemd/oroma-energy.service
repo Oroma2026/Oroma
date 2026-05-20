@@ -1,0 +1,37 @@
+# =============================================================================
+# Pfad:    /etc/systemd/system/oroma-energy.service
+# Projekt: ORÓMA – Energy Manager (Synaptic Energy Model)
+# Version: v1.1
+# Stand:   2025-12-21
+# Zweck:   One-shot Update der Energy-Tabellen in stats.db (liest oroma.db nur RO)
+# =============================================================================
+
+[Unit]
+Description=ORÓMA Energy Manager (stats.db) – Synaptic Energy Model
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/opt/ai/oroma/.use_orchestrator
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai/oroma
+User=oroma
+Group=oroma
+
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+
+# Optional: explizit setzen, falls du mehrere Instanzen/Paths hast
+# Environment=OROMA_DB_PATH=/opt/ai/oroma/data/oroma.db
+# Environment=OROMA_STATS_DB_PATH=/opt/ai/oroma/data/stats.db
+
+ExecStart=/usr/bin/python3 /opt/ai/oroma/tools/energy_manager.py --once
+
+# One-shot: falls DB kurz locked ist, lässt der Code selbst retry laufen.
+TimeoutStartSec=60
+
+# Wenn doch mal fatal:
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

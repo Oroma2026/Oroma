@@ -1,0 +1,17 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-replay.timer
+# Projekt:  ORÓMA v3.8 – Replay Scheduler (stündlich)
+# Stand:    2025-11-30
+# =============================================================================
+
+[Unit]
+Description=ORÓMA v3.8 – Replay stündlich
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+Unit=oroma-replay.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container-fluid mt-4">
+  <h1 class="mb-3">🔍 Explainability – "Why?"</h1>
+  <p class="text-muted">Analyse und Begründung von Entscheidungen und Hypothesen des Systems.</p>
+
+  <!-- Tabs -->
+  <ul class="nav nav-tabs" id="whyTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+      <button class="nav-link active" id="decisions-tab" data-bs-toggle="tab" data-bs-target="#decisions" type="button" role="tab">Entscheidungen</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" id="hypotheses-tab" data-bs-toggle="tab" data-bs-target="#hypotheses" type="button" role="tab">Hypothesen</button>
+    </li>
+  </ul>
+
+  <div class="tab-content mt-3">
+    <!-- Entscheidungen -->
+    <div class="tab-pane fade show active" id="decisions" role="tabpanel">
+      <div class="card bg-dark text-light mb-4 shadow">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>Letzte Entscheidungen</span>
+          <button id="refreshWhy" class="btn btn-sm btn-outline-info">🔄 Aktualisieren</button>
+        </div>
+        <div class="card-body p-0">
+          <table class="table table-sm table-dark table-striped table-hover align-middle mb-0">
+            <thead>
+              <tr>
+                <th>Zeit</th>
+                <th>Aktion</th>
+                <th>Begründung</th>
+                <th>Score</th>
+              </tr>
+            </thead>
+            <tbody id="whyTable">
+              <tr><td colspan="4" class="text-muted">Noch keine Daten geladen…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Detail-Ansicht -->
+      <div class="card bg-dark text-light shadow">
+        <div class="card-header">Detailanalyse</div>
+        <div class="card-body">
+          <div id="whyDetailsBox" class="collapse">
+            <pre id="whyDetails" class="bg-black p-2 rounded small" style="min-height:200px;">Bitte eine Entscheidung auswählen…</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hypothesen -->
+    <div class="tab-pane fade" id="hypotheses" role="tabpanel">
+      <div class="card bg-dark text-light mb-4 shadow">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>Hypothesen</span>
+          <button id="refreshHypotheses" class="btn btn-sm btn-outline-info">🔄 Aktualisieren</button>
+        </div>
+        <div class="card-body">
+          <form id="hypForm" class="mb-3">
+            <div class="input-group">
+              <input type="text" name="hypothesis" class="form-control" placeholder="Neue Hypothese eingeben…" required>
+              <button class="btn btn-primary" type="submit">➕ Hinzufügen</button>
+            </div>
+          </form>
+          <ul id="hypList" class="list-unstyled mb-0">
+            <li class="text-muted">Noch keine Hypothesen vorhanden…</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// --- Token/Fetch-Utils (wie in /models) ---
+function getCookie(name){
+  const m = document.cookie.match(new RegExp('(?:^|; )'+name.replace(/([.$?*|{}()[\\]\\/+^])/g,'\\$1')+'=([^;]*)'));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+function getToken(){
+  return window.OROMA_UI_TOKEN || localStorage.getItem('OROMA_UI_TOKEN') || getCookie('OROMA_UI_TOKEN') || "";
+}
+function authHeaders(h={}){ const t=getToken(); if(t) h['X-OROMA-TOKEN']=t; return h; }
+
+async function apiGet(url) {
+  const r = await fetch(url, {cache:"no-store"});
+  return await r.json();
+}
+async function apiPost(url, obj) {
+  const r = await fetch(url, {method:"POST", headers: authHeaders({"Content-Type":"application/json"}), body: JSON.stringify(obj||{})});
+  let j=null; try{ j=await r.json(); }catch{}
+  return j||{ok:false,error:"invalid json"};
+}
+
+function scoreBadge(score) {
+  if (score == null) return "<span class='badge bg-secondary'>-</span>";
+  if (score >= 0.75) return `<span class="badge bg-success">${score.toFixed(2)}</span>`;
+  if (score >= 0.4) return `<span class="badge bg-warning text-dark">${score.toFixed(2)}</span>`;
+  return `<span class="badge bg-danger">${score.toFixed(2)}</span>`;
+}
+
+// ---------------- Entscheidungen ----------------
+async function refreshWhy() {
+  try {
+    const js = await apiGet("/why/api/recent");
+    const tb = document.getElementById("whyTable");
+    if (!js.ok || !js.rows || js.rows.length === 0) {
+      tb.innerHTML = '<tr><td colspan="4" class="text-muted">Keine Daten verfügbar</td></tr>';
+      return;
+    }
+    tb.innerHTML = "";
+    js.rows.forEach(r => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${new Date(r.ts*1000).toLocaleString()}</td>
+        <td>${r.action || "-"}</td>
+        <td>${(r.reason||"").substring(0,60)}…</td>
+        <td>${scoreBadge(r.score)}</td>
+      `;
+      tr.addEventListener("click", () => {
+        document.getElementById("whyDetails").textContent = JSON.stringify(r, null, 2);
+        const box = document.getElementById("whyDetailsBox");
+        new bootstrap.Collapse(box, {toggle: true});
+      });
+      tb.appendChild(tr);
+    });
+  } catch (e) {
+    console.error("why error:", e);
+    document.getElementById("whyTable").innerHTML =
+      '<tr><td colspan="4" class="text-danger">Fehler beim Laden</td></tr>';
+  }
+}
+
+// ---------------- Hypothesen ----------------
+async function refreshHypotheses() {
+  try {
+    const js = await apiGet("/why/api/hypotheses");
+    const ul = document.getElementById("hypList");
+    ul.innerHTML = "";
+    if (!js.ok || !js.rows || js.rows.length === 0) {
+      ul.innerHTML = '<li class="text-muted">Keine Hypothesen gefunden…</li>';
+      return;
+    }
+    js.rows.forEach(h => {
+      const li = document.createElement("li");
+      li.innerHTML = `<b>#${h.id}</b>: ${h.hypothesis} <small class="text-muted">[${h.status}]</small>`;
+      ul.appendChild(li);
+    });
+  } catch (e) {
+    console.error("hypotheses error:", e);
+    document.getElementById("hypList").innerHTML =
+      '<li class="text-danger">Fehler beim Laden</li>';
+  }
+}
+
+document.getElementById("hypForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const data = { hypothesis: form.hypothesis.value };
+  const j = await apiPost("/why/api/hypotheses", data);
+  if (j.ok) {
+    form.reset();
+    refreshHypotheses();
+  } else {
+    alert("Fehler: " + (j.error||"unbekannt"));
+  }
+};
+
+// ---------------- Init ----------------
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("refreshWhy").addEventListener("click", refreshWhy);
+  document.getElementById("refreshHypotheses").addEventListener("click", refreshHypotheses);
+  refreshWhy();
+  refreshHypotheses();
+  setInterval(refreshWhy, 15000);
+  setInterval(refreshHypotheses, 20000);
+});
+</script>
+{% endblock %}

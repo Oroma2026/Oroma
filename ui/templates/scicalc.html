@@ -1,0 +1,74 @@
+{# =============================================================================
+ Pfad:    /opt/ai/oroma/ui/templates/scicalc.html
+ Projekt: ORÓMA v3.6 Patch 1 (SciCalc + Charts)
+ Stand:   2025-09-28
+
+ Zweck
+ ─────
+ - UI-Template für den wissenschaftlichen Taschenrechner (SciCalc).
+ - Eingabe von Funktionen f(x), Bereich, Buttons für Analyse.
+ - Darstellung von Ergebnissen und Diagrammen über Chart.js.
+ - Events werden in scripts.js → safeInitSciCalc() registriert.
+
+ Buttons / Funktionen
+ ────────────────────
+ - Plot: Funktionsgraph im Bereich xmin..xmax
+ - Nullstellen: Roots berechnen & anzeigen
+ - Taylor: Taylorreihe am Punkt x0
+ - Limit: Grenzwert an Punkt x0
+ - Balkendiagramm: Beispiel-Daten als BarChart
+ - Tortendiagramm: Beispiel-Daten als PieChart
+
+ Ergebnisbereich
+ ───────────────
+ - Textausgaben landen in #scicalcResult (monospace).
+ - Diagramme in chartLine, chartBar, chartPie.
+
+ Hinweis
+ ───────
+ - JS-Hook safeInitSciCalc() in scripts.js sorgt für saubere Initialisierung.
+ - Charts werden zerstört/neu aufgebaut, um Overlay zu vermeiden.
+ ============================================================================= #}
+
+{% extends "base.html" %}
+{% block title %}SciCalc + Charts{% endblock %}
+{% block content %}
+<h1>SciCalc + Charts</h1>
+
+<!-- Eingabe -->
+<div style="margin-bottom:1em;">
+  <label>Funktion f(x): <input id="expr" value="sin(x)"></label>
+  <label>Bereich: <input id="xmin" value="-10" size="4"> .. <input id="xmax" value="10" size="4"></label>
+  <label>x₀: <input id="x0" value="0" size="4"></label>
+</div>
+
+<!-- Steuerung -->
+<div style="margin-bottom:1em;">
+  <button id="btnPlot">Plot</button>
+  <button id="btnRoots">Nullstellen</button>
+  <button id="btnTaylor">Taylor</button>
+  <button id="btnLimit">Limit</button>
+  <button id="btnBar">Balkendiagramm</button>
+  <button id="btnPie">Tortendiagramm</button>
+</div>
+
+<!-- Diagramme -->
+<canvas id="chartLine" width="600" height="300" style="margin-bottom:1em;"></canvas>
+<canvas id="chartBar" width="400" height="250" style="margin-bottom:1em;"></canvas>
+<canvas id="chartPie" width="400" height="250" style="margin-bottom:1em;"></canvas>
+
+<!-- Ergebnisse -->
+<div id="scicalcResult" style="margin-top:1em; font-family:monospace; background:#f7f7f7; padding:0.5em; border:1px solid #ddd;"></div>
+
+<!-- Chart.js laden, falls nicht global in base.html -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script>
+  // Initialisierung über safeInitSciCalc() in scripts.js
+  document.addEventListener("DOMContentLoaded", () => {
+    if (typeof safeInitSciCalc === "function") {
+      safeInitSciCalc();
+    }
+  });
+</script>
+{% endblock %}

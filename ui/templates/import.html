@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <h1 class="mb-3">📥 Import</h1>
+  <p class="text-muted">
+    Lade SnapChain- oder Modell-Archive hoch.<br>
+    Erlaubte Formate: <code>.zip</code>, <code>.tar</code>, <code>.tar.gz</code><br>
+    Max. Größe: {{ max_mb }} MB
+  </p>
+
+  <p>
+    <a href="{{ url_for('export.index') }}" class="btn btn-outline-success btn-sm">⬅ Zum Export wechseln</a>
+  </p>
+
+  <div class="card bg-dark text-light shadow">
+    <div class="card-header">Datei hochladen</div>
+    <div class="card-body">
+      <form id="uploadForm" enctype="multipart/form-data">
+        <div class="row g-2">
+          <div class="col-md-8">
+            <input type="file" name="file" class="form-control" required accept=".zip,.tar,.tar.gz">
+          </div>
+          <div class="col-md-4">
+            <button class="btn btn-primary btn-sm w-100" type="submit">📥 Hochladen</button>
+          </div>
+        </div>
+      </form>
+      <div id="upload-msg" class="mt-2 small text-info">Noch keine Datei hochgeladen…</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// --- Token/Fetch-Utils ---
+function getCookie(name){
+  const m = document.cookie.match(new RegExp('(?:^|; )'+name.replace(/([.$?*|{}()[\\]\\/+^])/g,'\\$1')+'=([^;]*)'));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+function getToken(){
+  return window.OROMA_UI_TOKEN || localStorage.getItem('OROMA_UI_TOKEN') || getCookie('OROMA_UI_TOKEN') || "";
+}
+function authHeaders(h={}){ const t=getToken(); if(t) h['X-OROMA-TOKEN']=t; return h; }
+
+document.getElementById("uploadForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const formData = new FormData(e.target);
+  try {
+    const r = await fetch("/import/api/upload", {method: "POST", headers: authHeaders(), body: formData});
+    const j = await r.json();
+    const msg = document.getElementById("upload-msg");
+    msg.innerText = j.ok ? "✅ " + j.msg + " (" + j.size_mb + " MB)" : "❌ Fehler: " + (j.error||"unbekannt");
+    if (j.ok) e.target.reset();
+  } catch (err) {
+    document.getElementById("upload-msg").innerText = "❌ API-Fehler: " + err;
+  }
+};
+</script>
+{% endblock %}

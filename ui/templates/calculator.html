@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block title %}Calculator{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width: 980px;">
+  <h2>Calculator</h2>
+  <p style="opacity:0.85">
+    Mathe/Logik-Tasks (Curriculum + Random-Variety). Unterstützt jetzt auch:
+    <b>fill</b> (3 + ? = 10), <b>seq</b> (3,6,9,?), <b>puzzle</b> ((3+4)*2=?),
+    <b>cmp</b> (&lt; = &gt;) und Listen-Antworten (<code>2, -2</code>).
+  </p>
+
+  <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px;">
+    <label for="levelSelect" style="min-width:120px;">Level:</label>
+    <select id="levelSelect">
+      <option value="1" selected>1 – Basics + Fill</option>
+      <option value="2">2 – Multi + Compare</option>
+      <option value="3">3 – Fractions</option>
+      <option value="4">4 – Constants</option>
+      <option value="5">5 – Linear Eq + Fill</option>
+      <option value="6">6 – Quadratics (z.B. 2, -2)</option>
+      <option value="7">7 – Sequences</option>
+    </select>
+
+    <button class="btn" id="btnNew">Neue Aufgabe</button>
+  </div>
+
+  <div style="padding:12px; border:1px solid rgba(255,255,255,0.12); border-radius:10px;">
+    <div id="taskLine" style="font-size: 18px; font-weight: 650; margin-bottom: 10px;"></div>
+
+    <div id="inputWrap" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <input id="answerInput" type="text" inputmode="decimal"
+             placeholder="Antwort (z.B. 7 oder 2, -2)"
+             style="min-width: 260px; padding:8px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.18); background: rgba(0,0,0,0.2); color: inherit;" />
+
+      <select id="cmpSelect" style="display:none; padding:8px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.18); background: rgba(0,0,0,0.2); color: inherit;">
+        <option value="<">&lt;</option>
+        <option value="=">=</option>
+        <option value=">">&gt;</option>
+      </select>
+
+      <button class="btn" id="btnSolve">Prüfen</button>
+
+      <span id="status" style="margin-left: 8px; font-weight: 650;"></span>
+    </div>
+
+    <div id="hint" style="margin-top:8px; opacity:0.8; font-size: 0.95em;"></div>
+  </div>
+
+  <details style="margin-top: 14px;">
+    <summary>Letzte Ergebnisse</summary>
+    <div id="resultsBox" style="margin-top: 10px;"></div>
+  </details>
+</div>
+
+<script>
+(() => {
+  const levelSelect = document.getElementById('levelSelect');
+  const btnNew = document.getElementById('btnNew');
+  const btnSolve = document.getElementById('btnSolve');
+
+  const taskLine = document.getElementById('taskLine');
+  const answerInput = document.getElementById('answerInput');
+  const cmpSelect = document.getElementById('cmpSelect');
+  const statusEl = document.getElementById('status');
+  const hintEl = document.getElementById('hint');
+  const resultsBox = document.getElementById('resultsBox');
+
+  let currentTask = null;  // {id, expr, truth_json, ...}
+
+  function setStatus(msg, ok=null) {
+    statusEl.textContent = msg || '';
+    statusEl.style.color = ok === null ? '' : (ok ? 'var(--ok,#3bb273)' : 'var(--err,#ff4d4d)');
+  }
+
+  function detectType(task) {
+    if (!task) return null;
+    try {
+      if (task.truth_json) {
+        const tj = (typeof task.truth_json === 'string') ? JSON.parse(task.truth_json) : task.truth_json;
+        if (tj && tj.type) return tj.type;
+      }
+    } catch (e) {}
+    // fallback über expr prefix
+    const e = String(task.expr || '');
+    if (e.startsWith('fill:')) return 'fill';
+    if (e.startsWith('seq:')) return 'sequence';
+    if (e.startsWith('puzzle:')) return 'multi_step';
+    if (e.startsWith('cmp:')) return 'compare';
+    return null;
+  }
+
+  function renderTask(task) {
+    currentTask = task;
+    const expr = String(task.expr || '');
+    const t = detectType(task);
+
+    // Anzeige: wenn expr keine Frage enthält, hänge " = ?" an
+    const shown = (expr.includes('?') || expr.includes('=')) ? expr : (expr + " = ?");
+    taskLine.textContent = `#${task.id}: ${shown}`;
+
+    // Input umschalten
+    if (t === 'compare') {
+      cmpSelect.style.display = '';
+      answerInput.style.display = 'none';
+      hintEl.textContent = 'Vergleiche links/rechts und wähle <, = oder >.';
+    } else {
+      cmpSelect.style.display = 'none';
+      answerInput.style.display = '';
+      hintEl.textContent = 'Tipp: Bei mehreren Lösungen als Liste eingeben, z.B. "2, -2".';
+    }
+
+    answerInput.value = '';
+    setStatus('', null);
+  }
+
+  async function loadResults() {
+    try {
+      const r = await fetch('/calculator/api/results?limit=12');
+      const j = await r.json();
+      if (!j.ok) return;
+      const rows = j.results || [];
+      resultsBox.innerHTML = rows.map(x => {
+        const ok = x.correct ? '✅' : '❌';
+        return `<div style="padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.08);">
+          <span style="opacity:0.75">#${x.id}</span>
+          ${ok}
+          <span style="font-weight:650">${(x.expr||'')}</span>
+          <span style="opacity:0.75">got=${x.got}</span>
+        </div>`;
+      }).join('');
+    } catch (e) {}
+  }
+
+  async function newTask() {
+    setStatus('lade…');
+    const level = parseInt(levelSelect.value, 10);
+    const res = await fetch('/calculator/api/new_task', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({level})
+    });
+    const j = await res.json();
+    if (!j.ok || !j.task) {
+      setStatus('Fehler beim Erstellen', false);
+      return;
+    }
+    renderTask(j.task);
+    setStatus('bereit ✅', true);
+    await loadResults();
+  }
+
+  async function solve() {
+    if (!currentTask) {
+      setStatus('Bitte erst neue Aufgabe', false);
+      return;
+    }
+    let got;
+    const t = detectType(currentTask);
+    if (t === 'compare') {
+      got = cmpSelect.value;  // "<" "=" ">"
+    } else {
+      got = answerInput.value;
+      if (!got || !String(got).trim()) {
+        setStatus('Bitte Antwort eingeben', false);
+        return;
+      }
+    }
+
+    setStatus('prüfe…');
+    const res = await fetch('/calculator/api/solve', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({task_id: currentTask.id, got})
+    });
+    const j = await res.json();
+    if (!j.ok) {
+      setStatus(j.error || 'Fehler', false);
+      return;
+    }
+    if (j.correct) {
+      setStatus('Korrekt ✅', true);
+    } else {
+      const dt = (j.display_truth !== undefined) ? j.display_truth : j.truth;
+      setStatus(`Falsch ❌ (richtig: ${dt})`, false);
+    }
+    await loadResults();
+  }
+
+  btnNew.addEventListener('click', newTask);
+  btnSolve.addEventListener('click', solve);
+  answerInput.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') solve();
+  });
+
+  // Auto-init: eine Aufgabe erzeugen
+  newTask();
+})();
+</script>
+{% endblock %}

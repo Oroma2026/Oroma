@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+{#
+=============================================================================
+Pfad:    /opt/ai/oroma/ui/templates/memory.html
+Projekt: ORÓMA v3.7.x – Mini-Programme / Games
+Modul:   Memory – Standard UI (Mode-Split, client-side Autoplay)
+Stand:   2026-02-24
+=============================================================================
+
+Ziel
+----
+Diese UI entspricht dem ORÓMA "Standard" wie bei TicTacToe/Tetris:
+
+  • Keine Threads im Service – Autoplay wird client-seitig getaktet.
+  • Step ist ein deterministischer Server-Call: 1 Turn = 2 Picks.
+  • Für visuelle Nachvollziehbarkeit liefert der Server pro Step ein
+    "reveal" (2 Karten) und optional "hide_after_ms" (Mismatch).
+
+Hinweis
+-------
+Das eigentliche Lernen + DB-Telemetrie für Memory erfolgt *nicht* über
+die UI, sondern über tools/memory_daily_runner.py.
+=============================================================================
+#}
+
+{% block content %}
+<main class="container" style="max-width: 980px;">
+
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <div class="d-flex align-items-center gap-2">
+      <h2 class="m-0">🧩 ORÓMA Memory</h2>
+    </div>
+  </div>
+
+  <div class="card p-3 mb-3">
+    <div class="d-flex flex-wrap align-items-center gap-2">
+      <div class="me-2"><b>Modus:</b></div>
+      <select id="mode" class="form-select form-select-sm" style="width: 260px;">
+        <option value="oroma_vs_oroma_explore">🧠↔🧠 Explore (ε)</option>
+        <option value="oroma_vs_oroma_policy">🧠↔🧠 Policy-only</option>
+      </select>
+
+      <span id="badgeAuto" class="badge bg-secondary">AUTOPLAY OFF</span>
+
+      <span id="badgePolicy" class="badge bg-success">POLICY (game:memory) · Regeln: 0</span>
+    </div>
+
+    <div class="mt-2 text-muted">
+      Hinweis: Autoplay wird client-seitig getaktet (kein Thread im Service). "Step" ist 1 Turn (2 Picks).
+    </div>
+  </div>
+
+  <div class="card p-3 mb-3">
+    <div class="d-flex align-items-center justify-content-between">
+      <div class="fw-bold text-success">Spielfeld</div>
+      <div class="text-muted" id="hdrInfo">turn=– · turns=0 · winner=–</div>
+    </div>
+    <div id="grid" class="mt-3 d-flex flex-wrap" style="max-width: 420px;"></div>
+
+    <div class="mt-3 d-flex flex-wrap gap-2">
+      <button id="btnStep" class="btn btn-sm btn-primary">⏩ Step</button>
+      <button id="btnStart" class="btn btn-sm btn-success">▶ Start</button>
+      <button id="btnStop" class="btn btn-sm btn-secondary">⏸ Stop</button>
+      <button id="btnReset" class="btn btn-sm btn-danger">🔄 Reset</button>
+    </div>
+  </div>
+
+  <div class="card p-3 mb-3">
+    <div class="fw-bold">⚙️ Parameter</div>
+    <div class="row mt-2 g-2 align-items-center">
+      <div class="col-12 col-md-3">ε (Explore)</div>
+      <div class="col-6 col-md-2"><input id="eps" class="form-control form-control-sm" value="0.08"/></div>
+      <div class="col-6 col-md-3">Seed (optional)</div>
+      <div class="col-6 col-md-2"><input id="seed" class="form-control form-control-sm" placeholder="z.B. 123"/></div>
+      <div class="col-6 col-md-2"><button id="btnApply" class="btn btn-sm btn-success w-100">✅ Apply</button></div>
+    </div>
+    <div class="text-muted mt-2">Policy-only ignoriert ε. Explore nutzt ε für zufällige Picks (mehr Exploration).</div>
+  </div>
+
+  <div class="card p-3 mb-3">
+    <div class="fw-bold">📊 Statistik & Speicher</div>
+    <div class="mt-2" id="statsLine">Spiele: 0 · GameOver: 0 · Best-Score: 0 · P1: 0 / P2: 0 · Pairs left: 0</div>
+  </div>
+
+  <div class="card p-3">
+    <div class="fw-bold text-success">📦 Status (Debug)</div>
+    <pre class="mt-2" id="dbg" style="white-space: pre-wrap; color: #b7b7b7;">{}</pre>
+  </div>
+
+</main>
+
+<script>
+(() => {
+  let autoplay = false;
+  let autoplayTimer = null;
+  let lastRevealTimer = null;
+  let games = 0, gameover = 0, bestScore = 0;
+
+  const el = (id) => document.getElementById(id);
+
+  function setBadgeAuto(on){
+    el('badgeAuto').textContent = on ? 'AUTOPLAY ON' : 'AUTOPLAY OFF';
+    el('badgeAuto').className = 'badge ' + (on ? 'bg-success' : 'bg-secondary');
+  }
+
+  function renderGrid(board, size){
+    const grid = el('grid');
+    grid.innerHTML = '';
+    const cell = 78;
+    grid.style.width = (size * cell) + 'px';
+    board.forEach((v, idx) => {
+      const b = document.createElement('button');
+      b.className = 'btn btn-sm ' + (v === '?' ? 'btn-secondary' : 'btn-primary');
+      b.style.width = '70px';
+      b.style.height = '70px';
+      b.style.margin = '4px';
+      b.style.fontSize = '22px';
+      b.textContent = v;
+      b.disabled = true; // Memory läuft hier AI-vs-AI im Standard
+      grid.appendChild(b);
+    });
+  }
+
+  function updateStats(st){
+    // Für Memory: Score ist Anzahl Paare (p1+p2). BestScore = max(p1+p2)
+    const sc = (st.p1?.score||0) + (st.p2?.score||0);
+    if (sc > bestScore) bestScore = sc;
+    if (st.done && st.winner !== '-') gameover += 1;
+    el('statsLine').textContent = `Spiele: ${games} · GameOver: ${gameover} · Best-Score: ${bestScore} · P1: ${st.p1?.score||0} / P2: ${st.p2?.score||0} · Pairs left: ${st.pairs_left}`;
+  }
+
+  async function loadState(){
+    const r = await fetch('/memory/api/state', {cache:'no-store'});
+    if(!r.ok) return;
+    const s = await r.json();
+    el('dbg').textContent = JSON.stringify(s, null, 2);
+    el('hdrInfo').textContent = `turn=${s.turn} · turns=${s.turns} · winner=${s.winner}`;
+    el('badgePolicy').textContent = `POLICY (game:memory) · Regeln: ${s.policy_rules||0}`;
+    renderGrid(s.board||[], s.cfg?.size||4);
+    updateStats(s);
+  }
+
+  async function applyCfg(){
+    const mode = el('mode').value;
+    const eps = parseFloat(el('eps').value || '0.08');
+    const seedRaw = (el('seed').value||'').trim();
+    const seed = seedRaw ? parseInt(seedRaw,10) : null;
+    await fetch('/memory/api/apply', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({mode, eps, seed})
+    });
+    await loadState();
+  }
+
+  async function doReset(){
+    games += 1;
+    await fetch('/memory/api/reset', {method:'POST'});
+    await loadState();
+  }
+
+  async function doStep(){
+    // Step: 1 Turn (2 Picks). We show reveal briefly if mismatch.
+    const r = await fetch('/memory/api/step', {method:'POST'});
+    if(!r.ok) return;
+    const j = await r.json();
+    if (j.state) {
+      el('dbg').textContent = JSON.stringify(j.state, null, 2);
+      el('hdrInfo').textContent = `turn=${j.state.turn} · turns=${j.state.turns} · winner=${j.state.winner}`;
+      renderGrid(j.state.board||[], j.state.cfg?.size||4);
+      updateStats(j.state);
+    }
+    // If mismatch, server already hid in logical state, but provides reveal list and hide_after_ms.
+    // We simulate the brief reveal by overlaying symbols immediately, then reload.
+    if (j.reveal && Array.isArray(j.reveal) && j.reveal.length === 2) {
+      const s = j.state;
+      const board = (s.board||[]).slice();
+      // overlay reveal to ensure visible
+      j.reveal.forEach(o => { if (o && o.i !== undefined) board[o.i] = o.s; });
+      renderGrid(board, s.cfg?.size||4);
+      if (lastRevealTimer) clearTimeout(lastRevealTimer);
+      const ms = parseInt(j.hide_after_ms||0,10);
+      if (ms > 0) {
+        lastRevealTimer = setTimeout(loadState, ms);
+      } else {
+        // match: still reload to reflect permanent revealed
+        lastRevealTimer = setTimeout(loadState, 120);
+      }
+    }
+    // done -> auto reset when autoplay
+    if (j.done && autoplay) {
+      setTimeout(doReset, 500);
+    }
+  }
+
+  function startAutoplay(){
+    autoplay = true;
+    setBadgeAuto(true);
+    if (autoplayTimer) clearInterval(autoplayTimer);
+    autoplayTimer = setInterval(() => { doStep(); }, 220);
+  }
+
+  function stopAutoplay(){
+    autoplay = false;
+    setBadgeAuto(false);
+    if (autoplayTimer) clearInterval(autoplayTimer);
+    autoplayTimer = null;
+  }
+
+  document.addEventListener('DOMContentLoaded', async () => {
+    el('btnApply').onclick = applyCfg;
+    el('btnReset').onclick = doReset;
+    el('btnStep').onclick = doStep;
+    el('btnStart').onclick = startAutoplay;
+    el('btnStop').onclick = stopAutoplay;
+    el('mode').onchange = applyCfg;
+    await loadState();
+  });
+})();
+</script>
+
+{% endblock %}

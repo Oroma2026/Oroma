@@ -1,0 +1,310 @@
+{% extends "base.html" %}
+{% block content %}
+<!-- =============================================================================
+     Pfad:     /opt/ai/oroma/ui/templates/tictactoe.html
+     Projekt:  ORÓMA – Headless UI (Flask)
+     Modul:    TicTacToe Arena (Policy-only + Exploration)
+     Version:  v3.7.2-r4 (Neue Modi + Regel-Zähler, Solo entfernt)
+     Stand:    2025-11-06
+     Autor:    ORÓMA · KI-JWG-X1
+     Hinweise: Headless optimiert; keine externen Styles erforderlich.
+============================================================================= -->
+<main style="padding:1rem;text-align:center;">
+
+  <style>
+    .oroma-board.tictactoe { display:grid; grid-template-columns:repeat(3,86px); gap:10px; justify-content:center; }
+    .oroma-board.tictactoe button { width:86px; height:86px; font-size:2rem; font-weight:700; }
+    .badge { padding:0.35rem 0.5rem; border-radius:6px; }
+    .badge-ok { background:#2b9348; color:#fff; }
+    .badge-off { background:#6c757d; color:#fff; }
+    .ttt-win-cell { outline:3px solid #2b9348; }
+    .ttt-draw-cell { outline:2px dashed #999; }
+    .ttt-last-move { box-shadow:0 0 0 3px rgba(255,215,0,0.65) inset; }
+  </style>
+
+  <div class="d-flex flex-wrap justify-content-between align-items-center mb-2">
+    <h2 class="mb-2 mb-sm-0">⭕ ORÓMA TicTacToe Arena</h2>
+
+    <div class="text-end">
+      <label class="fw-bold me-1">Modus:</label>
+      <select id="modeSelect" class="form-select d-inline-block w-auto" onchange="changeMode()">
+        <option value="oroma_vs_ki">🧠 ORÓMA vs KI</option>
+        <option value="oroma_vs_human">👤 ORÓMA vs Human</option>
+        <option value="ki_vs_ki">🤖 KI vs KI</option>
+        <option value="oroma_vs_oroma_explore">🧠⇄🧠 ORÓMA vs ORÓMA (explore)</option>
+        <option value="oroma_vs_oroma_policy">🧠⇄🧠 ORÓMA vs ORÓMA (policy)</option>
+      </select>
+
+      <label class="fw-bold ms-3 me-1">Speed:</label>
+      <select id="speedSelect" class="form-select d-inline-block w-auto" onchange="changeSpeed()">
+        <option value="normal">⏱ normal</option>
+        <option value="turbo">⚡ turbo</option>
+      </select>
+
+      <span id="autoBadge" class="badge ms-3 badge-off">AUTOTRAIN OFF</span>
+      <span id="policyBadge" class="badge ms-1 badge-off" title="Policy-Status">POLICY OFF</span>
+    </div>
+  </div>
+
+  <div class="mb-2">
+    <button class="btn btn-outline-light btn-sm" onclick="setExplore()">🧠⇄🧠 Explore</button>
+    <button class="btn btn-outline-light btn-sm" onclick="setPolicy()">🧠⇄🧠 Policy-only</button>
+  </div>
+
+  <div id="winnerBanner" class="alert alert-success fw-bold d-none" style="max-width:700px;margin:auto;"></div>
+  <h5 id="turnInfo" class="text-light mb-3">Am Zug: –</h5>
+
+  <div id="tictactoeBoard" class="oroma-board tictactoe" aria-label="TicTacToe 3x3 Spielfeld"></div>
+
+  <div class="mt-3">
+    <button id="btnReset" class="btn btn-danger btn-sm mx-1">🔄 Reset</button>
+    <button id="btnAuto"  class="btn btn-success btn-sm mx-1">▶️ Start</button>
+  </div>
+
+  <div id="statsBox" class="mt-4 bg-dark text-light p-3 rounded" style="max-width:760px;margin:auto;">
+    <h5 class="mb-2">📊 Statistik & Speicher</h5>
+    <div id="statsText" class="text-start small"></div>
+  </div>
+</main>
+
+<script>
+let mode = "oroma_vs_oroma_explore";
+let autoRunning = false;
+let lastWinnerSeen = null;
+  const POLL_MS_DEFAULT = 600;
+  let pollMs = parseInt(localStorage.getItem('oroma_ttt_poll_ms') || String(POLL_MS_DEFAULT), 10);
+  if (!Number.isFinite(pollMs) || pollMs < 150) pollMs = POLL_MS_DEFAULT;
+
+  // Polling ohne Overlap: nächster Poll startet erst nach dem vorherigen loadState().
+  let _pollTimer = null;
+  function schedulePoll(){
+    try { if (_pollTimer) clearTimeout(_pollTimer); } catch(e) {}
+    _pollTimer = setTimeout(async () => {
+      try { await loadState(); } catch(e) {}
+      loadPerfSettings().then(()=>schedulePoll());
+    }, pollMs);
+  }
+
+
+function sideLabelForMode(side, currentMode){
+  if(side === "draw") return "⚖️ Unentschieden";
+  switch(currentMode){
+    case "oroma_vs_ki": return side === "X" ? "🧠 ORÓMA (X)" : "🤖 KI (O)";
+    case "oroma_vs_human": return side === "X" ? "🧠 ORÓMA (X)" : "👤 Human (O)";
+    case "ki_vs_ki": return side === "X" ? "🤖 KI (X)" : "🤖 KI (O)";
+    case "oroma_vs_oroma_explore":
+    case "oroma_vs_oroma_policy":
+      return side === "X" ? "🧠 ORÓMA (X)" : "🧠 ORÓMA (O)";
+    default: return side || "–";
+  }
+}
+
+async function loadState(){
+  try{
+    const r = await fetch("/tictactoe/api/state"); if(!r.ok) return;
+    const s = await r.json();
+
+    if(s.mode && s.mode !== mode){
+      mode = s.mode;
+      const ms = document.getElementById("modeSelect");
+      if(ms) ms.value = mode;
+    }
+
+    renderBoard(s);
+
+    const info = document.getElementById("turnInfo");
+    if(s.winner){
+      info.textContent = (s.winner === "draw")
+        ? "⚖️ Unentschieden"
+        : `🏁 Gewinner: ${sideLabelForMode(s.winner, mode)}`;
+    }else{
+      const tn = s.turn_name || s.turn || "–";
+      info.textContent = `Am Zug: ${tn}`;
+    }
+
+    autoRunning = !!s.auto;
+    const autoBadge = document.getElementById("autoBadge");
+    autoBadge.textContent = autoRunning ? "AUTOTRAIN ON" : "AUTOTRAIN OFF";
+    autoBadge.className = "badge " + (autoRunning ? "badge-ok" : "badge-off");
+    document.getElementById("btnAuto").textContent = autoRunning ? "⏸ Pause" : "▶️ Start";
+
+    // Policy-Badge + Regelzählung
+    const p = (s.policy || {});
+    const polBadge = document.getElementById("policyBadge");
+    if(p.enabled){
+      const ns = p.namespace ? ` (${p.namespace})` : "";
+      const cnt = typeof p.policy_rules_count === "number" ? ` • Regeln: ${p.policy_rules_count}` : "";
+      polBadge.textContent = `POLICY ON${ns}${cnt}`;
+      polBadge.className = "badge badge-ok";
+      polBadge.title = `Policy aktiv${ns}${cnt}`;
+    }else{
+      polBadge.textContent = "POLICY OFF";
+      polBadge.className = "badge badge-off";
+      polBadge.title = "Policy inaktiv";
+    }
+
+    renderStats(s);
+
+    if(s.winner && s.winner !== lastWinnerSeen){
+      lastWinnerSeen = s.winner;
+      showWinnerBanner(sideLabelForMode(s.winner, mode));
+    }
+  }catch(e){ console.error("loadState:", e); }
+}
+
+function renderBoard(s){
+  const board = document.getElementById("tictactoeBoard");
+  board.innerHTML = "";
+  const lastMove = (typeof s.last_move !== "undefined") ? s.last_move : null;
+  const isWinnerLine = Array.isArray(s.winner_line) ? s.winner_line : [];
+  const isHumanTurn = (mode === "oroma_vs_human" && (s.turn_name === "Human" || s.turn === "O"));
+  (s.board || []).forEach((cell, i) => {
+    const b = document.createElement("button");
+    b.textContent = cell || " ";
+    b.className = "btn btn-secondary";
+    b.setAttribute("aria-label", `Feld ${i+1} (${cell ? cell : "leer"})`);
+    if(lastMove !== null && i === lastMove) b.classList.add("ttt-last-move");
+    if(isWinnerLine.includes(i)) b.classList.add("ttt-win-cell");
+    if(s.winner === "draw") b.classList.add("ttt-draw-cell");
+    b.disabled = !(isHumanTurn && !cell && !s.winner);
+    b.onclick = () => move(i);
+    board.appendChild(b);
+  });
+}
+
+function renderStats(s){
+  const st = s.stats || {games:0,wins:{oroma:0,ki:0,human:0}};
+  const wins = st.wins || {};
+  const oroma = wins.oroma ?? 0, ki = wins.ki ?? 0, human = wins.human ?? 0;
+  const oroma_x = wins.oroma_x ?? 0, oroma_o = wins.oroma_o ?? 0, draw = wins.draw ?? 0;
+  const pol = s.policy || {};
+  const policyCnt = pol.policy_rules_count ?? 0;
+  const archivCnt = pol.archiv_rules_count ?? 0;
+
+  let lines = [];
+  lines.push(`Spiele: ${st.games}`);
+  lines.push(`🏆 ORÓMA (X): ${oroma_x} · ORÓMA (O): ${oroma_o} · ⚖️ Unentschieden: ${draw}`);
+  lines.push(`Gesamt – 🧠 ORÓMA: ${oroma} · 🤖 KI: ${ki} · 👤 Human: ${human}`);
+  lines.push(`📚 Policy-Regeln (game:tictactoe): ${policyCnt} · Archiv-Regeln: ${archivCnt}`);
+  lines.push(`🧠 Memory-Snaps (RAM): ${s.snaps_in_ram || 0}`);
+  lines.push(`🗃️ DB-SnapChains: ${s.snapchains_in_db || 0} · DB-Snaps: ${s.snaps_total_db || 0}`);
+  document.getElementById("statsText").innerHTML = lines.join("<br>");
+}
+
+function showWinnerBanner(text){
+  const b = document.getElementById("winnerBanner");
+  b.textContent = `🏁 Gewinner: ${text}`;
+  b.className = `alert alert-success fw-bold`;
+  b.classList.remove("d-none");
+  setTimeout(() => b.classList.add("d-none"), 2200);
+}
+
+async function move(i){
+  await fetch("/tictactoe/api/move", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({idx:i})});
+  await loadState();
+}
+document.getElementById("btnReset").onclick = async () => {
+  await fetch("/tictactoe/api/reset", {method:"POST"});
+  lastWinnerSeen = null;
+  await loadState();
+};
+document.getElementById("btnAuto").onclick = async () => {
+  const r = await fetch("/tictactoe/api/toggle", {method:"POST"});
+  const j = await r.json();
+  autoRunning = j.running;
+  document.getElementById("btnAuto").textContent = j.running ? "⏸ Pause" : "▶️ Start";
+  const autoBadge = document.getElementById("autoBadge");
+  autoBadge.textContent = j.running ? "AUTOTRAIN ON" : "AUTOTRAIN OFF";
+  autoBadge.className = "badge " + (j.running ? "badge-ok" : "badge-off");
+  await loadState();
+};
+async function changeMode(){
+  mode = document.getElementById("modeSelect").value;
+  await fetch("/tictactoe/api/mode", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({mode})});
+  await loadState();
+}
+async function changeSpeed(){
+  const sp = document.getElementById("speedSelect").value;
+  await fetch("/tictactoe/api/speed", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({speed: sp})});
+}
+async function setExplore(){
+  const ms = document.getElementById("modeSelect"); if(ms) ms.value = "oroma_vs_oroma_explore";
+  await fetch("/tictactoe/api/mode", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({mode:"oroma_vs_oroma_explore"})});
+  mode = "oroma_vs_oroma_explore"; await loadState();
+}
+async function setPolicy(){
+  const ms = document.getElementById("modeSelect"); if(ms) ms.value = "oroma_vs_oroma_policy";
+  await fetch("/tictactoe/api/mode", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({mode:"oroma_vs_oroma_policy"})});
+  mode = "oroma_vs_oroma_policy"; await loadState();
+}
+
+
+  async function loadPerfSettings(){
+    try{
+      document.getElementById('ttt_poll_ms').value = String(pollMs);
+      const r = await fetch('/tictactoe/api/settings');
+      const j = await r.json();
+      if(j && j.ok){
+        document.getElementById('ttt_db_ttl').value = String(j.db_stats_ttl_s ?? 15);
+        document.getElementById('ttt_batch_games').value = String(j.save_batch_games ?? 1);
+        document.getElementById('ttt_perf_hint').textContent = `pending=${j.pending_snapchains ?? 0} · ttl=${j.db_stats_ttl_s ?? 0}s · batch=${j.save_batch_games ?? 1} · poll=${pollMs}ms`;
+      }
+    }catch(e){}
+  }
+
+  async function applyPerfSettings(){
+    try{
+      const v = parseInt(document.getElementById('ttt_poll_ms').value || '600', 10);
+      pollMs = Math.max(150, Math.min(5000, Number.isFinite(v) ? v : 600));
+      localStorage.setItem('oroma_ttt_poll_ms', String(pollMs));
+      const ttl = parseInt(document.getElementById('ttt_db_ttl').value || '15', 10);
+      const batch = parseInt(document.getElementById('ttt_batch_games').value || '1', 10);
+      const r = await fetch('/tictactoe/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({db_stats_ttl_s: ttl, save_batch_games: batch})});
+      const j = await r.json();
+      document.getElementById('ttt_perf_hint').textContent = `pending=${j.pending_snapchains ?? 0} · ttl=${j.db_stats_ttl_s ?? 0}s · batch=${j.save_batch_games ?? 1} · poll=${pollMs}ms`;
+      await loadPerfSettings();
+      schedulePoll();
+    }catch(e){}
+  }
+
+  async function flushPending(){
+    try{
+      const r = await fetch('/tictactoe/api/flush',{method:'POST'});
+      const j = await r.json();
+      document.getElementById('ttt_perf_hint').textContent = `flush ok=${j.ok} · flushed=${j.flushed ?? 0} · left=${j.left ?? 0}`;
+      await loadPerfSettings();
+    }catch(e){}
+  }
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("modeSelect").value = "oroma_vs_oroma_explore";
+  document.getElementById("speedSelect").value = "normal";
+  loadPerfSettings().then(async () => {
+    await loadState();
+    schedulePoll();
+  });
+});
+</script>
+
+  <hr class="my-3"/>
+  <div class="card p-2">
+    <div class="d-flex flex-wrap align-items-end gap-2">
+      <div>
+        <label class="form-label mb-0"><small>Polling (ms)</small></label>
+        <input id="ttt_poll_ms" class="form-control form-control-sm" style="width:120px" type="number" min="150" max="5000" value="600">
+      </div>
+      <div>
+        <label class="form-label mb-0"><small>DB-Stats TTL (s)</small></label>
+        <input id="ttt_db_ttl" class="form-control form-control-sm" style="width:120px" type="number" min="0" max="300" value="15">
+      </div>
+      <div>
+        <label class="form-label mb-0"><small>DB-Flush alle N Games</small></label>
+        <input id="ttt_batch_games" class="form-control form-control-sm" style="width:150px" type="number" min="1" max="10000" value="1">
+      </div>
+      <button class="btn btn-sm btn-outline-primary" onclick="applyPerfSettings()">Übernehmen</button>
+      <button class="btn btn-sm btn-outline-secondary" onclick="flushPending()">Flush jetzt</button>
+      <div class="text-muted"><small id="ttt_perf_hint">–</small></div>
+    </div>
+  </div>
+
+{% endblock %}

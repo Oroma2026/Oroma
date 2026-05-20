@@ -1,0 +1,28 @@
+# ==============================================================================
+# Datei:     /etc/systemd/system/oroma-stats-repair.timer
+# Projekt:   ORÓMA – Stats Repair / Audit Timer
+# Version:   v3.7.5
+# Stand:     2026-04-08
+# Autor:     ORÓMA · GPT-5.4 Thinking
+# ==============================================================================
+#
+# Zweck
+# -----
+#   Startet den schweren Repair-/Audit-Pfad fuer stats_snapshot.py bewusst SELTEN.
+#   Standard: taeglich nachts mit RandomizedDelay, damit der Fast-Path tagsueber
+#   ausschliesslich ueber den Stats-Event-Aggregator laeuft.
+# ==============================================================================
+
+[Unit]
+Description=ORÓMA – Stats Repair / Audit Timer (daily)
+
+[Timer]
+OnBootSec=20min
+OnCalendar=*-*-* 03:25:00
+Persistent=true
+RandomizedDelaySec=20min
+AccuracySec=5min
+Unit=oroma-stats-repair.service
+
+[Install]
+WantedBy=timers.target

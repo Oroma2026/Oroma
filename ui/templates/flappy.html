@@ -1,0 +1,252 @@
+<!-- =============================================================================
+     Pfad:    /opt/ai/oroma/ui/templates/flappy.html
+     Projekt: ORÓMA (Offline-First · Headless · SQLite-First)
+     Modul:   FlappyBird UI (Canvas) – Standard-Modi + UniversalPolicy
+     Version: v3.7.3
+     Stand:   2026-02-20
+     Autor:   Jörg + GPT-5.2 Thinking
+     Lizenz:  MIT
+===============================================================================
+
+     ZWECK
+     -----
+     - Schlanke UI für FlappyBird (headless RL-Env) mit Standard-Modi
+       wie bei TicTacToe/Connect4/Pong/Chess:
+         • human
+         • oroma_vs_oroma_policy
+         • oroma_vs_oroma_explore
+
+     - Rendering per Canvas; der Client tickt /flappy/api/step im Loop.
+     - UniversalPolicy steuert Actions (0/1) in policy/explore.
+
+     API
+     ---
+       GET  /flappy/api/state
+       POST /flappy/api/reset
+       POST /flappy/api/action   {action:0|1}
+       POST /flappy/api/step
+       POST /flappy/api/mode     {mode:"human"|"oroma_vs_oroma_policy"|"oroma_vs_oroma_explore"}
+       POST /flappy/api/toggle   {autoplay:true|false}
+       GET  /flappy/api/settings
+       POST /flappy/api/settings {eps:.., explore_moves_per_game:..}
+
+     HINWEIS
+     -------
+     - base.html lädt ui/static/scripts.js (apiGet/apiPost helpers)
+=============================================================================== -->
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container" style="margin-top: 1rem;">
+  <div class="card">
+    <div class="card-header">🐦 FlappyBird</div>
+    <div class="card-body">
+
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">
+        <label style="display:flex; gap:6px; align-items:center;">
+          <span style="opacity:.85;">Mode</span>
+          <select id="fbMode" class="input" style="min-width:240px;">
+            <option value="oroma_vs_oroma_explore">oroma_vs_oroma_explore (eps>0) [default]</option>
+            <option value="oroma_vs_oroma_policy">oroma_vs_oroma_policy (eps=0)</option>
+            <option value="human">human (Space=Flap)</option>
+          </select>
+        </label>
+
+        <label style="display:flex; gap:6px; align-items:center;">
+          <span style="opacity:.85;">Autoplay</span>
+          <input id="fbAutoplay" type="checkbox" />
+        </label>
+
+        <label style="display:flex; gap:6px; align-items:center;">
+          <span style="opacity:.85;">Auto-Reset</span>
+          <input id="fbAutoReset" type="checkbox" checked />
+        </label>
+
+        <label style="display:flex; gap:6px; align-items:center;">
+          <span style="opacity:.85;">eps</span>
+          <input id="fbEps" class="input" style="width:90px" value="0.08" />
+        </label>
+
+        <label style="display:flex; gap:6px; align-items:center;">
+          <span style="opacity:.85;">explore moves/game</span>
+          <input id="fbExploreMoves" class="input" style="width:70px" value="1" />
+        </label>
+
+        <button id="fbStart" class="btn btn-success btn-sm">Start</button>
+        <button id="fbStop" class="btn btn-warning btn-sm">Stop</button>
+        <button id="fbApply" class="btn btn-sm">Apply</button>
+        <button id="fbReset" class="btn btn-danger btn-sm">Reset</button>
+        <button id="fbFlap" class="btn btn-success btn-sm">Flap (Space)</button>
+      </div>
+
+      <div style="display:flex; justify-content:center;">
+        <canvas id="fbCanvas" width="560" height="300" style="border:1px solid #222;"></canvas>
+      </div>
+
+      <div style="display:flex; justify-content:space-between; gap:10px; margin-top:10px; flex-wrap:wrap;">
+        <div id="fbInfo" style="opacity:.9;"></div>
+        <div id="fbPolicy" style="opacity:.75;"></div>
+      </div>
+
+      <div style="color:#aaa; font-size:.85em; margin-top:8px;">
+        Tipp: <b>Start</b> setzt default auf Explore + Autoplay. <b>Stop</b> pausiert den Tick-Loop.
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('fbCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  const elMode = document.getElementById('fbMode');
+  const elAutoplay = document.getElementById('fbAutoplay');
+  const elEps = document.getElementById('fbEps');
+  const elExploreMoves = document.getElementById('fbExploreMoves');
+  const elAutoReset = document.getElementById('fbAutoReset');
+  const elStart = document.getElementById('fbStart');
+  const elStop = document.getElementById('fbStop');
+  const elApply = document.getElementById('fbApply');
+  const elReset = document.getElementById('fbReset');
+  const elFlap = document.getElementById('fbFlap');
+  const elInfo = document.getElementById('fbInfo');
+  const elPolicy = document.getElementById('fbPolicy');
+
+  // Laufzustand (UI-seitig). Stop = kein /step mehr.
+  let running = true;
+  let lastAlive = true;
+
+  function clamp(v, lo, hi){ return v<lo?lo:(v>hi?hi:v); }
+
+  function drawWorld(st){
+    const W = canvas.width, H = canvas.height;
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle = '#101010';
+    ctx.fillRect(0,0,W,H);
+
+    // Map normalized world to canvas
+    const birdX = Math.floor(W * 0.28);
+    const birdY = Math.floor((1.0 - clamp(st.y,0,1)) * H);
+
+    // Pipes at birdX + dx
+    const pipeX = Math.floor(birdX + clamp(st.dx, 0, 1.2) * (W*0.62));
+    const pipeW = Math.max(18, Math.floor(W * 0.05));
+    const gapY = Math.floor((1.0 - clamp(st.gap_y,0,1)) * H);
+    const gapH = Math.floor(clamp(st.gap_h, 0.05, 0.6) * H);
+
+    // Pipes
+    ctx.fillStyle = '#2e7d32';
+    const topH = Math.max(0, gapY - Math.floor(gapH/2));
+    const botY = gapY + Math.floor(gapH/2);
+    ctx.fillRect(pipeX, 0, pipeW, topH);
+    ctx.fillRect(pipeX, botY, pipeW, H - botY);
+
+    // Bird
+    ctx.fillStyle = '#ffd54f';
+    ctx.beginPath();
+    ctx.arc(birdX, birdY, 10, 0, Math.PI*2);
+    ctx.fill();
+
+    // HUD
+    ctx.fillStyle = '#cfcfcf';
+    ctx.font = '12px monospace';
+    ctx.fillText(`score=${st.score}  steps=${st.steps}  alive=${st.alive}`, 10, 18);
+  }
+
+  async function refresh(){
+    const res = await apiGet('/flappy/api/state');
+    if (!res || !res.ok) return;
+    const st = res.state;
+    drawWorld(st);
+    if (elInfo) elInfo.textContent = `score=${st.score} · y=${st.y.toFixed(2)} · vy=${st.vy.toFixed(2)} · dx=${st.dx.toFixed(2)} · gap_y=${st.gap_y.toFixed(2)} · gap_h=${st.gap_h.toFixed(2)} · alive=${st.alive}`;
+    if (elPolicy) elPolicy.textContent = `namespace=${res.namespace} · mode=${res.mode} · autoplay=${res.autoplay} · eps=${res.eps} · policy_rules=${res.policy_rules}`;
+
+    // sync controls
+    if (elMode && elMode.value !== res.mode) elMode.value = res.mode;
+    if (elAutoplay) elAutoplay.checked = !!res.autoplay;
+    if (elEps) elEps.value = String(res.eps);
+    if (elExploreMoves) elExploreMoves.value = String(res.explore_moves_per_game);
+
+    // Auto-Reset: wenn eben gestorben und AutoReset aktiv ist
+    if (elAutoReset && elAutoReset.checked) {
+      const aliveNow = !!st.alive;
+      if (lastAlive && !aliveNow && running) {
+        // kurzer Delay, damit der User den Dead-State kurz sieht
+        setTimeout(async ()=>{
+          try{ await apiPost('/flappy/api/reset', {}); }catch(_){ }
+        }, 180);
+      }
+      lastAlive = aliveNow;
+    }
+  }
+
+  async function step(){
+    if (!running) return;
+    await apiPost('/flappy/api/step', {});
+  }
+
+  async function applySettings(){
+    const mode = (elMode && elMode.value) ? elMode.value : 'human';
+    await apiPost('/flappy/api/mode', {mode});
+    const eps = parseFloat(elEps ? elEps.value : '0.08');
+    const em = parseInt(elExploreMoves ? elExploreMoves.value : '1', 10);
+    await apiPost('/flappy/api/settings', {eps: isNaN(eps)?0.08:eps, explore_moves_per_game: isNaN(em)?1:em});
+    await apiPost('/flappy/api/toggle', {autoplay: !!(elAutoplay && elAutoplay.checked)});
+    await refresh();
+  }
+
+  async function startDefault(){
+    running = true;
+    if (elMode) elMode.value = 'oroma_vs_oroma_explore';
+    if (elAutoplay) elAutoplay.checked = true;
+    // Default-Settings bewusst setzen
+    if (elEps && !elEps.value) elEps.value = '0.08';
+    if (elExploreMoves && !elExploreMoves.value) elExploreMoves.value = '1';
+    await apiPost('/flappy/api/reset', {});
+    await applySettings();
+  }
+
+  async function stopLoop(){
+    running = false;
+    // Autoplay aus (human kann weiter per Space steuern, aber ohne Tick passiert nix)
+    try{ await apiPost('/flappy/api/toggle', {autoplay:false}); }catch(_){ }
+    if (elAutoplay) elAutoplay.checked = false;
+    await refresh();
+  }
+
+  // Buttons
+  if (elStart) elStart.addEventListener('click', startDefault);
+  if (elStop) elStop.addEventListener('click', stopLoop);
+  if (elApply) elApply.addEventListener('click', applySettings);
+  if (elReset) elReset.addEventListener('click', async ()=>{ await apiPost('/flappy/api/reset', {}); await refresh(); });
+  if (elFlap) elFlap.addEventListener('click', async ()=>{ await apiPost('/flappy/api/action', {action:1}); });
+  if (elAutoplay) elAutoplay.addEventListener('change', async ()=>{ await apiPost('/flappy/api/toggle', {autoplay: !!elAutoplay.checked}); });
+  if (elMode) elMode.addEventListener('change', async ()=>{ await apiPost('/flappy/api/mode', {mode: elMode.value}); await refresh(); });
+
+  // Space key
+  function onKey(e){
+    if (e.code === 'Space' || e.key === ' ' || e.keyCode === 32){
+      e.preventDefault();
+      apiPost('/flappy/api/action', {action:1});
+    }
+  }
+  document.addEventListener('keydown', onKey);
+
+  // Loop: tick + refresh
+  // Default: Explore (serverseitig schon default, aber wir syncen Controls + reset)
+  refresh().then(()=>{ startDefault(); }).catch(()=>{});
+  const loopId = setInterval(async ()=>{
+    try{ await step(); await refresh(); }catch(_){ }
+  }, 120);
+
+  window.addEventListener('beforeunload', ()=>{
+    try{ clearInterval(loopId); }catch(_){ }
+    document.removeEventListener('keydown', onKey);
+  });
+})();
+</script>
+
+{% endblock %}

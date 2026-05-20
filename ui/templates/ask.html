@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <h2 class="mb-3">❓ Ask ORÓMA</h2>
+  <p class="text-muted">
+    Frage die lokale Wissensbasis (RAG). HTML-Seite ist frei; die JSON-API ist token-geschützt.
+    Optional kannst du ein experimentelles Re-Ranking via SnapPattern aktivieren.
+  </p>
+
+  <!-- Eingabeformular -->
+  <form id="askForm" method="POST" class="row g-2 mb-3" autocomplete="off" novalidate>
+    <div class="col-md-8">
+      <input type="text" name="question" id="askQuestion"
+             value="{{ (question or '')|e }}"
+             placeholder="Frage eingeben…" class="form-control"
+             maxlength="512" required>
+      <div class="form-text text-muted">Max. 512 Zeichen.</div>
+    </div>
+    <div class="col-md-2">
+      <select name="top_k" id="askTopK" class="form-select">
+        {% for k in [3,5,8,10,15,20] %}
+          <option value="{{ k }}" {% if top_k==k %}selected{% endif %}>Top {{ k }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <button type="submit" id="askBtn" class="btn btn-primary w-100">Fragen</button>
+    </div>
+
+    <!-- Rerank-Flag (experimentell) -->
+    <div class="col-12">
+      <div class="form-check mt-1">
+        <input class="form-check-input" type="checkbox"
+               id="askRerank" name="rerank" value="1"
+               {% if rerank %}checked{% endif %}>
+        <label class="form-check-label small" for="askRerank">
+          Rerank via SnapPattern (experimentell)
+        </label>
+      </div>
+    </div>
+  </form>
+
+  <!-- Status / Fehler -->
+  <div id="askStatus" class="small text-info mb-2" role="status" aria-live="polite"></div>
+  <div id="askError" class="small text-danger mb-2 d-none"></div>
+
+  <!-- Antwort -->
+  {% if answer %}
+  <div class="card mb-3 bg-dark text-light shadow">
+    <div class="card-header">Antwort</div>
+    <div class="card-body">
+      <pre class="p-2 rounded small" style="white-space:pre-wrap">{{ answer|e }}</pre>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Passagen -->
+  {% if passages %}
+  <div class="card bg-dark text-light shadow">
+    <div class="card-header">Gefundene Passagen</div>
+    <div class="card-body">
+      <ul class="list-unstyled mb-0">
+        {% for p in passages %}
+          <li class="mb-3">
+            <div class="small text-secondary">
+              {{ (p.source or 'local')|e }} · Score {{ ('%.3f' % (p.score or 0.0)) }}
+            </div>
+            <div class="bg-black rounded p-2 small" style="white-space:pre-wrap">
+              {% if p.snippet %}{{ p.snippet|safe }}{% else %}{{ p.content|e }}{% endif %}
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+(function(){
+  // Progressive Enhancement: Wenn JS verfügbar ist, nutzen wir die JSON-API (/ask/api)
+  const form   = document.getElementById('askForm');
+  const qEl    = document.getElementById('askQuestion');
+  const kEl    = document.getElementById('askTopK');
+  const rEl    = document.getElementById('askRerank');
+  const btn    = document.getElementById('askBtn');
+  const stEl   = document.getElementById('askStatus');
+  const errEl  = document.getElementById('askError');
+
+  function setBusy(on){
+    if (!btn) return;
+    btn.disabled = on;
+    if (stEl) stEl.textContent = on ? '⏳ Suche…' : '';
+  }
+  function showErr(msg){
+    if (!errEl) return;
+    errEl.textContent = String(msg||'');
+    errEl.classList.toggle('d-none', !msg);
+  }
+  function readCookie(name){
+    const m = document.cookie.match(new RegExp('(?:^|; )'+name.replace(/([.$?*|{}()[\\]\\/+^])/g,'\\$1')+'=([^;]*)'));
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+  function getToken(){
+    return (window.OROMA_UI_TOKEN && String(window.OROMA_UI_TOKEN).trim())
+        || readCookie('OROMA_UI_TOKEN') || '';
+  }
+
+  if (form) {
+    form.addEventListener('submit', async (ev)=>{
+      // AJAX statt Full-Post – aber nur, wenn Fetch verfügbar
+      if (!window.fetch) return; // Fallback: normaler POST (Server rendert HTML)
+      ev.preventDefault();
+      showErr('');
+      const q = (qEl && qEl.value || '').trim();
+      const k = parseInt(kEl && kEl.value || '5', 10) || 5;
+      const rerank = !!(rEl && rEl.checked);
+      if (!q) { showErr('Bitte Frage eingeben.'); return; }
+      setBusy(true);
+      try{
+        const headers = {'Content-Type':'application/json'};
+        const tok = getToken(); if (tok) headers['X-OROMA-TOKEN'] = tok;
+        const r = await fetch('/ask/api', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({question: q, top_k: k, rerank: rerank})
+        });
+        const js = await r.json().catch(()=>({ok:false,error:'Ungültige Server-Antwort'}));
+        if (!js.ok) { showErr(js.error || 'Fehler'); setBusy(false); return; }
+
+        if (stEl) {
+          stEl.textContent = js.rerank ? '✅ Ergebnisse (mit Rerank) geladen.' : '✅ Ergebnisse geladen.';
+        }
+
+        // Einfachheitshalber: Seite neu laden, damit Jinja-Layout konsistent ist.
+        // (Alternative wäre ein vollständiges clientseitiges Rendern des Resultblocks.)
+        location.reload();
+      }catch(e){
+        showErr('API-Fehler: ' + e);
+      }finally{
+        setBusy(false);
+      }
+    });
+  }
+})();
+</script>
+{% endblock %}

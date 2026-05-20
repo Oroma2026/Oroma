@@ -1,0 +1,20 @@
+# =============================================================================
+# Pfad:    /etc/systemd/system/oroma-energy.timer
+# Projekt: ORÓMA – Energy Manager Timer
+# Version: v1.0
+# Stand:   2025-12-21
+# Zweck:   Periodischer Lauf des Energy Managers
+# =============================================================================
+
+[Unit]
+Description=Run ORÓMA Energy Manager every 5 minutes
+
+[Timer]
+OnBootSec=130s
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=oroma-energy.service
+
+RandomizedDelaySec=30s
+[Install]
+WantedBy=timers.target

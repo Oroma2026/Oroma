@@ -1,0 +1,22 @@
+[Unit]
+Description=ORÓMA Snake Policy Trainer (DB→policy_rules + Auto-Export)
+ConditionPathExists=!/opt/ai/oroma/.use_orchestrator
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PYTHONPATH=/opt/ai/oroma
+# Optionale Schwellen aus deiner Umgebung:
+# Environment=OROMA_UP_AUTO_EXPORT=1
+# Environment=OROMA_UP_MIN_N=5
+# Environment=OROMA_UP_MIN_ABS_Q=0.2
+# Environment=OROMA_UP_COOLDOWN_S=600
+ExecStart=/usr/bin/python3 -m core.train_snake_policy --limit 3000 --verbose
+User=oroma
+Group=oroma
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+
+[Install]
+WantedBy=multi-user.target

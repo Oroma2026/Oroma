@@ -1,0 +1,13 @@
+[Unit]
+Description=ORÓMA v3.8 – Social Resonance Check alle 2 Minuten
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=2min
+Unit=oroma-social.service
+AccuracySec=30s
+Persistent=true
+
+RandomizedDelaySec=45s
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <h2>🧩 MetaSnaps</h2>
+  <p>MetaSnaps sind abstrakte Zusammenfassungen aus mehreren SnapChains.</p>
+
+  <!-- Übersicht -->
+  <div class="card mb-3">
+    <div class="card-header">MetaSnaps Übersicht</div>
+    <div class="card-body">
+      <div id="metaList">Lade...</div>
+    </div>
+  </div>
+
+  <!-- Graph -->
+  <div class="card">
+    <div class="card-header">MetaSnaps Graph</div>
+    <div class="card-body">
+      <div id="metaGraph" style="height:500px;border:1px solid #333;"></div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { buildVisGraph } from "{{ url_for('static', filename='oroma_graph.js') }}";
+
+async function loadMetaSnaps() {
+  try {
+    const r = await fetch("/meta/api/list");
+    const j = await r.json();
+    const el = document.getElementById("metaList");
+    if (!j.ok) { el.textContent = "Fehler beim Laden."; return; }
+    if (!j.items || !j.items.length) { el.textContent = "Keine MetaSnaps gespeichert."; return; }
+    el.innerHTML = "<ul>" + j.items.map(m =>
+      `<li><b>${m.id}</b>: ${m.label} <small>[Score=${m.score}]</small></li>`).join("") + "</ul>";
+
+    // Graph aufbauen
+    if (j.graph) {
+      buildVisGraph(document.getElementById("metaGraph"), j.graph.nodes, j.graph.edges);
+    }
+  } catch(e) {
+    document.getElementById("metaList").textContent = "Fehler: " + e;
+  }
+}
+
+loadMetaSnaps();
+</script>
+{% endblock %}

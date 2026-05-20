@@ -1,0 +1,97 @@
+<!--
+===============================================================================
+Datei:   /opt/ai/oroma/ui/templates/pong_panel.html
+Projekt: ORÓMA v3.7 – Headless UI
+Stand:   2025-10-04
+Autor:   ORÓMA · KI-JWG-X1
+
+Zweck
+-----
+Kompakte Panel-Version des API-basierten Pong-Spiels für das Dashboard.
+Zeigt Echtzeit-Spielzustand (Score, Modus, Bewegung) in reduzierter ASCII-Form.
+
+Integration
+-----------
+• Wird typischerweise über include() oder iFrame eingebettet, z. B. in control.html:
+      <iframe src="/pong_panel" style="width:100%;height:260px;border:none;"></iframe>
+• Nutzt dasselbe Backend wie /pong:
+      GET  /games/pong/state
+      POST /games/pong/cmd
+
+Design
+------
+• Selbstaktualisierend (Intervall: 400 ms)
+• Kompakte Darstellung (Score + Mini-Spielfeld)
+• Keine Interaktion erforderlich, nur Beobachtung
+
+===============================================================================
+-->
+
+{% extends "base.html" %}
+{% block content %}
+<main style="padding:0.5rem; max-width:500px; margin:auto;">
+  <h5 style="color:#9cf;">🏓 Pong – Live-Panel</h5>
+
+  <div id="pongPanel" style="
+        font-family: monospace;
+        background:#000;
+        color:#0f0;
+        line-height:1.05;
+        padding:0.5rem;
+        white-space:pre;
+        height:180px;
+        overflow:hidden;
+        border:1px solid #333;
+        border-radius:4px;">
+    Initialisiere...
+  </div>
+
+  <div id="pongInfo" class="small text-muted mt-1">Status: <span id="pongStatus">—</span></div>
+</main>
+
+<script>
+const intervalMs = 400;
+let lastScore = "0:0";
+let lastMode = "?";
+
+async function refreshPongPanel(){
+  try{
+    const r = await fetch("/games/pong/state");
+    if(!r.ok){
+      document.getElementById("pongPanel").textContent = "Fehler beim Abruf ("+r.status+")";
+      return;
+    }
+    const j = await r.json();
+    const w = 60, h = 14; // kompaktes Feld
+    const grid = Array.from({length:h},()=>Array(w).fill("."));
+    if(j.ball){
+      const bx = Math.min(w-1, Math.floor(j.ball.x * w / j.width));
+      const by = Math.min(h-1, Math.floor(j.ball.y * h / j.height));
+      grid[by][bx] = "●";
+    }
+    if(j.paddles){
+      j.paddles.forEach(p=>{
+        const px = (p.x <= 1)?1:w-2;
+        const py = Math.floor(p.y * h / j.height);
+        for(let i=0;i<3;i++){
+          const y = Math.min(h-1,py+i);
+          grid[y][px] = "▮";
+        }
+      });
+    }
+    const out = grid.map(r=>r.join(" ")).join("\\n");
+    document.getElementById("pongPanel").textContent = out;
+    lastScore = j.score||"0:0";
+    lastMode = j.mode_ki ? "KI vs KI" : "Manuell";
+    const st = j.running ? "Läuft ("+lastMode+") – " + lastScore : "Pause – " + lastScore;
+    document.getElementById("pongStatus").textContent = st;
+  }catch(e){
+    document.getElementById("pongPanel").textContent = "Verbindung unterbrochen.";
+    document.getElementById("pongStatus").textContent = "Offline";
+  }
+}
+
+setInterval(refreshPongPanel, intervalMs);
+refreshPongPanel();
+</script>
+{% endblock %}

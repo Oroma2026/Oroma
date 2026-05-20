@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <h1 class="mb-3">🚗 PiCar</h1>
+  <p class="text-muted">Steuerung & Modus-Umschaltung (Manuell / ORÓMA).</p>
+
+  <!-- Status + Mode -->
+  <div class="card text-bg-dark mb-3">
+    <div class="card-header">Status</div>
+    <div class="card-body d-flex flex-wrap align-items-center gap-3">
+      <div>Alive: <span id="picar-alive" class="fw-bold">…</span></div>
+      <div>Mode: <span id="picar-mode" class="fw-bold">…</span></div>
+      <div>Speed: <span id="picar-speed" class="fw-bold">…</span></div>
+      <div>Distance: <span id="picar-distance" class="fw-bold">…</span></div>
+
+      <div class="ms-auto">
+        <div class="btn-group">
+          <button class="btn btn-outline-light btn-sm" onclick="setMode('manual')">Manuell</button>
+          <button class="btn btn-outline-warning btn-sm" onclick="setMode('oroma')">ORÓMA</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Manual Controls -->
+  <div class="card text-bg-dark">
+    <div class="card-header">Manuelle Steuerung</div>
+    <div class="card-body">
+      <div class="row g-3 align-items-center">
+        <div class="col-md-6">
+          <div class="d-grid gap-1" style="max-width:240px;">
+            <button class="btn btn-success" onclick="cmd('forward')">▲ Vorwärts</button>
+            <div class="d-flex gap-1">
+              <button class="btn btn-secondary flex-fill" onclick="cmd('left')">◀ Links</button>
+              <button class="btn btn-danger flex-fill" onclick="cmd('stop')">⏹ Stopp</button>
+              <button class="btn btn-secondary flex-fill" onclick="cmd('right')">Rechts ▶</button>
+            </div>
+            <button class="btn btn-warning" onclick="cmd('backward')">▼ Rückwärts</button>
+          </div>
+
+          <p class="small text-muted mt-2">Tastatur: W/A/S/D (Stop: Leertaste)</p>
+        </div>
+        <div class="col-md-6">
+          <label for="spd" class="form-label">Geschwindigkeit (%)</label>
+          <input id="spd" type="range" class="form-range" min="0" max="100" value="40"
+                 oninput="updateSpeedLabel(this.value)" onchange="setSpeed(this.value)">
+          <div>Aktuell: <span id="spdLabel">40</span>%</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+async function fetchJSON(url, opts){
+  const r = await fetch(url, opts||{});
+  return await r.json();
+}
+
+function updateSpeedLabel(v){
+  document.getElementById("spdLabel").textContent = v;
+}
+
+async function loadStatus(){
+  try{
+    const js = await fetchJSON("/picar/api/status");
+    document.getElementById("picar-alive").textContent = js.alive ? "✅" : "❌";
+    document.getElementById("picar-mode").textContent  = js.mode || "unknown";
+    document.getElementById("picar-speed").textContent = (js.speed ?? 0) + "%";
+
+    const distEl = document.getElementById("picar-distance");
+    if (js.distance_cm != null){
+      const cm = js.distance_cm.toFixed(1);
+      distEl.textContent = cm + " cm";
+      distEl.className = cm < 20 ? "fw-bold text-danger" : "fw-bold text-success";
+    } else {
+      distEl.textContent = "n/a";
+      distEl.className = "fw-bold text-muted";
+    }
+
+    const spd = document.getElementById("spd");
+    if (spd && typeof js.speed === "number"){
+      spd.value = js.speed;
+      updateSpeedLabel(js.speed);
+    }
+  }catch(e){ console.error(e); }
+}
+
+async function setMode(mode){
+  const js = await fetchJSON("/picar/api/mode", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({mode})
+  });
+  if(!js.ok) alert(js.error||"Fehler");
+  loadStatus();
+}
+
+async function setSpeed(speed){
+  const js = await fetchJSON("/picar/api/speed", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({speed: parseInt(speed,10)||0})
+  });
+  if(!js.ok) alert(js.error||"Fehler");
+  loadStatus();
+}
+
+async function cmd(c){
+  const speed = parseInt(document.getElementById("spd").value,10)||0;
+  const js = await fetchJSON("/picar/api/cmd", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({cmd: c, speed})
+  });
+  if(!js.ok) alert(js.error||"Fehler");
+  loadStatus();
+}
+
+// Tastatur: W/A/S/D + Space
+document.addEventListener("keydown", (ev)=>{
+  const k = ev.key.toLowerCase();
+  if (k === "w") cmd("forward");
+  else if (k === "s") cmd("backward");
+  else if (k === "a") cmd("left");
+  else if (k === "d") cmd("right");
+  else if (k === " ") cmd("stop");
+});
+
+loadStatus();
+setInterval(loadStatus, 3000);
+</script>
+{% endblock %}

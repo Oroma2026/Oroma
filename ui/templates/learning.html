@@ -1,0 +1,1972 @@
+{% extends "base.html" %}
+{% block title %}Learning{% endblock %}
+
+{% block content %}
+<!-- =============================================================================
+Pfad:    /opt/ai/oroma/ui/templates/learning.html
+Projekt: ORÓMA
+Version: v3.7.3 (Dual Coverage + Cognitive Depth + Dream Hero + Learning Pulse + Maxima(avg/max) + ExportCSV-All)
+Stand:   2026-01-24
+
+APIs
+- GET /learning/api/data
+- GET /learning/api/history?window_sec=86400
+- GET /learning/api/curve?days=120
+- GET /learning/api/curve.csv?days=365
+- GET /learning/api/selftest
+- GET /learning/api/testgraph
+- GET /learning/api/energy/top?limit=20
+- GET /learning/api/intelligence
+============================================================================= -->
+<style>
+  .wrap { max-width: 1280px; margin: 16px auto; padding: 0 12px; }
+  .head { display:flex; align-items:flex-end; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+  .title h1 { margin:0; font-size:22px; }
+  .subtitle { opacity:.85; margin-top:6px; }
+  .iirow { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  .statrow { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
+  .btnrow { display:flex; gap:8px; flex-wrap:wrap; }
+  .btn {
+    border: 1px solid rgba(255,255,255,0.25);
+    background: rgba(0,0,0,0.2);
+    color: #fff;
+    padding: 8px 10px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .btn:active { transform: translateY(1px); }
+  .badge { display:inline-block; padding:4px 8px; border-radius:999px; font-size:12px; opacity:.9; border:1px solid rgba(255,255,255,.15); }
+  .badge.ok { background: rgba(46,125,50,.35); }
+  .badge.warn { background: rgba(239,108,0,.30); }
+  .badge.bad { background: rgba(173,20,87,.30); }
+
+  /* Layout */
+  .grid { display:grid; grid-template-columns: 1fr; gap: 14px; margin-top: 14px; }
+  @media(min-width: 980px){
+    .grid { grid-template-columns: 1fr 1fr 320px; }
+    .full { grid-column: 1 / 3; }
+    .side { grid-column: 3 / 4; }
+  }
+  @media(max-width: 979px){
+    .side { order: 999; }
+  }
+
+  .card {
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 12px;
+    padding: 12px;
+    background: rgba(255,255,255,0.03);
+  }
+  .card h2 { margin:0 0 10px 0; font-size: 15px; }
+  .chartbox { position: relative; height: 260px; }
+  @media(max-width: 520px){ .chartbox { height: 220px; } }
+  .hint { font-size:12px; opacity:.85; margin-top:8px; }
+
+  .row { display:flex; gap: 14px; flex-wrap:wrap; }
+  .col { flex: 1 1 320px; }
+
+  table { width:100%; border-collapse: collapse; }
+  th, td { padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.12); font-size: 13px; }
+  th { text-align:left; opacity:.85; }
+  td.num, th.num { text-align:right; font-variant-numeric: tabular-nums; }
+
+  .pre { background: rgba(0,0,0,0.35); border:1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 10px; overflow:auto; max-height: 160px; font-size: 12px; }
+  .err { margin-top:10px; font-size: 12px; color: #ffb4b4; display:none; }
+  .dbg { margin-top:10px; font-size: 12px; opacity:.9; display:none; }
+
+  /* Energy side box */
+  .energyBox h3 { margin: 0 0 8px 0; font-size: 14px; }
+  .energyMeta { font-size: 12px; opacity: .85; margin-top: 8px; }
+  .elist { margin: 0; padding: 0; list-style: none; }
+  .elist li {
+    display:flex; justify-content:space-between; gap:10px;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.10);
+    font-size: 12px;
+  }
+  .etag { opacity: .9; }
+  .escore { font-variant-numeric: tabular-nums; opacity: .95; }
+  .pill { display:inline-block; padding: 2px 6px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.15); opacity: .9; font-size: 11px; }
+
+  /* -------------------------------------------------------------
+     Cognition Hero Box (Cognitive Depth + Dream Efficiency + Pulse)
+     ------------------------------------------------------------- */
+  .heroBox h2 { margin:0 0 10px 0; font-size: 15px; }
+  .heroLabel { font-size:12px; opacity:.9; margin-bottom:6px; }
+  .progressWrap {
+    width:100%;
+    height: 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.15);
+    background: rgba(0,0,0,0.25);
+    overflow: hidden;
+  }
+  .progressFill {
+    height: 100%;
+    width: 0%;
+    background: rgba(76,175,80,0.65);
+    transition: width .35s ease;
+  }
+  .heroBig {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: .2px;
+  }
+  .heroSub { font-size: 12px; opacity:.85; margin-top:4px; }
+  .pulseRow { display:flex; align-items:center; gap:8px; margin-top:6px; }
+  .pulseDot {
+    width:10px; height:10px; border-radius:999px;
+    border:1px solid rgba(255,255,255,0.25);
+    background: rgba(255,255,255,0.20);
+    box-shadow: none;
+  }
+  .pulseDot.live {
+    background: rgba(255,82,82,0.75);
+    box-shadow: 0 0 0 0 rgba(255,82,82,0.55);
+    animation: pulseGlow 1.2s ease-out infinite;
+  }
+  @keyframes pulseGlow {
+    0%   { box-shadow: 0 0 0 0 rgba(255,82,82,0.55); }
+    70%  { box-shadow: 0 0 0 10px rgba(255,82,82,0.0); }
+    100% { box-shadow: 0 0 0 0 rgba(255,82,82,0.0); }
+  }
+
+
+.ii-legend-wrap{ margin-top:8px; }
+.ii-legend{ margin-top:8px; padding:10px; border:1px solid #3333; border-radius:10px; font-size: 0.92rem; }
+.ii-legend ul{ margin:6px 0 10px 20px; }
+.ii-legend code{ font-size:0.9em; }
+
+</style>
+
+<div class="wrap">
+  <div class="head">
+    <div class="title">
+      <h1>Learning</h1>
+      <div class="subtitle">Browser berechnet die Kurven · Stats-DB als Fallback-Schutz</div>
+      <div class="iirow" id="iiRow">
+        <span class="pill" id="iiReward100">reward/100ep: —</span>
+        <span class="pill" id="iiRewardMin">reward/min: —</span>
+        <span class="pill" id="iiCompression">forget: —</span>
+        <span class="pill" id="iiPolicy">policy: —</span>
+        <span class="pill" id="iiLatency">infer ms: —</span>
+        <span class="pill" id="iiSceneGraph">scenegraph: —</span>
+        <span class="pill" id="iiDreamEff">dream-eff: —</span>
+        <span class="pill" id="iiReplayMut">replay-mut: —</span>
+        <span class="pill" id="iiConceptReuse">concept-reuse: —</span>
+        <span class="pill" id="iiBinding">binding: —</span>
+            <span class="pill" id="iiBindingVision">binding.v: —</span>
+      <span class="pill" id="iiSynapses" title="Synapses / Vernetzung (24h)">synapses: —</span>
+      </div>
+      <div class="ii-legend-wrap">
+        <button class="btn btn-sm btn-outline-secondary" type="button" id="iiLegendToggle" onclick="toggleIILegend()">Legende / Legend</button>
+        <div class="ii-legend" id="iiLegend" style="display:none;">
+          <div><b>DE</b>: Kurz-Erklärung der Kennzahlen.</div>
+          <ul>
+            <li><b>reward/100ep</b>: Reward-Summe pro 100 Episoden (Fenster: 60m). <i>n/a</i>, wenn ep=0.</li>
+            <li><b>reward/min</b>: Reward-Rate pro Minute (Fenster: 60m).</li>
+            <li><b>forget</b>: Forgetting-/Kompressions-Indikatoren (a/c und c_share über 30d).</li>
+            <li><b>policy</b>: Drift/Mutationen/Spiel-Episoden Kurzstatus (Fenster: 600s).</li>
+            <li><b>infer ms</b>: Inferenz-Latenz (Fenster: 5m).</li>
+            <li><b>scenegraph</b>: SceneGraph Aktivität (24h).</li>
+            <li><b>dream-eff</b>: Dream vs Live Effizienz (24h).</li>
+            <li><b>replay-mut</b>: Replay/Mutation Zähler (24h).</li>
+            <li><b>concept-reuse</b>: Wiederverwendung/Kompression in Konzeptgraph (24h).</li>
+            <li><b>binding</b>: Gesamt-Binding-Indikatoren (24h): mbi / snap / graph / rep / link_rel.</li>
+            <li><b>binding.v</b>: Vision-Wiederholung (24h): <b>ev</b>=Events, <b>uq</b>=Unique Keys, <b>r2/r3/r5</b>=Repeat-Counts, <b>fp</b>=Fingerprint-Auflösung, <b>meta_empty</b>=Meta leer.</li>
+          </ul>
+          <div><b>EN</b>: Short explanation.</div>
+          <ul>
+            <li><b>reward/100ep</b>: reward sum per 100 episodes (60m window). <i>n/a</i> if ep=0.</li>
+            <li><b>reward/min</b>: reward rate per minute (60m).</li>
+            <li><b>forget</b>: forgetting/compression indicators (30d).</li>
+            <li><b>policy</b>: policy drift/mutations/game eps snapshot (600s).</li>
+            <li><b>infer ms</b>: inference latency (5m).</li>
+            <li><b>scenegraph</b>: scenegraph activity (24h).</li>
+            <li><b>dream-eff</b>: dream vs live efficiency (24h).</li>
+            <li><b>replay-mut</b>: replay/mutation counters (24h).</li>
+            <li><b>concept-reuse</b>: concept reuse/compression (24h).</li>
+            <li><b>binding</b>: overall binding indicators (24h): mbi / snap / graph / rep / link_rel.</li>
+            <li><b>binding.v</b>: vision repetition (24h): <b>ev</b>, <b>uq</b>, <b>r2/r3/r5</b>, <b>fp</b>, <b>meta_empty</b>.</li>
+          </ul>
+          <div style="opacity:.8;">Details: <code>docs/core/72_binding_vision_probe.md</code></div>
+        </div>
+      </div>
+      <div id="err" class="err"></div>
+      <div id="dbg" class="dbg"></div>
+    </div>
+
+    <div class="btnrow">
+      <span id="chartBadge" class="badge warn">Chart: ?</span>
+      <span id="dbBadge" class="badge warn">DB: ?</span>
+      <span id="dataBadge" class="badge warn" title="Zeitpunkt, wann die Daten (Server/API/Caches) gelesen bzw. erzeugt wurden.">Data: —</span>
+      <button class="btn" id="btnRefresh">Neu laden</button>
+      <button class="btn" id="btnSelftest">Selftest</button>
+      <button class="btn" id="btnTestgraph">Testgraph (Phantasie)</button>
+      <a class="btn" id="btnCSV" href="/learning/api/curve.csv?days=365" style="text-decoration:none;">CSV (Tag/Woche/Monat)</a>
+      <a class="btn" id="btnCSVAll" href="/learning/api/export.csv?days=365&amp;window_sec=86400&amp;cached=1" style="text-decoration:none;">CSV (Alles-Export)</a>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- 4 Charts -->
+    <div class="card">
+      <h2>Rewards</h2>
+      <div class="chartbox"><canvas id="chRewards"></canvas></div>
+      <div class="statrow">
+        <span class="pill" id="rewardsLast">last: —</span>
+        <span class="pill" id="rewardsMax">max: —</span>
+      </div>
+      <div class="hint">Quelle: rewards_log → stats.db (series: reward:*), Browser aligned</div>
+    </div>
+
+    <div class="card">
+      <h2>Metrics</h2>
+      <div class="chartbox"><canvas id="chMetrics"></canvas></div>
+      <div class="statrow">
+        <span class="pill" id="metricsLast">last: —</span>
+        <span class="pill" id="metricsMax">max: —</span>
+      </div>
+      <div class="hint">Quelle: metrics → stats.db (series: metric:*)</div>
+    </div>
+
+    <div class="card">
+      <h2>Empathy</h2>
+      <div class="chartbox"><canvas id="chEmpathy"></canvas></div>
+      <div class="statrow">
+        <span class="pill" id="empathyLast">last: —</span>
+        <span class="pill" id="empathyMax">max: —</span>
+      </div>
+      <div class="hint">Quelle: empathy_snaps → stats.db (series: empathy_score)</div>
+    </div>
+
+    <div class="card">
+      <h2>Coverage</h2>
+      <div class="chartbox"><canvas id="chCoverage"></canvas></div>
+      <div class="statrow">
+        <span class="pill" id="coverageLast">last: —</span>
+        <span class="pill" id="coverageMax">max: —</span>
+      </div>
+      <div class="hint">Quelle: coverage_log_30d → stats.db (series: coverage_30d) · legacy: coverage_total</div>
+    </div>
+
+    <div class="card full">
+      <h2>Vision Primitives (24h)</h2>
+      <div class="statrow">
+        <span class="pill" id="vpCount">count: —</span>
+        <span class="pill" id="vpAge">age: —</span>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <div class="col card" style="padding:10px;">
+          <strong>Motion</strong>
+          <div class="statrow" style="margin-top:8px;">
+            <span class="pill" id="vpMotionLast">last: —</span>
+            <span class="pill" id="vpMotionAvg">avg: —</span>
+            <span class="pill" id="vpMotionMax">max: —</span>
+          </div>
+        </div>
+        <div class="col card" style="padding:10px;">
+          <strong>Edges</strong>
+          <div class="statrow" style="margin-top:8px;">
+            <span class="pill" id="vpEdgesLast">last: —</span>
+            <span class="pill" id="vpEdgesAvg">avg: —</span>
+            <span class="pill" id="vpEdgesMax">max: —</span>
+          </div>
+        </div>
+        <div class="col card" style="padding:10px;">
+          <strong>Color</strong>
+          <div class="statrow" style="margin-top:8px;">
+            <span class="pill" id="vpColorLast">last: —</span>
+            <span class="pill" id="vpColorAvg">avg: —</span>
+            <span class="pill" id="vpColorMax">max: —</span>
+          </div>
+        </div>
+        <div class="col card" style="padding:10px;">
+          <strong>Q</strong>
+          <div class="statrow" style="margin-top:8px;">
+            <span class="pill" id="vpQLast">last: —</span>
+            <span class="pill" id="vpQAvg">avg: —</span>
+            <span class="pill" id="vpQMax">max: —</span>
+          </div>
+        </div>
+      </div>
+      <div class="hint" id="vpHint">Quelle: snapchains.blob → vision/token (motion/edges/color/q)</div>
+    </div>
+
+    <!-- Maxima for Reward/Metrics/Empathy/Coverage -->
+    <div class="card full">
+      <h2>Maxima (Rewards/Metrics/Empathy/Coverage)</h2>
+      <div class="hint">Quelle: stats.db → stats_points (daily/weekly/monthly maxima; series of max via window function)</div>
+
+      <details open style="margin-top:10px;">
+        <summary><strong>Rewards</strong> <span class="badge" id="bRMax">—</span></summary>
+        <div class="row" style="margin-top:10px;">
+          <div class="col card" style="padding:10px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+              <strong>Max pro Tag</strong><span class="badge" id="bRDay">—</span>
+            </div>
+            <div style="margin-top:8px; overflow:auto;">
+              <table>
+                <thead><tr><th>Tag</th><th>series</th><th class="num">n</th><th class="num">avg</th><th class="num">max</th></tr></thead>
+                <tbody id="tbRDay"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="col card" style="padding:10px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+              <strong>Max pro Woche</strong><span class="badge" id="bRWeek">—</span>
+            </div>
+            <div style="margin-top:8px; overflow:auto;">
+              <table>
+                <thead><tr><th>Woche</th><th>series</th><th class="num">n</th><th class="num">avg</th><th class="num">max</th></tr></thead>
+                <tbody id="tbRWeek"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="col card" style="padding:10px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+              <strong>Max pro Monat</strong><span class="badge" id="bRMonth">—</span>
+            </div>
+            <div style="margin-top:8px; overflow:auto;">
+              <table>
+                <thead><tr><th>Monat</th><th>series</th><th class="num">n</th><th class="num">avg</th><th class="num">max</th></tr></thead>
+                <tbody id="tbRMonth"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <details style="margin-top:10px;">
+        <summary><strong>Metrics</strong> <span class="badge" id="bMMax">—</span></summary>
+        <div class="row" style="margin-top:10px;">
+          <div class="col card" style="padding:10px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+              <strong>Max pro Tag</strong><span class="badge" id="bMDay">—</span>
+            </div>
+            <div style="margin-top:8px; overflow:auto;">
+              <table>
+                <thead><tr><th>Tag</th><th>series</th><th class="num">n</th><th class="num">avg</th><th class="num">max</th></tr></thead>
+                <tbody id="tbMDay"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="col card" style="padding:10px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+              <strong>Max pro Woche</strong><span class="badge" id="bMWeek">—</span>
+            </div>
+            <div style="margin-top:8px; overflow:auto;">
+              <table>
+                <thead><tr><th>Woche</th><th>series</th><th class="num">n</th><th class="num">avg</th><th class="num">max</th></tr></thead>
+                <tbody id="tbMWeek"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="col card" style="padding:10px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+              <strong>Max pro Monat</strong><span class="badge" id="bMMonth">—</span>
+            </div>
+            <div style="margin-top:8px; overflow:auto;">
+              <table>
+                <thead><tr><th>Monat</th><th>series</th><th class="num">n</th><th class="num">avg</th><th class="num">max</th></tr></thead>
+                <tbody id="tbMMonth"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <details style="margin-top:10px;">
+        <summary><strong>Empathy</strong> <span class="badge" id="bEMax">—</span></summary>
+        <div class="row" style="margin-top:10px;">
+          <div class="col card" style="padding:10px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+              <strong>Max pro Tag</strong><span class="badge" id="bEDay">—</span>
+            </div>
+            <div style="margin-top:8px; overflow:auto;">
+              <table>
+                <thead><tr><th>Tag</th><th>series</th><th class="num">n</th><th class="num">avg</th><th class="num">max</th></tr></thead>
+                <tbody id="tbEDay"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="col card" style="padding:10px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+              <strong>Max pro Woche</strong><span class="badge" id="bEWeek">—</span>
+            </div>
+            <div style="margin-top:8px; overflow:auto;">
+              <table>
+                <thead><tr><th>Woche</th><th>series</th><th class="num">n</th><th class="num">avg</th><th class="num">max</th></tr></thead>
+                <tbody id="tbEWeek"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="col card" style="padding:10px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+              <strong>Max pro Monat</strong><span class="badge" id="bEMonth">—</span>
+            </div>
+            <div style="margin-top:8px; overflow:auto;">
+              <table>
+                <thead><tr><th>Monat</th><th>series</th><th class="num">n</th><th class="num">avg</th><th class="num">max</th></tr></thead>
+                <tbody id="tbEMonth"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <details style="margin-top:10px;">
+        <summary><strong>Coverage</strong> <span class="badge" id="bCMax">—</span></summary>
+        <div class="row" style="margin-top:10px;">
+          <div class="col card" style="padding:10px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+              <strong>Max pro Tag</strong><span class="badge" id="bCDay">—</span>
+            </div>
+            <div style="margin-top:8px; overflow:auto;">
+              <table>
+                <thead><tr><th>Tag</th><th>series</th><th class="num">n</th><th class="num">avg</th><th class="num">max</th></tr></thead>
+                <tbody id="tbCDay"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="col card" style="padding:10px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+              <strong>Max pro Woche</strong><span class="badge" id="bCWeek">—</span>
+            </div>
+            <div style="margin-top:8px; overflow:auto;">
+              <table>
+                <thead><tr><th>Woche</th><th>series</th><th class="num">n</th><th class="num">avg</th><th class="num">max</th></tr></thead>
+                <tbody id="tbCWeek"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="col card" style="padding:10px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+              <strong>Max pro Monat</strong><span class="badge" id="bCMonth">—</span>
+            </div>
+            <div style="margin-top:8px; overflow:auto;">
+              <table>
+                <thead><tr><th>Monat</th><th>series</th><th class="num">n</th><th class="num">avg</th><th class="num">max</th></tr></thead>
+                <tbody id="tbCMonth"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <div class="hint" style="margin-top:10px;">Hinweis: Maxima werden aus stats_points berechnet. Bei leeren Serien kann der UI-Sampler kurz nachziehen.</div>
+    </div>
+    
+    <!-- Side: Cognition Hero -->
+    <div class="card side heroBox" id="heroBox">
+      <h2>Mind</h2>
+
+      <div style="margin-top:6px;">
+        <div class="heroLabel">Cognitive Depth (Kompression · Langzeitgedächtnis)</div>
+        <div class="progressWrap" title="Anteil komprimierter SnapChains im 30d-Fenster (compressed_share)">
+          <div class="progressFill" id="cdBarFill"></div>
+        </div>
+        <div class="heroSub" id="cdText">—</div>
+      </div>
+
+      <div style="height:12px;"></div>
+
+      <div>
+        <div class="heroLabel">Dreaming Efficiency</div>
+        <div class="heroBig" id="dreamHeroMain">—</div>
+        <div class="heroSub" id="dreamHeroSub">—</div>
+      </div>
+
+      <div style="height:12px;"></div>
+
+      <div>
+        <div class="heroLabel">Learning Pulse (Last Synapse)</div>
+        <div class="pulseRow">
+          <span class="pulseDot" id="pulseDot" aria-hidden="true"></span>
+          <span id="pulseText" style="font-size:12px; opacity:.92;">—</span>
+        </div>
+        <div class="heroSub" id="pulseSub">—</div>
+      </div>
+
+      <div class="hint" style="margin-top:10px;">
+        Hinweis: „Cognitive Depth“ ist bewusst das Gegenteil von „sinkender Coverage“ – je höher, desto mehr Wissen ist kristallisiert.
+      </div>
+    </div>
+
+<!-- Side: Energy -->
+    <div class="card side energyBox">
+      <h2>Energy</h2>
+
+      <h3>🔥 Top Objects</h3>
+      <ul id="topObjects" class="elist"></ul>
+
+      <div style="height:10px;"></div>
+
+      <h3>⚡ Top Relations</h3>
+      <ul id="topRelations" class="elist"></ul>
+
+      <div class="energyMeta">
+        <span id="energyState" class="pill">cache: loading</span>
+      </div>
+
+      <div class="hint" style="margin-top:10px;">
+        Quelle: stats.db → energy_top_cache (Producer: oroma-energy.timer)
+      </div>
+    </div>
+
+    <!-- Lernkurve + Tabellen -->
+    <div class="card full">
+      <h2>SnapChain Lernkurve (Qualität + Aktivität)</h2>
+      <div class="chartbox" style="height:320px;"><canvas id="chCurve"></canvas></div>
+      <div class="hint">Quelle: snapchains → (stats_curve_day oder fallback oroma.db) (q_avg/q_max + chains/day)</div>
+
+      <div class="row" style="margin-top:14px;">
+        <div class="col card" style="padding:10px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+            <strong>Max pro Tag</strong>
+            <span class="badge" id="bDay">—</span>
+          </div>
+          <div style="margin-top:8px; overflow:auto;">
+            <table>
+              <thead><tr><th>Tag</th><th class="num">Chains</th><th class="num">q_max</th></tr></thead>
+              <tbody id="tbDay"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="col card" style="padding:10px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+            <strong>Max pro Woche</strong>
+            <span class="badge" id="bWeek">—</span>
+          </div>
+          <div style="margin-top:8px; overflow:auto;">
+            <table>
+              <thead><tr><th>Woche</th><th class="num">Chains</th><th class="num">q_max</th></tr></thead>
+              <tbody id="tbWeek"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="col card" style="padding:10px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+            <strong>Max pro Monat</strong>
+            <span class="badge" id="bMonth">—</span>
+          </div>
+          <div style="margin-top:8px; overflow:auto;">
+            <table>
+              <thead><tr><th>Monat</th><th class="num">Chains</th><th class="num">q_max</th></tr></thead>
+              <tbody id="tbMonth"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px;">
+        <strong>Selftest Output</strong>
+        <pre id="selfOut" class="pre"></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const elErr = document.getElementById("err");
+  const elDbg = document.getElementById("dbg");
+  const badgeChart = document.getElementById("chartBadge");
+  const badgeDB = document.getElementById("dbBadge");
+  const badgeData = document.getElementById("dataBadge");
+
+  // Aggregated timestamps (server + caches + export) so the UI can always
+  // show *when* data was read / generated.
+  const dataTS = {
+    history: null,
+    history_last_point: null,
+    maxima_cache_ts: null,
+    maxima_cache_age: null,
+    intelligence_cache_ts: null,
+    intelligence_cache_age: null,
+    energy_objects_ts: null,
+    energy_objects_age: null,
+    energy_objects_stale: null,
+    energy_relations_ts: null,
+    energy_relations_age: null,
+    energy_relations_stale: null,
+    export_generated_at: null,
+    export_mtime_ts: null,
+    export_age_sec: null,
+    export_exists: null,
+  };
+
+  const elTopObjects = document.getElementById("topObjects");
+  const elTopRelations = document.getElementById("topRelations");
+  const elEnergyState = document.getElementById("energyState");
+
+  const elIIReward100 = document.getElementById("iiReward100");
+  const elIIRewardMin = document.getElementById("iiRewardMin");
+  const elIICompression = document.getElementById("iiCompression");
+  const elIIPolicy = document.getElementById("iiPolicy");
+  const elIILatency = document.getElementById("iiLatency");
+  const elIISceneGraph = document.getElementById("iiSceneGraph");
+  const elIIDreamEff = document.getElementById("iiDreamEff");
+  const elIIReplayMut = document.getElementById("iiReplayMut");
+  const elIIConceptReuse = document.getElementById("iiConceptReuse");
+  const elIIBinding = document.getElementById("iiBinding");
+  const elIIBindingVision = document.getElementById("iiBindingVision");
+      const elIISynapses = document.getElementById("iiSynapses");
+
+  // Cognition Hero elements (Side Box)
+  const elCdBarFill = document.getElementById("cdBarFill");
+  const elCdText = document.getElementById("cdText");
+  const elDreamHeroMain = document.getElementById("dreamHeroMain");
+  const elDreamHeroSub = document.getElementById("dreamHeroSub");
+  const elPulseDot = document.getElementById("pulseDot");
+  const elPulseText = document.getElementById("pulseText");
+  const elPulseSub = document.getElementById("pulseSub");
+
+
+  const elRewardsLast = document.getElementById("rewardsLast");
+  const elRewardsMax = document.getElementById("rewardsMax");
+  const elMetricsLast = document.getElementById("metricsLast");
+  const elMetricsMax = document.getElementById("metricsMax");
+  const elEmpathyLast = document.getElementById("empathyLast");
+  const elEmpathyMax = document.getElementById("empathyMax");
+  const elCoverageLast = document.getElementById("coverageLast");
+  const elCoverageMax = document.getElementById("coverageMax");
+  const elVpCount = document.getElementById("vpCount");
+  const elVpAge = document.getElementById("vpAge");
+  const elVpMotionLast = document.getElementById("vpMotionLast");
+  const elVpMotionAvg = document.getElementById("vpMotionAvg");
+  const elVpMotionMax = document.getElementById("vpMotionMax");
+  const elVpEdgesLast = document.getElementById("vpEdgesLast");
+  const elVpEdgesAvg = document.getElementById("vpEdgesAvg");
+  const elVpEdgesMax = document.getElementById("vpEdgesMax");
+  const elVpColorLast = document.getElementById("vpColorLast");
+  const elVpColorAvg = document.getElementById("vpColorAvg");
+  const elVpColorMax = document.getElementById("vpColorMax");
+  const elVpQLast = document.getElementById("vpQLast");
+  const elVpQAvg = document.getElementById("vpQAvg");
+  const elVpQMax = document.getElementById("vpQMax");
+  const elVpHint = document.getElementById("vpHint");
+
+  function setErr(msg){
+    elErr.style.display = "block";
+    elErr.textContent = msg;
+  }
+  function setDbg(msg){
+    elDbg.style.display = "block";
+    elDbg.textContent = msg;
+  }
+
+  // Niemals still: Debug-Log im UI (append) + Konsole
+  function appendDbg(msg){
+    try{
+      const ts = new Date().toISOString();
+      elDbg.style.display = "block";
+      const cur = elDbg.textContent || "";
+      const line = `[${ts}] ${msg}`;
+      elDbg.textContent = cur ? (cur + "\n" + line) : line;
+    }catch(e){}
+    try{ console.error("[learning]", msg); }catch(e){}
+  }
+  function setBadge(el, cls, txt){
+    el.className = "badge " + cls;
+    el.textContent = txt;
+  }
+
+  // Central meta state used to populate the "Data" badge.
+  // All timestamps are Unix seconds (server-side) unless noted.
+  const dataMeta = {
+    history: { server_ts: 0, server_ts_local: "", last_ts: {} },
+    maxima: { cache_ts: 0, cache_age_sec: null, stale: null },
+    intelligence: { cache_ts: 0, cache_age_sec: null, stale: null },
+    energy: { kinds_meta: {} },
+    export: { exists: false, export_generated_at: "", mtime_ts: 0, age_sec: null, stale: null }
+  };
+
+  function refreshDataBadge(){
+    if (!badgeData) return;
+    const parts = [];
+
+    if (dataMeta.history.server_ts){
+      parts.push("H " + fmtTs(dataMeta.history.server_ts));
+    }
+    if (dataMeta.maxima.cache_ts){
+      const s = dataMeta.maxima.stale ? " (stale)" : "";
+      parts.push("M " + fmtTs(dataMeta.maxima.cache_ts) + s);
+    }
+    if (dataMeta.intelligence.cache_ts){
+      const s = dataMeta.intelligence.stale ? " (stale)" : "";
+      parts.push("I " + fmtTs(dataMeta.intelligence.cache_ts) + s);
+    }
+    // Energy: show objects/relations (if present)
+    const ek = dataMeta.energy.kinds_meta || {};
+    const eo = ek.objects || null;
+    const er = ek.relations || null;
+    if (eo && eo.ts){
+      const s = eo.stale ? " (stale)" : "";
+      parts.push("E(obj) " + fmtTs(eo.ts) + s);
+    }
+    if (er && er.ts){
+      const s = er.stale ? " (stale)" : "";
+      parts.push("E(rel) " + fmtTs(er.ts) + s);
+    }
+    if (dataMeta.export.exists){
+      // Prefer the explicit header timestamp if available.
+      const t = dataMeta.export.export_generated_at || fmtTs(dataMeta.export.mtime_ts);
+      const s = dataMeta.export.stale ? " (stale)" : "";
+      parts.push("CSV " + t + s);
+    } else {
+      parts.push("CSV —");
+    }
+
+    const txt = "Data: " + (parts.length ? parts.join(" · ") : "—");
+    // Visual severity: stale energy or missing export should warn.
+    const hasStale = Boolean(dataMeta.maxima.stale || dataMeta.intelligence.stale || (eo && eo.stale) || (er && er.stale) || dataMeta.export.stale);
+    const hasMissing = !dataMeta.export.exists;
+    const cls = (hasMissing || hasStale) ? "warn" : "ok";
+    setBadge(badgeData, cls, txt);
+  }
+
+  // Safari/iOS: Default-Farben/Ticks müssen explizit sein, sonst "unsichtbar"
+  function setChartDefaults(){
+    Chart.defaults.color = "#eee";
+    Chart.defaults.borderColor = "rgba(255,255,255,0.18)";
+    Chart.defaults.font.family = "system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif";
+    Chart.defaults.plugins.legend.display = true;
+    Chart.defaults.plugins.legend.labels.usePointStyle = true;
+  }
+
+  function authHeaders(){
+    const h = {};
+    if (window.OROMA_UI_TOKEN) h["X-OROMA-TOKEN"] = window.OROMA_UI_TOKEN;
+    return h;
+  }
+
+  function tsLabel(ts){
+    const d = new Date(ts * 1000);
+    return d.toISOString().slice(11,16);
+  }
+
+  function makeLine(canvasId, labels, datasets, yTitle){
+    const ctx = document.getElementById(canvasId).getContext("2d");
+    return new Chart(ctx, {
+      type: "line",
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: "nearest", intersect: false },
+        elements: { point: { radius: 0 } },
+        scales: {
+          x: { ticks: { maxTicksLimit: 10, autoSkip: true }, grid: { display: false } },
+          y: { title: { display: true, text: yTitle }, grid: { color: "rgba(255,255,255,0.12)" } }
+        }
+      }
+    });
+  }
+
+  function ds(label, data, color){
+    return {
+      label, data,
+      borderColor: color,
+      backgroundColor: color,
+      borderWidth: 2,
+      tension: 0.18,
+      spanGaps: true,
+      fill: false
+    };
+  }
+
+  // Charts (global)
+  let chRewards, chMetrics, chEmpathy, chCoverage, chCurve;
+  let learningLoadSeq = 0;
+
+  function destroyAll(){
+    [chRewards, chMetrics, chEmpathy, chCoverage, chCurve].forEach(c => { try{ if(c) c.destroy(); }catch(e){} });
+    chRewards = chMetrics = chEmpathy = chCoverage = chCurve = null;
+  }
+
+  function isActiveLoad(seq){
+    return Number(seq) === Number(learningLoadSeq);
+  }
+
+  function groupBySeries(points){
+    const map = {};
+    (points || []).forEach(p => {
+      (map[p.series] ||= []).push(p);
+    });
+    Object.keys(map).forEach(k => map[k].sort((a,b)=>a.ts-b.ts));
+    return map;
+  }
+
+  function align(labelsTs, rows){
+    const m = new Map(rows.map(r => [r.ts, r.value]));
+    return labelsTs.map(ts => m.has(ts) ? m.get(ts) : null);
+  }
+
+  function render4(history){
+    const meta = history.meta || {};
+    const points = history.points || [];
+
+    // Timestamps for UI badge
+    dataMeta.history.server_ts = Number(meta.server_ts || 0);
+    dataMeta.history.server_ts_local = String(meta.server_ts_local || "");
+    dataMeta.history.last_ts = meta.last_ts || {};
+    refreshDataBadge();
+
+    setBadge(badgeDB, meta.stats_db_ok ? "ok" : "warn", meta.stats_db_ok ? "DB: stats.db" : "DB: fallback/main/none");
+
+    const rewardsPts = points.filter(p => (p.series || "").startsWith("reward:"));
+    const metricsPts = points.filter(p => (p.series || "").startsWith("metric:"));
+    const empathyPts = points.filter(p => (p.series || "") === "empathy_score");
+    const coverage30Pts = points.filter(p => (p.series || "") === "coverage_30d");
+    const coverageTotalPts = points.filter(p => (p.series || "") === "coverage_total");
+
+    const byReward = groupBySeries(rewardsPts);
+    const labelsRts = Array.from(new Set(rewardsPts.map(p => p.ts))).sort((a,b)=>a-b);
+    const labelsR = labelsRts.map(tsLabel);
+    const rewardKeys = Object.keys(byReward).sort();
+    const rewardColors = ["#90caf9","#ffd166","#80ed99","#f4a261","#b388eb","#64dfdf","#72efdd","#caffbf"];
+    const rSets = rewardKeys.map((k,i)=>ds(k.replace("reward:",""), align(labelsRts, byReward[k]), rewardColors[i % rewardColors.length]));
+    chRewards = makeLine("chRewards", labelsR, rSets, "reward");
+
+    const byMetric = groupBySeries(metricsPts);
+    const labelsMts = Array.from(new Set(metricsPts.map(p => p.ts))).sort((a,b)=>a-b);
+    const labelsM = labelsMts.map(tsLabel);
+    const metricKeys = Object.keys(byMetric).sort().slice(0, 8);
+    const metricColors = ["#6a1b9a","#ef6c00","#ad1457","#00838f","#455a64","#1565c0","#2e7d32","#ffd166"];
+    const mSets = metricKeys.map((k,i)=>ds(k.replace("metric:",""), align(labelsMts, byMetric[k]), metricColors[i % metricColors.length]));
+    chMetrics = makeLine("chMetrics", labelsM, mSets, "value");
+
+    const labelsE = (empathyPts || []).map(p => tsLabel(p.ts));
+    const eVals = (empathyPts || []).map(p => p.value);
+    chEmpathy = makeLine("chEmpathy", labelsE, [ds("score", eVals, "#84dcc6")], "0..1");
+
+    const labelsCts = Array.from(new Set([
+      ...(coverage30Pts || []).map(p => p.ts),
+      ...(coverageTotalPts || []).map(p => p.ts)
+    ])).sort((a,b)=>a-b);
+    const labelsC = labelsCts.map(tsLabel);
+    const c30Vals = align(labelsCts, coverage30Pts || []);
+    const cTotVals = align(labelsCts, coverageTotalPts || []);
+    chCoverage = makeLine("chCoverage", labelsC, [
+      ds("coverage_30d", c30Vals, "#4cc9f0"),
+      ds("coverage_total", cTotVals, "#ffd166")
+    ], "coverage");
+
+    // Zusatz-Counts (aus oroma.db, read-only): Audio/Video Tokens + Teacher Labels
+    const sc = (meta && meta.snapcounts) ? meta.snapcounts : {};
+    const aTok = Number(sc["audio/token"] || 0);
+    const vTok = Number(sc["vision/token"] || 0);
+    const aLab = Number(sc["link/a_label"] || 0);
+    const avLab = Number(sc["link/av_label"] || 0);
+    const labSum = aLab + avLab;
+
+    setDbg(
+      `history: points=${points.length} | rewards=${rewardsPts.length} | metrics=${metricsPts.length} | empathy=${empathyPts.length} | coverage=${(coverage30Pts.length + coverageTotalPts.length)} (30d=${coverage30Pts.length}, total=${coverageTotalPts.length})`
+      + ` | audioSnaps=${aTok} | videoSnaps=${vTok} | labels=${labSum} (a=${aLab}, av=${avLab})`
+    );
+
+    // --- last/max summaries (im selben Window wie /api/history)
+    try{
+      setLastMax(elRewardsLast, elRewardsMax, calcLastMax(rewardsPts, s => String(s).replace("reward:","")), 3, "last", "max");
+      setLastMax(elMetricsLast, elMetricsMax, calcLastMax(metricsPts, s => String(s).replace("metric:","")), 3, "last", "max");
+      setLastMax(elEmpathyLast, elEmpathyMax, calcLastMax(empathyPts, null), 3, "last", "max");
+      // Coverage: 2 Serien parallel (Window + Legacy). Anzeige als Kombi-Text, damit die Semantik klar bleibt.
+      const covLast30 = (coverage30Pts && coverage30Pts.length) ? coverage30Pts[coverage30Pts.length-1].value : null;
+      const covLastTot = (coverageTotalPts && coverageTotalPts.length) ? coverageTotalPts[coverageTotalPts.length-1].value : null;
+      const covMax30 = (coverage30Pts && coverage30Pts.length) ? Math.max(...coverage30Pts.map(p=>p.value)) : null;
+      const covMaxTot = (coverageTotalPts && coverageTotalPts.length) ? Math.max(...coverageTotalPts.map(p=>p.value)) : null;
+      if (elCoverageLast) elCoverageLast.textContent = `last: 30d=${fmtNum(covLast30,3)} · total=${fmtNum(covLastTot,3)}`;
+      if (elCoverageMax)  elCoverageMax.textContent  = `max: 30d=${fmtNum(covMax30,3)} · total=${fmtNum(covMaxTot,3)}`;
+    }catch(e){}
+  }
+
+  function fillTable(tbodyId, rows, takeLast){
+    const tb = document.getElementById(tbodyId);
+    const slice = (rows || []).slice(Math.max(0, rows.length - takeLast));
+    tb.innerHTML = slice.map(r => `
+      <tr>
+        <td>${r.period || ""}</td>
+        <td class="num">${(r.chains ?? 0)}</td>
+        <td class="num">${(typeof r.q_max === "number") ? r.q_max.toFixed(6) : (r.q_max || 0)}</td>
+      </tr>
+    `).join("");
+  }
+
+  function renderCurve(curve){
+    try{ if (chCurve) chCurve.destroy(); }catch(e){}
+    chCurve = null;
+    const daily = curve.daily || [];
+    const labels = daily.map(r => r.period);
+    const qAvg = daily.map(r => r.q_avg ?? 0);
+    const qMax = daily.map(r => r.q_max ?? 0);
+    const chains = daily.map(r => r.chains ?? 0);
+
+    const ctx = document.getElementById("chCurve").getContext("2d");
+    chCurve = new Chart(ctx, {
+      data: {
+        labels,
+        datasets: [
+          { type:"line", label:"q_avg", data:qAvg, borderColor:"#80ed99", backgroundColor:"#80ed99", borderWidth:2, tension:0.18, yAxisID:"y", pointRadius:0 },
+          { type:"line", label:"q_max", data:qMax, borderColor:"#ffd166", backgroundColor:"#ffd166", borderWidth:2, tension:0.18, yAxisID:"y", pointRadius:0 },
+          { type:"bar",  label:"chains/day", data:chains, borderColor:"#90caf9", backgroundColor:"rgba(144,202,249,0.18)", yAxisID:"y1" }
+        ]
+      },
+      options: {
+        responsive:true,
+        maintainAspectRatio:false,
+        animation:false,
+        interaction:{ mode:"nearest", intersect:false },
+        scales:{
+          x:{ grid:{display:false}, ticks:{ autoSkip:true, maxTicksLimit:10 } },
+          y:{ position:"left", title:{display:true, text:"quality"}, beginAtZero:true, grid:{ color:"rgba(255,255,255,0.12)" } },
+          y1:{ position:"right", title:{display:true, text:"chains"}, beginAtZero:true, grid:{ drawOnChartArea:false } }
+        }
+      }
+    });
+
+    fillTable("tbDay", daily, 14);
+    fillTable("tbWeek", curve.weekly || [], 12);
+    fillTable("tbMonth", curve.monthly || [], 12);
+
+    document.getElementById("bDay").textContent = `${daily.length} Tage`;
+    document.getElementById("bWeek").textContent = `${(curve.weekly||[]).length} Wochen`;
+    document.getElementById("bMonth").textContent = `${(curve.monthly||[]).length} Monate`;
+  }
+
+  function renderEnergyList(el, rows, kind){
+    const safe = (rows || []).slice(0, 20);
+    el.innerHTML = safe.map(r => {
+      const label=(r.label||r.name||r.object_label||r.relation||r.rel_type||r.id||"?");
+      const energy = (typeof r.energy === "number") ? r.energy : (typeof r.score === "number" ? r.score : null);
+      const eTxt = (energy === null) ? "" : Number(energy).toFixed(3);
+      const extra = (r.count != null) ? ` · n=${r.count}` : "";
+      return `<li><span class="etag">${label}</span><span class="escore">${eTxt}${extra}</span></li>`;
+    }).join("");
+
+    if (!safe.length){
+      el.innerHTML = `<li><span class="etag">keine Daten</span><span class="escore">—</span></li>`;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // WICHTIG: Diese Learning-Seite definiert *bewusst* ein lokales Fetch-Helper.
+  // Im Dashboard wird /static/scripts.js am Ende der Seite geladen (base.html)
+  // und definiert global ebenfalls `apiGet()` mit einem harten 8s Timeout.
+  // Wenn wir hier denselben Namen verwenden, kann scripts.js unsere Funktion
+  // überschreiben und Fetches (z. B. /learning/api/maxima?force=1) werden
+  // nach 8 Sekunden abgebrochen → "AbortError: Fetch is aborted" und die
+  // Kopfzeile fällt auf "—".
+  //
+  // Daher: eindeutiger Name `learningApiGet()` + eigenes Timeout (25s),
+  // inklusive detailliertem Debug-Logging (niemals still).
+  // -------------------------------------------------------------------------
+  async function learningApiGet(url, timeoutMs=25000){
+    let r, txt;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => {
+      try{ ctrl.abort(); }catch(e){}
+    }, Math.max(1000, Number(timeoutMs) || 25000));
+
+    try{
+      r = await fetch(url, { headers: authHeaders(), signal: ctrl.signal, credentials: "same-origin" });
+    }catch(e){
+      const name = (e && e.name) ? String(e.name) : "";
+      appendDbg(`fetch failed @ ${url}: ${e}`);
+      // AbortError ist *kein* Serverfehler, sondern ein Client/Timeout/Navigation-Effekt.
+      // Wir loggen ihn trotzdem immer explizit.
+      if (name === "AbortError"){
+        appendDbg(`fetch aborted @ ${url} (timeoutMs=${timeoutMs})`);
+      }
+      throw e;
+    }finally{
+      clearTimeout(t);
+    }
+
+    try{
+      txt = await r.text();
+    }catch(e){
+      appendDbg(`read body failed @ ${url}: ${e}`);
+      throw e;
+    }
+
+    if (!r.ok){
+      const short = (txt || "").slice(0, 400);
+      appendDbg(`HTTP ${r.status} @ ${url}: ${short}`);
+      throw new Error(`HTTP ${r.status} @ ${url}`);
+    }
+
+    try{
+      return JSON.parse(txt || "{}");
+    }catch(e){
+      const short = (txt || "").slice(0, 400);
+      appendDbg(`JSON parse failed @ ${url}: ${e} · body=${short}`);
+      throw e;
+    }
+  }
+
+
+  function fmtNum(x, digits){
+    if (x === null || x === undefined) return "—";
+    const n = Number(x);
+    if (!Number.isFinite(n)) return "—";
+    return n.toFixed(digits ?? 3);
+  }
+  function fmtPct(x, digits){
+    if (x === null || x === undefined) return "—";
+    const n = Number(x);
+    if (!Number.isFinite(n)) return "—";
+    return (100*n).toFixed(digits ?? 2) + "%";
+  }
+
+  function fmtTs(ts){
+    if (!ts) return "—";
+    const n = Number(ts);
+    if (!Number.isFinite(n) || n <= 0) return "—";
+    const d = new Date(n * 1000);
+    // Use browser locale (User is in Europe/Berlin), but keep it compact.
+    return d.toLocaleString();
+  }
+
+  function fmtAge(sec){
+    if (sec === null || sec === undefined) return "";
+    const n = Number(sec);
+    if (!Number.isFinite(n) || n < 0) return "";
+    const s = Math.floor(n);
+    const hh = Math.floor(s / 3600);
+    const mm = Math.floor((s % 3600) / 60);
+    const ss = s % 60;
+    if (hh > 0) return `${hh}h ${mm}m`;
+    if (mm > 0) return `${mm}m ${ss}s`;
+    return `${ss}s`;
+  }
+
+  // -----------------------------------------------------------------------
+  // HTML Escaping Helper (UI-Sicherheits- und Robustheitsanker)
+  // -----------------------------------------------------------------------
+  // Hintergrund
+  // -----------
+  // Die Learning-UI rendert in mehreren Tabellen dynamische Strings (series,
+  // relation labels, etc.). Diese Werte stammen aus DB/Cache und dürfen nie
+  // ungeescaped direkt in HTML landen.
+  //
+  // Zusätzlich ist dies ein "Robustheitsanker": Wenn in einem Patchlauf eine
+  // Utility-Funktion versehentlich entfernt wird, darf die UI nicht still
+  // ausfallen. Daher ist escapeHtml hier lokal definiert (ohne Abhängigkeit
+  // von globalen Scripts), sodass Safari/JS-Scopes keine Rolle spielen.
+  // -----------------------------------------------------------------------
+  function escapeHtml(s){
+    if (s === null || s === undefined) return "";
+    const str = String(s);
+    // Minimal, aber ausreichend: & < > " ' `
+    return str
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\"/g, "&quot;")
+      .replace(/'/g, "&#39;")
+      .replace(/`/g, "&#96;");
+  }
+
+
+  function calcLastMax(points, seriesTrimFn){
+    // Berechnet last + max für eine Punktliste {ts, series, value}.
+    // last: jüngster ts; falls mehrere Serien gleicher ts → höchster value.
+    // max : höchster value im Window.
+    const out = {
+      has:false,
+      last:{ts:null, value:null, series:null},
+      max:{value:null, series:null}
+    };
+    if (!points || !points.length) return out;
+    out.has = true;
+    let maxP = points[0];
+    for (const p of points){
+      if (p && typeof p.value === "number" && p.value > maxP.value) maxP = p;
+    }
+    out.max.value = maxP.value;
+    out.max.series = maxP.series || null;
+    let lastTs = points[0].ts;
+    for (const p of points){ if (p && typeof p.ts === "number" && p.ts > lastTs) lastTs = p.ts; }
+    let lastBest = null;
+    for (const p of points){
+      if (!p || p.ts !== lastTs) continue;
+      if (!lastBest) { lastBest = p; continue; }
+      if (typeof p.value === "number" && p.value > lastBest.value) lastBest = p;
+    }
+    out.last.ts = lastTs;
+    out.last.value = lastBest ? lastBest.value : null;
+    out.last.series = lastBest ? (lastBest.series || null) : null;
+    if (seriesTrimFn){
+      if (out.max.series) out.max.series = seriesTrimFn(String(out.max.series));
+      if (out.last.series) out.last.series = seriesTrimFn(String(out.last.series));
+    }
+    return out;
+  }
+
+  function setLastMax(elLast, elMax, lm, digits, labelLast, labelMax){
+    if (!elLast || !elMax) return;
+    if (!lm || !lm.has){
+      elLast.textContent = (labelLast || "last") + ": —";
+      elMax.textContent  = (labelMax  || "max")  + ": —";
+      return;
+    }
+    const d = (digits===undefined || digits===null) ? 3 : digits;
+    const lastTxt = (lm.last.value===null || lm.last.value===undefined) ? "—" : Number(lm.last.value).toFixed(d);
+    const maxTxt  = (lm.max.value===null  || lm.max.value===undefined)  ? "—" : Number(lm.max.value).toFixed(d);
+    const ls = lm.last.series ? " (" + lm.last.series + ")" : "";
+    const ms = lm.max.series  ? " (" + lm.max.series  + ")" : "";
+    elLast.textContent = (labelLast || "last") + ": " + lastTxt + ls;
+    elMax.textContent  = (labelMax  || "max")  + ": " + maxTxt  + ms;
+  }
+  function updateSynapsesPill(ii){
+  try {
+    const el = document.getElementById('iiSynapses');
+    if (!el) return;
+    const sy = (ii && ii.synapses_latest) ? ii.synapses_latest : {};
+    const n  = Number(sy['synapses.nodes_24h']);
+    const e  = Number(sy['synapses.edges_24h']);
+    const cc = Number(sy['synapses.components_24h']);
+    const g  = Number(sy['synapses.giant_share_24h']);
+    const d  = Number(sy['synapses.avg_deg_24h']);
+    if (Number.isFinite(n) && n > 0) {
+      const gPct = Number.isFinite(g) ? (Math.round(g * 1000) / 10) : NaN;
+      const d1   = Number.isFinite(d) ? (Math.round(d * 10) / 10) : NaN;
+      el.textContent = `synapses(24h): n=${n.toFixed(0)} · e=${e.toFixed(0)} · cc=${cc.toFixed(0)} · giant=${gPct}% · deg=${d1}`;
+      el.onclick = () => { window.location.href = '/synapses'; };
+    } else {
+      el.textContent = 'synapses: —';
+    }
+  } catch (e) {
+    const el = document.getElementById('iiSynapses');
+    if (el) el.textContent = 'synapses: —';
+  }
+}
+
+function renderIntelligence(ii){
+    if (!ii || !ii.ok){
+      if (elIIReward100) elIIReward100.textContent = "reward/100ep: —";
+      if (elIIRewardMin) elIIRewardMin.textContent = "reward/min: —";
+      if (elIICompression) elIICompression.textContent = "forget: —";
+      if (elIIPolicy) elIIPolicy.textContent = "policy: —";
+      if (elIILatency) elIILatency.textContent = "infer ms: —";
+      if (elIISceneGraph) elIISceneGraph.textContent = "scenegraph: —";
+      return;
+    }
+
+    // Cache timestamp/age for UI badge
+    try{ dataMeta.intelligence.cache = (ii.meta && ii.meta.cache) ? ii.meta.cache : {}; }catch(e){}
+  // --- cache timestamp info (for Data badge) ---
+  try{
+    const meta = ii.meta || {};
+    dataMeta.intelligence.cache_ts = meta.cache_ts || (meta.cache_meta_json && meta.cache_meta_json.cache_ts) || null;
+    dataMeta.intelligence.cache_age_sec = meta.cache_age_sec || (meta.cache_meta_json && meta.cache_meta_json.cache_age_sec) || null;
+    dataMeta.intelligence.stale = (meta.stale !== undefined) ? meta.stale : (meta.cache_meta_json && meta.cache_meta_json.stale) || false;
+  }catch(e){}
+
+    refreshDataBadge();
+
+    const r = ii.reward || {};
+    const c = ii.compression || {};
+    const p = ii.policy || {};
+    const l = (ii.latency_ms || {}).by_backend || {};
+
+    const wR = r.window_sec ?? 3600;
+    const wD = c.window_days ?? 30;
+    const wP = p.window_update_sec ?? 600;
+
+    const r100 = r.rewards_per_100_episodes;
+    const epN = r.episodes_n ?? 0;
+    const rwN = r.rewards_n ?? 0;
+
+    if (elIIReward100){
+      elIIReward100.textContent =
+        (r100 === null)
+          ? `reward/100ep(${Math.round(wR/60)}m): n/a (ep=0 · r=${rwN})`
+          : `reward/100ep(${Math.round(wR/60)}m): ${fmtNum(r100, 2)} (ep=${epN})`;
+    }
+
+    if (elIIRewardMin){
+      elIIRewardMin.textContent = `reward/min(${Math.round(wR/60)}m): ${fmtNum(r.rewards_per_min, 3)}`;
+    }
+
+    const a = c.n_active ?? 0;
+    const k = c.n_compressed ?? 0;
+    const ratio = c.active_per_compressed;
+    const share = c.compressed_share;
+
+    if (elIICompression){
+      elIICompression.textContent =
+        (ratio === null)
+          ? `forget(${wD}d): active=${a} · compressed=${k}`
+          : `forget(${wD}d): a/c=${fmtNum(ratio, 3)} · c_share=${fmtPct(share, 2)}`;
+    }
+
+    if (elIIPolicy){
+      const hasMut = (p.rule_mutations_per_min !== undefined && p.rule_mutations_per_min !== null);
+      const mutSrc = (p.rule_mutations_source !== undefined && p.rule_mutations_source !== null) ? String(p.rule_mutations_source) : null;
+      const mutTag = mutSrc ? (mutSrc === "rules.updated_at" ? "@rules" : "@audit") : "";
+      const mutPM = hasMut ? ` · mut=${fmtNum(p.rule_mutations_per_min, 3)}/min${mutTag}` : " · mut=n/a";
+
+      const lastLocal = (p.last_ts_local !== undefined && p.last_ts_local !== null) ? String(p.last_ts_local) : null;
+      const lastTxt = lastLocal ? ` · last=${lastLocal}` : " · last=n/a";
+
+      // Explainability: Policy-Drift kann 0.00% bleiben, wenn keine frischen Game-Episoden im Fenster existieren.
+      // Wir zeigen deshalb bewusst ein separates Data-Aktivitaets-Signal an (keine Vermischung mit drift).
+      const gameState = (p.game_eps_24h_state !== undefined && p.game_eps_24h_state !== null) ? String(p.game_eps_24h_state) : null;
+      const lastGameState = (p.last_game_ep_state !== undefined && p.last_game_ep_state !== null) ? String(p.last_game_ep_state) : null;
+
+      const gameEps24 = (p.game_eps_24h !== undefined && p.game_eps_24h !== null) ? Number(p.game_eps_24h) : null;
+      const lastGameLocal = (p.last_game_ep_start_local !== undefined && p.last_game_ep_start_local !== null) ? String(p.last_game_ep_start_local) : null;
+
+      let gameTxt = " · game_eps24h=n/a";
+      if (gameState === "locked"){
+        gameTxt = " · game_eps24h=locked";
+      } else if (gameEps24 !== null){
+        gameTxt = ` · game_eps24h=${gameEps24}`;
+      }
+
+      if (lastGameState === "locked"){
+        gameTxt += " · last_game=locked";
+      } else if (lastGameLocal){
+        gameTxt += " · last_game=" + lastGameLocal;
+      }
+
+      const todayState = (p.mut_today_state !== undefined && p.mut_today_state !== null) ? String(p.mut_today_state) : "n/a";
+      const todayN = (p.mut_today_n !== undefined && p.mut_today_n !== null) ? Number(p.mut_today_n) : null;
+      let todayTxt = " · mut_today=n/a";
+      if (todayState === "locked"){
+        todayTxt = " · mut_today=locked";
+      } else if (todayState === "ok"){
+        const yes = (p.mut_today_yes !== undefined && p.mut_today_yes !== null) ? Boolean(p.mut_today_yes) : false;
+        todayTxt = ` · mut_today=${(yes ? "yes" : "no")}${(todayN !== null ? "(" + todayN + ")" : "")}`;
+      }
+
+      elIIPolicy.textContent =
+        `policy(${Math.round(wP)}s): drift=${fmtPct(p.frac_updated_recent, 2)}${lastTxt}${mutPM}${todayTxt}${gameTxt} · margin=${fmtNum(p.avg_margin_top1_top2, 4)}`;
+    }
+
+    const hailo = l["vision:infer_ms:hailo"]?.avg;
+    const cpu = l["vision:infer_ms:cpu"]?.avg;
+    const deg = l["vision:infer_ms:degirum"]?.avg;
+
+    if (elIILatency){
+      if (hailo !== undefined || cpu !== undefined || deg !== undefined){
+        const parts = [];
+        if (hailo !== undefined) parts.push("hailo=" + fmtNum(hailo, 2));
+        if (cpu !== undefined) parts.push("cpu=" + fmtNum(cpu, 2));
+        if (deg !== undefined) parts.push("degirum=" + fmtNum(deg, 2));
+        elIILatency.textContent = `infer ms(5m): ${parts.join(" · ")}`;
+      }else{
+        elIILatency.textContent = "infer ms(5m): n/a";
+      }
+    }
+
+
+    const sg = ii.scenegraph || {};
+    if (elIISceneGraph){
+      const n = (sg.n ?? 0);
+      if (n <= 0){
+        elIISceneGraph.textContent = "scenegraph(24h): n/a";
+      }else{
+        elIISceneGraph.textContent = `scenegraph(24h): n=${n} · avg=${fmtNum(sg.avg_nodes, 1)}/${fmtNum(sg.avg_edges, 1)} · max=${(sg.max_nodes ?? 0)}/${(sg.max_edges ?? 0)}`;
+      }
+    }
+
+
+// Dream efficiency (24h) — offline learning proxy
+try{
+  const d = ii.dream_efficiency || {};
+  const ratio = d.ratio_avg_dream_vs_live;
+  const aD = d.avg_reward_dream;
+  const aL = d.avg_reward_live;
+  if (elIIDreamEff){
+    if (typeof ratio === "number" && Number.isFinite(ratio)){
+      elIIDreamEff.textContent = `dream-eff(24h): avg× ${fmtNum(ratio, 2)} (dream=${fmtNum(aD ?? 0, 3)} vs live=${fmtNum(aL ?? 0, 3)})`;
+    }else if (typeof aD === "number" || typeof aL === "number"){
+      elIIDreamEff.textContent = `dream-eff(24h): dream=${fmtNum(aD ?? 0, 3)} · live=${fmtNum(aL ?? 0, 3)}`;
+    }else{
+      elIIDreamEff.textContent = "dream-eff(24h): n/a";
+    }
+  }
+}catch(e){
+  if (elIIDreamEff) elIIDreamEff.textContent = "dream-eff(24h): n/a";
+}
+
+// Replay-Mutations (24h) — Aktivitaet von dream/mut + dream/meta
+// Hinweis: Diese Ableitungen entstehen in core/dream_worker.py waehrend _replay_batch().
+try{
+  const rm = ii.replay_mutations || {};
+  // Effektive Counts: snapchains-origin wenn vorhanden, sonst metrics(saved)
+  const nMut = (typeof rm.mut_effective_n === "number") ? rm.mut_effective_n : rm.mut_chains_n;
+  const nMeta = (typeof rm.meta_effective_n === "number") ? rm.meta_effective_n : rm.meta_chains_n;
+  const nSteps = rm.replay_steps_n;
+  const rMut = rm.mut_per_replay_step;
+  const rMeta = rm.meta_per_replay_step;
+
+  // Accounting aus Metrics (falls vorhanden)
+  const mutA = rm.mut_attempt_24h;
+  const mutS = rm.mut_saved_24h;
+  const mutF = rm.mut_save_fail_24h;
+  const mutSkip = rm.mut_skipped_none_24h;
+  const metaA = rm.meta_attempt_24h;
+  const metaS = rm.meta_saved_24h;
+  const metaF = rm.meta_save_fail_24h;
+  const metaEmpty = rm.meta_skipped_empty_24h;
+  const metaOff = rm.meta_skipped_disabled_24h;
+
+  const br = rm.batch_runs_24h;
+  const b0 = rm.batch_no_chains_24h;
+  const bc = rm.batch_candidates_24h;
+  // last_activity_ts_local fasst Batch + Saves + snapchains zusammen
+  const bl = rm.last_activity_ts_local || rm.last_saved_ts_local || rm.last_batch_ts_local;
+  if (elIIReplayMut){
+    if (typeof nMut === "number" && Number.isFinite(nMut)){
+      let t = `replay-mut(24h): mut=${nMut}`;
+      if (typeof nMeta === "number" && Number.isFinite(nMeta)) t += ` · meta=${nMeta}`;
+      if (typeof nSteps === "number" && Number.isFinite(nSteps)) t += ` · steps=${nSteps}`;
+      if (typeof rMut === "number" && Number.isFinite(rMut)) t += ` · mut/step=${fmtNum(rMut, 2)}`;
+      if (typeof rMeta === "number" && Number.isFinite(rMeta)) t += ` · meta/step=${fmtNum(rMeta, 2)}`;
+
+      // Detailliertes Accounting (nur wenn Zahlen vorhanden)
+      if (typeof mutA === "number" && Number.isFinite(mutA)){
+        const a = mutA;
+        const s = (typeof mutS === "number" && Number.isFinite(mutS)) ? mutS : 0;
+        const f = (typeof mutF === "number" && Number.isFinite(mutF)) ? mutF : 0;
+        t += ` · mut[a/s/f]=${a}/${s}/${f}`;
+      }
+      if (typeof metaEmpty === "number" && Number.isFinite(metaEmpty) && metaEmpty > 0) t += ` · meta_empty=${metaEmpty}`;
+      if (typeof metaOff === "number" && Number.isFinite(metaOff) && metaOff > 0) t += ` · meta_off=${metaOff}`;
+      if (typeof mutSkip === "number" && Number.isFinite(mutSkip) && mutSkip > 0) t += ` · mut_none=${mutSkip}`;
+      if (typeof metaA === "number" && Number.isFinite(metaA)){
+        const a = metaA;
+        const s = (typeof metaS === "number" && Number.isFinite(metaS)) ? metaS : 0;
+        const f = (typeof metaF === "number" && Number.isFinite(metaF)) ? metaF : 0;
+        if (a > 0 || s > 0 || f > 0) t += ` · meta[a/s/f]=${a}/${s}/${f}`;
+      }
+
+      // Diagnostik: ReplayBatch-Telemetrie (Metrics-Fallback)
+      if (typeof br === "number" && Number.isFinite(br)) t += ` · batch=${br}`;
+      if (typeof b0 === "number" && Number.isFinite(b0)) t += ` · no_chains=${b0}`;
+      if (typeof bc === "number" && Number.isFinite(bc)) t += ` · cand=${bc}`;
+      if (typeof bl === "string" && bl) t += ` · last=${bl}`;
+      elIIReplayMut.textContent = t;
+    }else{
+      elIIReplayMut.textContent = "replay-mut(24h): n/a";
+    }
+  }
+}catch(e){
+  if (elIIReplayMut) elIIReplayMut.textContent = "replay-mut(24h): n/a";
+}
+
+// Concept-Reuse (24h) — abstraction proxy
+try{
+  const a = ii.abstract || {};
+  const c = a.concept_reuse || {};
+  const s1 = c.share_meta_relations;
+  const s2 = c.share_relations_with_compressed;
+  if (elIIConceptReuse){
+    if ((typeof s1 === "number" && Number.isFinite(s1)) || (typeof s2 === "number" && Number.isFinite(s2))){
+      const p1 = (typeof s1 === "number" && Number.isFinite(s1)) ? fmtPct(s1, 2) : "n/a";
+      const fromNodes = (c._compressed_from_nodes === true);
+      const p2 = (typeof s2 === "number" && Number.isFinite(s2)) ? fmtPct(s2, 2) : "n/a";
+      const suf2 = fromNodes ? " (nodes)" : "";
+      elIIConceptReuse.textContent = `concept-reuse(24h): meta=${p1} · compressed=${p2}${suf2}`;
+    }else{
+      elIIConceptReuse.textContent = "concept-reuse(24h): n/a";
+    }
+  }
+}catch(e){
+  if (elIIConceptReuse) elIIConceptReuse.textContent = "concept-reuse(24h): n/a";
+}
+
+// Cross-Modal Binding (24h) — Multi-Modal Binding Index (MBI)
+try{
+  const a = ii.abstract || {};
+  const b = a.cross_modal || {};
+
+  // New (v3.7.3+): Multi-Modal Binding Index (0..1)
+  const mbi = b.mbi;
+  const bs = b.share_link_snapchains;
+  const bg = b.share_cross_modal_edges;
+  const br = b.share_replay_steps_on_link;
+
+  // Legacy: link/* relations share (kept for backward compatibility / debug)
+  const legacy = b.share_link_relations;
+
+  const top = b.top_link;
+  if (elIIBinding){
+    const haveMbi = (typeof mbi === "number" && Number.isFinite(mbi));
+    const haveAny = haveMbi || (typeof bs === "number" && Number.isFinite(bs)) || (typeof bg === "number" && Number.isFinite(bg)) || (typeof br === "number" && Number.isFinite(br)) || (typeof legacy === "number" && Number.isFinite(legacy));
+
+    if (haveAny){
+      const pMbi = haveMbi ? fmtPct(mbi, 2) : "n/a";
+      const pS = (typeof bs === "number" && Number.isFinite(bs)) ? fmtPct(bs, 2) : "n/a";
+      const pG = (typeof bg === "number" && Number.isFinite(bg)) ? fmtPct(bg, 2) : "n/a";
+      const pR = (typeof br === "number" && Number.isFinite(br)) ? fmtPct(br, 2) : "n/a";
+      const pL = (typeof legacy === "number" && Number.isFinite(legacy)) ? fmtPct(legacy, 2) : null;
+
+      // Display: prefer MBI; keep legacy if available for transparency
+      let s = `binding(24h): mbi=${pMbi} · snap=${pS} · graph=${pG} · rep=${pR}`;
+      if (pL !== null) s += ` · link_rel=${pL}`;
+      if (top) s += ` · top=${top}`;
+      elIIBinding.textContent = s;
+    }else{
+      elIIBinding.textContent = top ? `binding(24h): top=${top}` : "binding(24h): n/a";
+    }
+  }
+}catch(e){
+  if (elIIBinding) elIIBinding.textContent = "binding(24h): n/a";
+}
+
+try{
+  if (elIIBindingVision){
+    const bv = (ii && ii.binding_vision_latest) ? ii.binding_vision_latest : null;
+    if (!bv){
+      elIIBindingVision.textContent = "binding.v: —";
+    }else{
+      const ev  = Number(bv["binding.v.events.count_24h"]);
+      const uq  = Number(bv["binding.v.keys.unique_24h"]);
+      const r2  = Number(bv["binding.v.keys.repeat_ge_2_24h"]);
+      const r3  = Number(bv["binding.v.keys.repeat_ge_3_24h"]);
+      const r5  = Number(bv["binding.v.keys.repeat_ge_5_24h"]);
+      const fpD = Number(bv["binding.v.fp.dims_24h"]);
+      const fpR = Number(bv["binding.v.fp.decimals_24h"]);
+      const me  = Number(bv["binding.v.meta.empty_24h"]);
+
+      const have = Number.isFinite(ev) || Number.isFinite(uq) || Number.isFinite(r2) || Number.isFinite(r3) || Number.isFinite(r5);
+      if (!have){
+        elIIBindingVision.textContent = "binding.v: —";
+      }else{
+        const evT = Number.isFinite(ev) ? ev.toFixed(0) : "—";
+        const uqT = Number.isFinite(uq) ? uq.toFixed(0) : "—";
+        const r2T = Number.isFinite(r2) ? r2.toFixed(0) : "—";
+        const r3T = Number.isFinite(r3) ? r3.toFixed(0) : "—";
+        const r5T = Number.isFinite(r5) ? r5.toFixed(0) : "—";
+        const fpT = (Number.isFinite(fpD) && Number.isFinite(fpR)) ? `${fpD.toFixed(0)}d/${fpR.toFixed(0)}dec` : "—";
+        const meT = Number.isFinite(me) ? me.toFixed(0) : "—";
+        elIIBindingVision.textContent = `binding.v(24h): ev=${evT} · uq=${uqT} · r2=${r2T} · r3=${r3T} · r5=${r5T} · fp=${fpT} · meta_empty=${meT}`;
+      }
+    }
+  }
+}catch(e){
+  if (elIIBindingVision) elIIBindingVision.textContent = "binding.v: —";
+
+      // ------------------------------------------------------------
+      // Synapses KPI (24h) – Vernetzung (aus stats_points synapses.*)
+      // ------------------------------------------------------------
+      try{
+        const sy = (ii && ii.synapses_latest) ? ii.synapses_latest : {};
+        const n  = Number(sy["synapses.nodes_24h"]);
+        const e  = Number(sy["synapses.edges_24h"]);
+        const cc = Number(sy["synapses.components_24h"]);
+        const g  = Number(sy["synapses.giant_share_24h"]);
+        const d  = Number(sy["synapses.avg_deg_24h"]);
+
+        if (elIISynapses){
+          if (Number.isFinite(n) && n > 0){
+            const gPct = Number.isFinite(g) ? (Math.round(g * 1000) / 10) : NaN;
+            const d1   = Number.isFinite(d) ? (Math.round(d * 10) / 10) : NaN;
+            elIISynapses.textContent = `synapses(24h): n=${n.toFixed(0)} · e=${e.toFixed(0)} · cc=${cc.toFixed(0)} · giant=${gPct}% · deg=${d1}`;
+            elIISynapses.onclick = () => { window.location.href = "/synapses"; };
+          } else {
+            elIISynapses.textContent = "synapses: —";
+          }
+        }
+      }catch(e){
+        if (elIISynapses) elIISynapses.textContent = "synapses: —";
+      }
+}
+
+
+// ------------------------------------------------------------
+// Cognition Hero: Cognitive Depth Bar (compressed_share) + Dream Hero + Learning Pulse
+// ------------------------------------------------------------
+try{
+  // Cognitive Depth: compressed_share in 30d window
+  const cs = ii?.compression?.compressed_share;
+  const ac = ii?.compression?.active_per_compressed;
+  if (elCdBarFill){
+    const w = (typeof cs === "number" && Number.isFinite(cs)) ? Math.max(0, Math.min(100, cs * 100.0)) : 0;
+    elCdBarFill.style.width = w.toFixed(1) + "%";
+  }
+  if (elCdText){
+    const p = (typeof cs === "number" && Number.isFinite(cs)) ? fmtPct(cs, 2) : "n/a";
+    const acTxt = (typeof ac === "number" && Number.isFinite(ac)) ? ac.toFixed(3) : "n/a";
+    elCdText.textContent = `compressed_share=${p} · a/c=${acTxt}`;
+  }
+}catch(e){
+  if (elCdText) elCdText.textContent = "compressed_share=n/a";
+  if (elCdBarFill) elCdBarFill.style.width = "0%";
+}
+
+try{
+  // Dreaming Hero: ratio_avg_dream_vs_live
+  const d = ii?.dream_efficiency || {};
+  const ratio = d.ratio_avg_dream_vs_live;
+  const ad = d.avg_reward_dream;
+  const al = d.avg_reward_live;
+
+  if (elDreamHeroMain){
+    if (typeof ratio === "number" && Number.isFinite(ratio)){
+      elDreamHeroMain.textContent = `${ratio.toFixed(2)}×`;
+    }else{
+      elDreamHeroMain.textContent = "n/a";
+    }
+  }
+  if (elDreamHeroSub){
+    const adTxt = (typeof ad === "number" && Number.isFinite(ad)) ? ad.toFixed(3) : "n/a";
+    const alTxt = (typeof al === "number" && Number.isFinite(al)) ? al.toFixed(3) : "n/a";
+    elDreamHeroSub.textContent = `avg: dream=${adTxt} vs live=${alTxt} (24h)`;
+  }
+}catch(e){
+  if (elDreamHeroMain) elDreamHeroMain.textContent = "n/a";
+  if (elDreamHeroSub) elDreamHeroSub.textContent = "—";
+}
+
+try{
+  // Learning Pulse: last synapse origin='link/%'
+  const p = ii?.pulse?.last_synapse;
+  if (!p){
+    if (elPulseText) elPulseText.textContent = "n/a";
+    if (elPulseSub) elPulseSub.textContent = "—";
+    if (elPulseDot) elPulseDot.className = "pulseDot";
+  }else{
+    const origin = p.origin || "";
+    const age = (typeof p.age_sec === "number" && Number.isFinite(p.age_sec)) ? p.age_sec : null;
+    const tsLocal = p.ts_local || "";
+    const ageTxt = (age === null) ? "n/a" : (age < 60 ? `${Math.round(age)}s ago` : `${Math.round(age/60)}m ago`);
+    if (elPulseText) elPulseText.textContent = origin ? origin : "link/*";
+    if (elPulseSub) elPulseSub.textContent = tsLocal ? `${tsLocal} · ${ageTxt}` : ageTxt;
+
+    // Visual pulse if very recent (<30s)
+    if (elPulseDot){
+      const live = (age !== null && age <= 30);
+      elPulseDot.className = live ? "pulseDot live" : "pulseDot";
+    }
+  }
+}catch(e){
+  if (elPulseText) elPulseText.textContent = "n/a";
+  if (elPulseSub) elPulseSub.textContent = "—";
+  if (elPulseDot) elPulseDot.className = "pulseDot";
+}
+
+
+  }
+
+  async function loadIntelligence(forceRefresh=false){
+    try{
+      let ii = await learningApiGet(`/learning/api/intelligence?${forceRefresh ? "force=1" : "allow_stale=1"}`);
+      // Fail-open: if synapses_latest is missing (cached payload), refetch once with fresh semantics.
+      try {
+        const needSyn = document.getElementById("iiSynapses") != null;
+        const hasSyn = ii && ii.synapses_latest && (Object.keys(ii.synapses_latest).length > 0);
+        if (needSyn && !hasSyn){
+          ii = await learningApiGet(`/learning/api/intelligence?allow_stale=0&max_age_sec=0`);
+        }
+      } catch (e) { /* ignore */ }
+      renderIntelligence(ii);
+      updateSynapsesPill(ii);
+      try { refreshDataBadge(); } catch (e) {}
+
+    }catch(e){
+      appendDbg(`loadIntelligence failed: ${e}`);
+      setErr(`Learning: Intelligence API Fehler (Details im Debug-Block).`);
+      renderIntelligence(null);
+    }
+  }
+
+function fillMaxTable(tbodyId, rows, opts){
+  const tb = document.getElementById(tbodyId);
+  if (!tb) return;
+
+  const showSeries = !!(opts && opts.showSeries);
+  const trimFn = (opts && opts.trimSeries) ? opts.trimSeries : null;
+
+  const safe = (rows || []);
+  if (!safe.length){
+    tb.innerHTML = `<tr><td colspan="${showSeries ? 5 : 4}">—</td></tr>`;
+    return;
+  }
+
+  tb.innerHTML = safe.map(r => {
+    const per = (r.period || "");
+
+    let s = (r.series || "");
+    if (trimFn) s = trimFn(s);
+
+    const n = (typeof r.n === "number") ? r.n : Number(r.n);
+    const nTxt = Number.isFinite(n) ? String(Math.trunc(n)) : "0";
+
+    const vavg = (r.v_avg === null || r.v_avg === undefined) ? NaN : ((typeof r.v_avg === "number") ? r.v_avg : Number(r.v_avg));
+    const vavgTxt = Number.isFinite(vavg) ? vavg.toFixed(6) : "—";
+
+    const vmax = (r.v_max === null || r.v_max === undefined) ? NaN : ((typeof r.v_max === "number") ? r.v_max : Number(r.v_max));
+    const vmaxTxt = Number.isFinite(vmax) ? vmax.toFixed(6) : "—";
+
+    if (showSeries){
+      return `<tr><td>${per}</td><td>${escapeHtml(s)}</td><td class="num">${nTxt}</td><td class="num">${vavgTxt}</td><td class="num">${vmaxTxt}</td></tr>`;
+    }
+    return `<tr><td>${per}</td><td class="num">${nTxt}</td><td class="num">${vavgTxt}</td><td class="num">${vmaxTxt}</td></tr>`;
+  }).join("");
+}
+
+
+  function setMaxBadge(id, rows, label){
+    const el = document.getElementById(id);
+    if (!el) return;
+    const n = (rows || []).length;
+    el.textContent = (label ? (label + ": ") : "") + n;
+    el.className = "badge " + (n ? "ok" : "warn");
+  }
+
+  function renderMaxima(m){
+    if (!m || !m.ok){
+      // set badges to warn
+      for (const id of ["bRMax","bRDay","bRWeek","bRMonth","bMMax","bMDay","bMWeek","bMMonth","bEMax","bEDay","bEWeek","bEMonth","bCMax","bCDay","bCWeek","bCMonth"]){
+        const el = document.getElementById(id);
+        if (el){ el.textContent = "—"; el.className = "badge warn"; }
+      }
+      return;
+    }
+
+    // Cache timestamp/age for UI badge
+    try{ dataMeta.maxima.cache = (m.meta && m.meta.cache) ? m.meta.cache : {}; }catch(e){}
+  // --- cache timestamp info (for Data badge) ---
+  try{
+    const meta = m.meta || {};
+    dataMeta.maxima.cache_ts = meta.cache_ts || (meta.cache_meta_json && meta.cache_meta_json.cache_ts) || null;
+    dataMeta.maxima.cache_age_sec = meta.cache_age_sec || (meta.cache_meta_json && meta.cache_meta_json.cache_age_sec) || null;
+    dataMeta.maxima.stale = (meta.stale !== undefined) ? meta.stale : (meta.cache_meta_json && meta.cache_meta_json.stale) || false;
+  }catch(e){}
+
+    refreshDataBadge();
+
+    // Rewards
+    fillMaxTable("tbRDay", m.rewards?.daily || [], {showSeries:true, trimSeries:(s)=>String(s).replace("reward:","")});
+    fillMaxTable("tbRWeek", m.rewards?.weekly || [], {showSeries:true, trimSeries:(s)=>String(s).replace("reward:","")});
+    fillMaxTable("tbRMonth", m.rewards?.monthly || [], {showSeries:true, trimSeries:(s)=>String(s).replace("reward:","")});
+    setMaxBadge("bRDay", m.rewards?.daily || [], "");
+    setMaxBadge("bRWeek", m.rewards?.weekly || [], "");
+    setMaxBadge("bRMonth", m.rewards?.monthly || [], "");
+
+    // Metrics
+    fillMaxTable("tbMDay", m.metrics?.daily || [], {showSeries:true, trimSeries:(s)=>String(s).replace("metric:","")});
+    fillMaxTable("tbMWeek", m.metrics?.weekly || [], {showSeries:true, trimSeries:(s)=>String(s).replace("metric:","")});
+    fillMaxTable("tbMMonth", m.metrics?.monthly || [], {showSeries:true, trimSeries:(s)=>String(s).replace("metric:","")});
+    setMaxBadge("bMDay", m.metrics?.daily || [], "");
+    setMaxBadge("bMWeek", m.metrics?.weekly || [], "");
+    setMaxBadge("bMMonth", m.metrics?.monthly || [], "");
+
+    // Empathy
+    fillMaxTable("tbEDay", m.empathy?.daily || [], {showSeries:true, trimSeries:(s)=>String(s).replace("empathy:","")});
+    fillMaxTable("tbEWeek", m.empathy?.weekly || [], {showSeries:true, trimSeries:(s)=>String(s).replace("empathy:","")});
+    fillMaxTable("tbEMonth", m.empathy?.monthly || [], {showSeries:true, trimSeries:(s)=>String(s).replace("empathy:","")});
+    setMaxBadge("bEDay", m.empathy?.daily || [], "");
+    setMaxBadge("bEWeek", m.empathy?.weekly || [], "");
+    setMaxBadge("bEMonth", m.empathy?.monthly || [], "");
+
+    // Coverage
+    fillMaxTable("tbCDay", m.coverage?.daily || [], {showSeries:true, trimSeries:(s)=>String(s).replace("coverage:","")});
+    fillMaxTable("tbCWeek", m.coverage?.weekly || [], {showSeries:true, trimSeries:(s)=>String(s).replace("coverage:","")});
+    fillMaxTable("tbCMonth", m.coverage?.monthly || [], {showSeries:true, trimSeries:(s)=>String(s).replace("coverage:","")});
+    setMaxBadge("bCDay", m.coverage?.daily || [], "");
+    setMaxBadge("bCWeek", m.coverage?.weekly || [], "");
+    setMaxBadge("bCMonth", m.coverage?.monthly || [], "");
+
+    // top badges per section
+    const bRMax = document.getElementById("bRMax");
+    const bMMax = document.getElementById("bMMax");
+    const bEMax = document.getElementById("bEMax");
+    const bCMax = document.getElementById("bCMax");
+    const sampled = m.meta?.sampled ? " · sampled" : "";
+    const base = `${m.days}d${sampled}`;
+    if (bRMax){ bRMax.textContent = base; bRMax.className = "badge ok"; }
+    if (bMMax){ bMMax.textContent = base; bMMax.className = "badge ok"; }
+    if (bEMax){ bEMax.textContent = base; bEMax.className = "badge ok"; }
+    if (bCMax){ bCMax.textContent = base; bCMax.className = "badge ok"; }
+  }
+
+  async function loadMaxima(forceRefresh=false){
+    try{
+      const m = await learningApiGet(`/learning/api/maxima?days=365&take_day=14&take_week=12&take_month=12&${forceRefresh ? "force=1" : "allow_stale=1"}`);
+      renderMaxima(m);
+      try { refreshDataBadge(); } catch (e) {}
+
+    }catch(e){
+      appendDbg(`loadMaxima failed: ${e}`);
+      setErr(`Learning: Maxima API Fehler (Details im Debug-Block).`);
+      renderMaxima(null);
+    }
+  }
+
+  async function loadEnergy(){
+    try{ if (elEnergyState) elEnergyState.textContent = "cache: loading"; }catch(e){}
+    try{
+      const data = await learningApiGet("/learning/api/energy/top?limit=20");
+
+      // UI-Fallback: Falls der Server im Standard-Modus (raw=0) alles wegfiltert
+      // und daher *keine* Relations uebrig bleiben, laden wir einmalig (pro Refresh)
+      // die Rohdaten nach. Das ist bewusst eine reine Anzeige-Entscheidung.
+      // Hintergrund: In vielen Zuständen dominiert technische Infrastruktur (z.B.
+      // vision/token, scenegraph:*). Der Server filtert diese per Default weg, um
+      // semantische Top-Relations sichtbar zu machen. Wenn es aber (noch) keine
+      // semantischen Relations gibt, wirkt die UI sonst "leer".
+      try{
+        const rels = (data && Array.isArray(data.relations)) ? data.relations : [];
+        if (!rels.length){
+          const rawData = await learningApiGet("/learning/api/energy/top?limit=20&raw=1");
+          const rawRels = (rawData && Array.isArray(rawData.relations)) ? rawData.relations : [];
+          if (rawRels.length){
+            data.relations = rawRels;
+            try{
+              data.meta = data.meta || {};
+              data.meta.errors = Array.isArray(data.meta.errors) ? data.meta.errors : [];
+              if (!data.meta.errors.includes("ui_relations_raw_fallback")) data.meta.errors.push("ui_relations_raw_fallback");
+            }catch(e){}
+          }
+        }
+      }catch(e){
+        // Keine harte Fehlersignatur: UI darf weiterlaufen.
+        appendDbg(`energy relations raw fallback failed: ${e}`);
+      }
+      const m = data.meta || {};
+
+      // Cache timestamp/age for UI badge
+      try{ dataMeta.energy.meta = m || {}; }catch(e){}
+      refreshDataBadge();
+
+      const ageO = m.objects_age_sec;
+      const ageR = m.relations_age_sec;
+
+      const ok = !!data.ok; // data present
+      const fresh = (m && (m.cache_fresh !== undefined)) ? Boolean(m.cache_fresh) : null;
+      const errs = (m && Array.isArray(m.errors) && m.errors.length) ? (` · errors=` + m.errors.join(",")) : "";
+
+      let txt;
+      if (!ok){
+        txt = `cache: leer/aus${errs}`;
+      } else if (fresh === true){
+        txt = `cache: ok · obj_age=${ageO ?? "?"}s · rel_age=${ageR ?? "?"}s${errs}`;
+      } else if (fresh === false){
+        txt = `cache: stale · obj_age=${ageO ?? "?"}s · rel_age=${ageR ?? "?"}s${errs}`;
+        appendDbg(`energy cache stale (data shown): obj_age=${ageO ?? "?"} rel_age=${ageR ?? "?"}`);
+      } else {
+        txt = `cache: ok? · obj_age=${ageO ?? "?"}s · rel_age=${ageR ?? "?"}s${errs}`;
+      }
+
+      // Niemals still 'zurueckfallen': wenn ok==false oder errors -> Debug-Log
+      if (!ok && errs) appendDbg(`energy cache not ok: ${errs}`);
+      elEnergyState.textContent = txt;
+
+      renderEnergyList(elTopObjects, data.objects || [], "objects");
+      renderEnergyList(elTopRelations, data.relations || [], "relations");
+    }catch(e){
+      appendDbg(`loadEnergy failed: ${e}`);
+      setErr(`Learning: Energy API Fehler (Details im Debug-Block).`);
+      elEnergyState.textContent = "cache: error";
+      renderEnergyList(elTopObjects, [], "objects");
+      renderEnergyList(elTopRelations, [], "relations");
+    }
+  }
+
+function fmtNum3(v){
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toFixed(3) : "—";
+}
+function fmtAgeShort(sec){
+  const n = Number(sec);
+  if (!Number.isFinite(n)) return "—";
+  if (n < 60) return Math.round(n) + "s";
+  if (n < 3600) return Math.round(n/60) + "m";
+  return (n/3600).toFixed(1) + "h";
+}
+async function loadVisionPrimitives(forceRefresh=false){
+  try{
+    const url = `/learning/api/vision_primitives?window_sec=86400&${forceRefresh ? "force=1" : "allow_stale=1"}`;
+    const data = await learningApiGet(url);
+    const last = data.last || {};
+    const avg = data.avg || {};
+    const maxv = data.max || {};
+    if (elVpCount) elVpCount.textContent = `count: ${Number(data.count || 0)}`;
+    if (elVpAge) elVpAge.textContent = `age: ${fmtAgeShort(data.age_sec)}`;
+    if (elVpMotionLast) elVpMotionLast.textContent = `last: ${fmtNum3(last.motion)}`;
+    if (elVpMotionAvg) elVpMotionAvg.textContent = `avg: ${fmtNum3(avg.motion)}`;
+    if (elVpMotionMax) elVpMotionMax.textContent = `max: ${fmtNum3(maxv.motion)}`;
+    if (elVpEdgesLast) elVpEdgesLast.textContent = `last: ${fmtNum3(last.edges)}`;
+    if (elVpEdgesAvg) elVpEdgesAvg.textContent = `avg: ${fmtNum3(avg.edges)}`;
+    if (elVpEdgesMax) elVpEdgesMax.textContent = `max: ${fmtNum3(maxv.edges)}`;
+    if (elVpColorLast) elVpColorLast.textContent = `last: ${fmtNum3(last.color)}`;
+    if (elVpColorAvg) elVpColorAvg.textContent = `avg: ${fmtNum3(avg.color)}`;
+    if (elVpColorMax) elVpColorMax.textContent = `max: ${fmtNum3(maxv.color)}`;
+    if (elVpQLast) elVpQLast.textContent = `last: ${fmtNum3(last.q)}`;
+    if (elVpQAvg) elVpQAvg.textContent = `avg: ${fmtNum3(avg.q)}`;
+    if (elVpQMax) elVpQMax.textContent = `max: ${fmtNum3(maxv.q)}`;
+    if (elVpHint) elVpHint.textContent = `Quelle: vision/token · last_ts=${data.last_ts || 0} · window=24h`;
+  }catch(e){
+    appendDbg(`vision primitives load failed: ${e}`);
+    if (elVpHint) elVpHint.textContent = "Quelle: vision/token · Fehler beim Laden der Primitive";
+  }
+}
+
+  async function loadExportMeta(){
+    try{
+      const data = await learningApiGet("/learning/api/export_meta");
+      dataMeta.export = data || {};
+      refreshDataBadge();
+    }catch(e){
+      // Non-fatal: on very old builds this endpoint may not exist.
+      dataMeta.export = { ok: false, exists: false };
+      refreshDataBadge();
+    }
+  }
+
+  async function loadAll(forceRefresh=false){
+    const loadSeq = ++learningLoadSeq;
+    destroyAll();
+    elErr.style.display = "none";
+
+    if (typeof window.Chart === "undefined"){
+      setBadge(badgeChart, "bad", "Chart: MISS");
+      setErr("Chart.js ist nicht geladen. Prüfe /static/chart.min.js und base.html include.");
+      return;
+    }
+    setBadge(badgeChart, "ok", "Chart: OK");
+    setChartDefaults();
+
+    try{
+      const curve = await learningApiGet("/learning/api/curve?days=120");
+      if (!isActiveLoad(loadSeq)) return;
+      renderCurve(curve);
+    }catch(e){
+      appendDbg(`curve load failed: ${e}`);
+      if (isActiveLoad(loadSeq)) setErr(`Learning: Curve API Fehler (Details im Debug-Block).`);
+    }
+
+    if (!isActiveLoad(loadSeq)) return;
+    await loadMaxima(forceRefresh);
+    if (!isActiveLoad(loadSeq)) return;
+
+    await loadIntelligence(forceRefresh);
+    if (!isActiveLoad(loadSeq)) return;
+
+    await loadEnergy();
+    if (!isActiveLoad(loadSeq)) return;
+
+    await loadExportMeta();
+    if (!isActiveLoad(loadSeq)) return;
+
+    try{
+      const histUrl = `/learning/api/history?window_sec=86400&max_age_sec=300&${forceRefresh ? "force=1" : "allow_stale=1"}`;
+      const hist = await learningApiGet(histUrl, forceRefresh ? 15000 : 12000);
+      if (!isActiveLoad(loadSeq)) return;
+      render4(hist);
+    }catch(e){
+      appendDbg(`history load failed: ${e}`);
+      if (isActiveLoad(loadSeq)) setErr(`Learning: History API Fehler (Details im Debug-Block).`);
+    }
+
+    if (!isActiveLoad(loadSeq)) return;
+    await loadVisionPrimitives(forceRefresh);
+    if (!isActiveLoad(loadSeq)) return;
+    document.getElementById("btnCSV").href = "/learning/api/curve.csv?days=365";
+    document.getElementById("btnCSVAll").href = "/learning/api/export.csv?days=365&window_sec=86400&cached=1";
+  }
+
+  async function runSelftest(){
+    try{
+      const r = await fetch("/learning/api/selftest", { headers: authHeaders() });
+      const t = await r.text();
+      document.getElementById("selfOut").textContent = t;
+    }catch(e){
+      document.getElementById("selfOut").textContent = "Selftest Fehler: " + String(e);
+    }
+  }
+
+  async function runTestgraph(){
+    destroyAll();
+    elErr.style.display = "none";
+
+    if (typeof window.Chart === "undefined"){
+      setErr("Chart.js ist nicht geladen → Testgraph geht auch nicht.");
+      return;
+    }
+    setChartDefaults();
+
+    const tg = await learningApiGet("/learning/api/testgraph");
+    setBadge(badgeDB, "warn", "DB: Testgraph");
+    render4({ meta:{stats_db_ok:false}, points: tg.points });
+    renderCurve(tg.curve);
+    await loadMaxima(false);
+    await loadIntelligence(false);
+    setDbg("✅ Testgraph gezeichnet (Phantasie-Werte).");
+
+    // Energy in Testgraph weiterhin versuchen (kann ja laufen)
+    await loadEnergy();
+  }
+
+  // "Neu laden" soll in der Praxis *wirklich* neu laden (kein allow_stale Cache).
+  // Hintergrund: die Learning-Seite arbeitet absichtlich mit Cache/Failover
+  // (allow_stale=1), damit Charts/Stats auch bei kurzen SQLite-Wartezeiten
+  // angezeigt werden koennen. Der Button muss daher explizit den "force"-Pfad
+  // nutzen, sonst wirkt er fuer den Operator wie "ohne Wirkung".
+  // Umsetzung: loadAll(true) -> loadIntelligence(forceRefresh=true) -> ?force=1
+  // und analog fuer maxima (falls dort ebenfalls Caching greift).
+  
+  const btnRefresh = document.getElementById("btnRefresh");
+  const btnSelftest = document.getElementById("btnSelftest");
+  const btnTestgraph = document.getElementById("btnTestgraph");
+  const btnCSV = document.getElementById("btnCSV");
+  const btnCSVAll = document.getElementById("btnCSVAll");
+
+  if (btnRefresh) {
+    // Umsetzung: loadAll(true) -> loadIntelligence(forceRefresh=true) -> ?force=1
+    btnRefresh.addEventListener("click", () => {
+      loadAll(true).catch((e) => {
+        try { setErr("Load Fehler: " + (e?.message || e)); } catch (_) {}
+        console.error(e);
+      });
+    });
+  }
+
+  if (btnSelftest) {
+    btnSelftest.addEventListener("click", () => {
+      runSelftest().catch((e) => {
+        try { setErr("Selftest Fehler: " + (e?.message || e)); } catch (_) {}
+        console.error(e);
+      });
+    });
+  }
+
+  if (btnTestgraph) {
+    btnTestgraph.addEventListener("click", () => {
+      runTestgraph().catch((e) => {
+        try { setErr("Testgraph Fehler: " + (e?.message || e)); } catch (_) {}
+        console.error(e);
+      });
+    });
+  }
+
+  // CSV Buttons: keine JS-Ueberschreibung der href-Parameter (Safari/Cache/Query-Params muessen erhalten bleiben).
+  // Die Links enthalten bereits die korrekten Query-Parameter.
+
+  // Initialer Ladevorgang (WICHTIG: kein force=1 beim Initialload – sonst blockiert Maxima/Export und Safari bricht ab)
+  loadAll(false).catch((e) => {
+    try { setErr("Load Fehler: " + (e?.message || e)); } catch (_) {}
+    console.error(e);
+  });
+
+
+function toggleIILegend(){
+  try{
+    const el = document.getElementById("iiLegend");
+    if (!el) return;
+    el.style.display = (el.style.display === "none" || !el.style.display) ? "block" : "none";
+  }catch(e){}
+}
+
+</script>
+{% endblock %}

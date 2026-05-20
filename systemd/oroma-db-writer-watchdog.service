@@ -1,0 +1,40 @@
+# =============================================================================
+# Pfad:      /opt/ai/oroma/systemd/oroma-db-writer-watchdog.service
+# Projekt:   ORÓMA (Stufe C · Global Single Writer)
+# Zweck:     Periodischer Health-Check (PING) für den DBWriter Daemon.
+#            Bei Ausfall wird der DBWriter via systemctl neu gestartet.
+# Version:   v3.7.3+
+# Stand:     2026-03-04
+#
+# WICHTIG (systemd Kompatibilität)
+# ───────────────────────────────
+# - Kein "StandardOutput=append:" (nicht überall unterstützt)
+# - Kein heredoc innerhalb von ExecStart (führt leicht zu Quoting-Fehlern)
+#   → wir nutzen eine robuste python3 -c Einzeiler-Variante.
+#
+# DESIGN
+# ──────
+# - DBWriter ist ein SPOF. Wenn Ping fehlschlägt: Restart db-writer.
+# - Best-Effort: Watchdog darf nie das System blockieren. Er loggt sichtbar
+#   nach /opt/ai/oroma/logs/ und beendet sich stets mit ExitCode 0.
+#
+# KONFIG (optional)
+# ─────────────────
+# - OROMA_DBW_SOCKET
+# - OROMA_DBW_WATCHDOG_TIMEOUT_MS (Default 500)
+# =============================================================================
+
+[Unit]
+Description=ORÓMA DBWriter Watchdog (PING + Restart)
+After=oroma-db-writer.service
+Wants=oroma-db-writer.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai/oroma
+Environment=OROMA_DBW_ENABLE=1
+Environment=PYTHONPATH=/opt/ai/oroma
+ExecStart=/bin/bash -lc 'OUT=/opt/ai/oroma/logs/db_writer_watchdog.out.log; ERR=/opt/ai/oroma/logs/db_writer_watchdog.err.log; mkdir -p /opt/ai/oroma/logs >/dev/null 2>&1 || true; touch "$OUT" "$ERR" >/dev/null 2>&1 || true; echo "[watchdog] $(date -Is) ping start" >>"$OUT"; /usr/bin/python3 /opt/ai/oroma/tools/db_writer_watchdog.py >>"$OUT" 2>>"$ERR"; code=$?; if [ "$code" != "0" ]; then echo "[watchdog] $(date -Is) ping failed (code=$code) -> restarting oroma-db-writer" >>"$OUT"; systemctl restart oroma-db-writer.service >>"$OUT" 2>>"$ERR" || true; else echo "[watchdog] $(date -Is) ping ok" >>"$OUT"; fi; exit 0'
+
+[Install]
+WantedBy=multi-user.target

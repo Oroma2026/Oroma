@@ -1,0 +1,11 @@
+[Unit]
+Description=ORÓMA – Kamera Trainer Timer (alle 3h)
+
+[Timer]
+OnBootSec=5m
+OnUnitActiveSec=3h
+AccuracySec=1m
+Unit=oroma-cam-train.service
+
+[Install]
+WantedBy=timers.target

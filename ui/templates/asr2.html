@@ -1,0 +1,190 @@
+<!-- =============================================================================
+     Pfad:    /opt/ai/oroma/ui/templates/asr2.html
+     Projekt: ORÓMA
+     Version: v3.0
+     Stand:   2025-09-21
+
+     Zweck:
+       UI-Seite für ASR2 (OromaWrapper.asr_stream)
+       - Formulareingabe Sprache/Modell/Dauer
+       - Einmalige Aufnahme + Transkription
+============================================================================= -->
+{% extends "base.html" %}
+{% block content %}
+<div class="container-fluid mt-4">
+  <h2>🎙 ASR (OromaWrapper)</h2>
+  <p class="text-muted">Meta-Wrapper → AudioWrapper → Whisper/NPU.</p>
+
+  <div class="card bg-dark text-light shadow">
+    <div class="card-header">Einstellungen</div>
+    <div class="card-body">
+<div class="row g-3">
+  <div class="col-12 col-md-4">
+    <label class="form-label" for="asr2_duration">Dauer (Sek.)</label>
+    <input id="asr2_duration" type="number" class="form-control" min="0.5" max="30" step="0.5" value="5">
+  </div>
+  <div class="col-12 col-md-4">
+    <label class="form-label" for="asr2_language">Sprache</label>
+    <select id="asr2_language" class="form-select">
+      <option value="de" selected>de</option>
+      <option value="en">en</option>
+      <option value="auto">auto</option>
+    </select>
+  </div>
+  <div class="col-12 col-md-4">
+    <label class="form-label" for="asr2_model">Model</label>
+    <input id="asr2_model" type="text" class="form-control" value="base">
+  </div>
+</div>
+
+<div class="row g-3 mt-2">
+  <div class="col-12 col-md-6">
+    <label class="form-label" for="asr2_gain">Audio Gain (dB, 0.0 = unity)</label>
+    <input id="asr2_gain" type="number" class="form-control" min="-24" max="24" step="0.5" value="0.0">
+    <div class="form-text">
+      Tipp: Werte wie <b>1.0</b> oder <b>4.0</b> sind nur leichte Boosts. Wenn es hallig wird: runter.
+    </div>
+  </div>
+  <div class="col-12 col-md-6">
+    <label class="form-label">Audio Input (Info)</label>
+    <div class="alert alert-secondary py-2 mb-0" style="font-size: 0.95rem;">
+      <div><b>DeviceHub</b> nutzt primär ENV:</div>
+      <div><code>OROMA_AUDIO_INPUT_INDEX</code> (PortAudio Index)</div>
+      <div><code>OROMA_AUDIO_INPUT_NAME</code> (Name-Match)</div>
+      <div class="mt-1">Gefundene Geräte (aus <code>/audio/api/devices</code>):</div>
+      <div id="asr2_devices" style="white-space: pre-wrap;"></div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3 mt-2">
+  <div class="col-12 col-md-6">
+    <button class="btn btn-outline-secondary w-100" onclick="previewWav(); return false;">🎧 Preview WAV (aus Ringbuffer)</button>
+  </div>
+  <div class="col-12 col-md-6">
+    <button class="btn btn-primary w-100" onclick="runAsr(); return false;">🎙️ ASR2 Run</button>
+  </div>
+  <div class="col-12">
+    <audio id="asr2_audio" controls style="width:100%;"></audio>
+  </div>
+</div>
+
+<hr class="my-3">
+<div class="alert alert-info py-2" style="font-size: 0.95rem;">
+  <b>Status:</b> <span id="asr2_status">lädt…</span>
+  <div class="mt-1" style="white-space: pre-wrap;" id="asr2_status_detail"></div>
+</div>
+      <form id="asrForm" class="row g-2">
+        <div class="col-md-3">
+          <label for="lang" class="form-label">Sprache</label>
+          <input type="text" id="lang" class="form-control" value="de">
+        </div>
+        <div class="col-md-3">
+          <label for="model" class="form-label">Modell</label>
+          <input type="text" id="model" class="form-control" value="small">
+        </div>
+        <div class="col-md-3">
+          <label for="dur" class="form-label">Dauer (s)</label>
+          <input type="number" id="dur" class="form-control" value="5" min="1" max="30">
+        </div>
+        <div class="col-md-3 d-flex align-items-end">
+          <button type="button" id="btnRun" class="btn btn-primary w-100">▶️ Start</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="card bg-dark text-light shadow mt-3">
+    <div class="card-header">Ergebnis</div>
+    <div class="card-body">
+      <pre id="out" class="bg-black p-2 rounded small text-white"
+           style="height:200px; overflow-y:auto;">Noch nichts…</pre>
+    </div>
+  </div>
+</div>
+
+<script>
+document.getElementById("btnRun").onclick = async () => {
+  const lang = document.getElementById("lang").value || "de";
+  const model = document.getElementById("model").value || "small";
+  const dur = parseInt(document.getElementById("dur").value) || 5;
+  document.getElementById("out").textContent = "⏳ Aufnahme läuft...";
+  try {
+    const r = await fetch("/asr2/api/run", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({language: lang, model: model, duration: dur})
+    });
+    const j = await r.json();
+    document.getElementById("out").textContent = j.ok
+      ? JSON.stringify(j.result, null, 2)
+      : "❌ Fehler: " + (j.error||"");
+  } catch(e){
+    document.getElementById("out").textContent = "❌ API-Fehler: " + e;
+  }
+};
+function previewWav() {
+  const duration = parseFloat(document.getElementById('asr2_duration').value || '3');
+  const gain = parseFloat(document.getElementById('asr2_gain').value || '0.0');
+  const url = `/audio/api/wav?sec=${encodeURIComponent(duration)}&gain=${encodeURIComponent(gain)}`;
+  const audio = document.getElementById('asr2_audio');
+  audio.src = url + `&t=${Date.now()}`; // cache-bust
+  audio.play().catch(() => {});
+}
+
+function loadAsr2Status() {
+  fetch('/asr2/api/status', {cache: 'no-store'})
+    .then(r => r.json())
+    .then(j => {
+      const s = document.getElementById('asr2_status');
+      const d = document.getElementById('asr2_status_detail');
+      if (!j || !j.ok) {
+        s.textContent = 'ERROR';
+        d.textContent = JSON.stringify(j, null, 2);
+        return;
+      }
+      s.textContent = (j.active ? 'aktiv' : 'inaktiv') + ` | backend=${j.backend}`;
+      d.textContent = JSON.stringify(j, null, 2);
+    })
+    .catch(e => {
+      const s = document.getElementById('asr2_status');
+      const d = document.getElementById('asr2_status_detail');
+      s.textContent = 'ERROR';
+      d.textContent = String(e);
+    });
+}
+
+function loadAudioDevices() {
+  fetch('/audio/api/devices', {cache: 'no-store'})
+    .then(r => r.json())
+    .then(j => {
+      const box = document.getElementById('asr2_devices');
+      if (!box) return;
+      if (!j || !j.ok) {
+        box.textContent = JSON.stringify(j, null, 2);
+        return;
+      }
+      // Kompakt anzeigen (Input-Liste)
+      const lines = [];
+      for (const dev of (j.input || [])) {
+        // dev: {index,name,hostapi,...} (abhängig vom Hub)
+        const idx = (dev.index !== undefined ? dev.index : dev.id);
+        lines.push(`${idx}: ${dev.name || ''}`);
+      }
+      if (!lines.length) lines.push('(keine Geräte gefunden)');
+      box.textContent = lines.join('\n');
+    })
+    .catch(e => {
+      const box = document.getElementById('asr2_devices');
+      if (box) box.textContent = String(e);
+    });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadAudioDevices();
+  loadAsr2Status();
+  // regelmäßiger Refresh
+  setInterval(loadAsr2Status, 5000);
+});
+</script>
+{% endblock %}

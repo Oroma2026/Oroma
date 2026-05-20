@@ -1,0 +1,614 @@
+/* ==========================================================================
+ *  Pfad:    /opt/ai/oroma/ui/static/style.css
+ *  Projekt: ORÓMA
+ *  Version: v3.5 Patch 2.2
+ *  Stand:   2025-09-25
+ *
+ *  Zweck:
+ *    - Zentrales Stylesheet für das ORÓMA-Dashboard
+ *    - Definiert Layout, Navigation, Karten, Tabellen, Buttons
+ *    - Enthält Styles für Badges, Empathy-/Health-/Forgetting-Darstellung
+ *
+ *  Enthaltene Bereiche:
+ *    • Basislayout (Body, Fonts, Farben, Darkmode)
+ *    • Navigation (Navbar, Hover-Effekte)
+ *    • Badges (Gap, Phase, ASR, Health, Forgetting, Empathy, GPU/NPU)
+ *    • Container, Karten & Tabellen
+ *    • Buttons & Formulare (inkl. Fokus-Hervorhebung)
+ *    • Charts (Canvas, Legenden)
+ *    • Info-Boxen, Export-Links, Statusanzeigen
+ *    • Selftest-Ausgabe
+ *    • Footer
+ *
+ *  Besonderheiten Patch-Level:
+ *    - Patch 2.1 → Health-Badges (NPU/GPU)
+ *    - Patch 2.2 → Forgetting-Badges (Snap-Verblassen)
+ *    - v3.6 → Curriculum- und Missions-Badges (CSS-Klassen vorbereiten!)
+ *
+ *  Hinweise:
+ *    - Alle Badges sind für scripts.js optimiert (Klassenwechsel per API-Status).
+ *    - Bei neuen Modulen → neue Badge-Klassen + Farbcodierung hier ergänzen.
+ * ========================================================================== */
+
+/* --- Utility (Bootstrap-kompatibel, ohne Bootstrap) ----------------------- */
+.d-none { display: none !important; }
+
+
+/* =============================================================================
+   Badge-Legende – ORÓMA v3.6
+   ---------------------------------------------------------------------------
+   Einheitliche Farb-Codierung aller Status-Badges im Dashboard.
+   Jede Badge-Klasse (gap, phase, asr, health, forgetting, curriculum, missions)
+   folgt den gleichen Grundregeln:
+     - ok   → grün
+     - warn → orange
+     - fail → rot
+     - off/unknown → grau
+   ---------------------------------------------------------------------------
+
+   Farben:
+     #4caf50 (grün)    = OK / stabil / keine Probleme
+     #ff9800 (orange)  = Warnung / offen / Übergangszustand
+     #f44336 (rot)     = Fehler / kritisch / Problem
+     #777 (grau)       = Inaktiv / Unbekannt / OFF
+
+   Badge-Typen (Beispiele):
+   -------------------------
+   • Gap-Badge:
+       gap-low   (wenig Lücken → gut)
+       gap-med   (mittel → beobachtbar)
+       gap-high  (viele Lücken → schlecht)
+   • Phase-Badge:
+       phase-day     (Day-Modus aktiv)
+       phase-dream   (Dream-Modus aktiv)
+       phase-unknown (nicht ermittelbar)
+   • ASR-Badge:
+       asr-ok   (Whisper/Wrapper aktiv)
+       asr-off  (kein ASR aktiv)
+   • Health-Badge (NPU/GPU):
+       npu-ok / gpu-ok      (alles stabil)
+       npu-warn / gpu-warn  (eingeschränkt, Teilwarnung)
+       npu-fail / gpu-fail  (Fehler erkannt)
+       npu-off / gpu-off    (kein Modul aktiv)
+   • Forgetting-Badge:
+       forgetting-ok    (Kompression & Gewichtung stabil)
+       forgetting-warn  (leichter Drift, beobachtbar)
+       forgetting-fail  (starkes Verblassen / Fehler)
+   • Curriculum-Badge:
+       badge-ok    (Stage läuft normal)
+       badge-warn  (Übergang / Grenze erreicht)
+       badge-fail  (Fehler, keine Stage ermittelbar)
+   • Missions-Badge:
+       badge-ok    (0 offene Missionen)
+       badge-warn  (aktive Mission(en) offen)
+       badge-fail  (Fehler beim Laden der Missionen)
+
+   Hinweis:
+     - Neue Module sollten dieselben Farbcodes übernehmen,
+       um die UI konsistent und intuitiv zu halten.
+============================================================================= */
+
+/* Basislayout */
+body {
+    font-family: "Segoe UI", Roboto, Arial, sans-serif;
+    background-color: #111 !important;
+    color: #eee !important;
+    line-height: 1.6;
+}
+
+/* Navbar */
+nav ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    list-style: none;
+    margin: 0;
+    padding: 0.5em;
+    background-color: #1a1a1a;
+    border-bottom: 1px solid #333;
+}
+nav ul li {
+    display: inline-block;
+}
+nav ul li a {
+    color: #ccc;
+    text-decoration: none;
+    padding: 4px 8px;
+}
+nav ul li a:hover {
+    color: #fff;
+}
+
+/* Badges */
+.gap-badge, .phase-badge, .asr-badge {
+    font-size: 0.8em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 6px;
+}
+.gap-low { background: #4caf50; color: #fff; }
+.gap-med { background: #ff9800; color: #fff; }
+.gap-high { background: #f44336; color: #fff; }
+.phase-day { background: #2196f3; color: #fff; }
+.phase-dream { background: #9c27b0; color: #fff; }
+.phase-unknown { background: #777; color: #fff; }
+.asr-ok { background: #4caf50; color: #fff; }
+.asr-off { background: #777; color: #fff; }
+
+/* Container / Karten */
+.container, .card {
+    background: #1c1c1c !important;
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    color: #eee !important;
+}
+.card .card-header {
+    background: #222 !important;
+    color: #4caf50 !important;
+    border-bottom: 1px solid #333;
+}
+
+/* Tabellen */
+.table {
+    background: #1c1c1c !important;
+    color: #eee !important;
+    font-size: 0.95em;
+}
+.table thead th {
+    background: #333 !important;
+    color: #eee !important;
+}
+.table td, .table th {
+    border-color: #333 !important;
+}
+
+/* Buttons */
+.btn, .form-control {
+    border-radius: 4px !important;
+}
+.btn-primary, .btn-success {
+    background-color: #4caf50 !important;
+    border: none !important;
+}
+.btn-primary:hover, .btn-success:hover {
+    background-color: #45a049 !important;
+}
+#btn-selftest {
+    background-color: #ff9800 !important;
+    border: none;
+    font-weight: bold;
+}
+#btn-selftest:hover {
+    background-color: #e68900 !important;
+}
+
+/* Formulare */
+.form-control {
+    background: #222 !important;
+    color: #eee !important;
+    border: 1px solid #444 !important;
+}
+.form-control:focus {
+    background: #222 !important;
+    border-color: #4caf50 !important;
+    box-shadow: 0 0 0 0.2rem rgba(76, 175, 80, 0.25) !important;
+}
+
+/* Charts */
+canvas {
+    background: #111 !important;
+    border: 1px solid #333 !important;
+    border-radius: 6px;
+    padding: 4px;
+}
+
+/* Chart Legend */
+.chart-legend {
+    margin-top: 8px;
+    font-size: 0.85em;
+}
+.chart-legend span {
+    display: inline-block;
+    margin-right: 12px;
+    font-weight: bold;
+}
+.chart-legend .legend-novelty { color: cyan; }
+.chart-legend .legend-confidence { color: yellow; }
+.chart-legend .legend-timegoal { color: magenta; }
+.chart-legend .legend-coverage { color: deepskyblue; }
+
+/* Info-Boxen */
+.info-box {
+    margin-top: 1em;
+    padding: 1em;
+    background: #1e1e1e;
+    border-left: 4px solid #4caf50;
+}
+
+/* Export Links */
+a.export-link {
+    color: #4caf50;
+    text-decoration: none;
+}
+a.export-link:hover {
+    text-decoration: underline;
+}
+
+/* Statusanzeigen */
+.status-ok { color: #4caf50; font-weight: bold; }
+.status-fail { color: #f44336; font-weight: bold; }
+
+/* Selftest Output */
+#selftest-output {
+    max-height: 300px;
+    overflow-y: auto;
+    background: #000;
+    border: 1px solid #333;
+    border-radius: 6px;
+    color: #eee;
+    font-family: monospace;
+    font-size: 0.85em;
+    white-space: pre-wrap;
+}
+
+/* Footer */
+footer {
+    text-align: center;
+    padding: 10px;
+    background: #1a1a1a;
+    color: #888;
+    font-size: 0.9em;
+    margin-top: 30px;
+}
+
+/* =============================================================================
+   Empathy Dashboard – Mood Badges & States
+============================================================================= */
+
+/* Valence (Stimmung positiv/negativ/neutral) */
+.empathy-valence {
+    font-weight: bold;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+.empathy-valence-pos { background: #4caf50; color: #fff; }
+.empathy-valence-neg { background: #f44336; color: #fff; }
+.empathy-valence-neutral { background: #777; color: #fff; }
+
+/* Arousal (Erregungsniveau) */
+.empathy-arousal {
+    font-weight: bold;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+.empathy-arousal-high { background: #ff9800; color: #fff; }
+.empathy-arousal-low { background: #2196f3; color: #fff; }
+.empathy-arousal-mid { background: #9c27b0; color: #fff; }
+
+/* Confidence (Sicherheit der Einschätzung) */
+.empathy-confidence {
+    font-weight: bold;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+.empathy-confidence-high { background: #4caf50; color: #fff; }
+.empathy-confidence-med { background: #ffeb3b; color: #000; }
+.empathy-confidence-low { background: #f44336; color: #fff; }
+
+/* Verlaufstabelle für Empathie */
+#history-body tr:hover {
+    background: #2a2a2a;
+}
+
+/* =============================================================================
+   Health Dashboard – NPU/GPU Badges
+============================================================================= */
+
+/* Allgemeiner Stil */
+.health-badge {
+    font-size: 0.8em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 6px;
+}
+
+/* NPU Status */
+.npu-ok    { background: #4caf50; color: #fff; }
+.npu-warn  { background: #ff9800; color: #fff; }
+.npu-fail  { background: #f44336; color: #fff; }
+.npu-off   { background: #777; color: #fff; }
+
+/* GPU Status */
+.gpu-ok    { background: #4caf50; color: #fff; }
+.gpu-warn  { background: #ff9800; color: #fff; }
+.gpu-fail  { background: #f44336; color: #fff; }
+.gpu-off   { background: #777; color: #fff; }
+
+/* Forgetting Badges */
+.forgetting-badge {
+    font-size: 0.8em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 6px;
+}
+.forgetting-ok   { background: #4caf50; color: #fff; }
+.forgetting-warn { background: #ff9800; color: #fff; }
+.forgetting-fail { background: #f44336; color: #fff; }
+
+/* =============================================================================
+   Chat UI Styles – ORÓMA v3.7
+   ---------------------------------------------------------------------------
+   Einheitliche Darstellung für Chat (chat.html):
+     - Chatblasen: Nutzer (rechts, blau), ORÓMA (links, grün), System (grau).
+     - Responsive: passt sich mobiler Breite an.
+============================================================================= */
+
+.chatrow {
+    display: flex;
+    margin: 4px 0;
+    font-family: monospace;
+}
+
+.chatbubble {
+    max-width: 75%;
+    padding: 6px 10px;
+    border-radius: 10px;
+    line-height: 1.4;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+    font-size: 0.9em;
+}
+
+.chat-user {
+    margin-left: auto;
+    background-color: #007bff; /* Blau → User */
+    color: #fff;
+    border-bottom-right-radius: 0;
+}
+
+.chat-oroma {
+    margin-right: auto;
+    background-color: #4caf50; /* Grün → ORÓMA */
+    color: #fff;
+    border-bottom-left-radius: 0;
+}
+
+.chat-system {
+    margin: 0 auto;
+    background-color: #6c757d; /* Grau → Systemhinweis */
+    color: #f8f9fa;
+    font-style: italic;
+}
+
+/* Mobile: Chatblasen sollen 90% Breite nutzen */
+@media (max-width: 480px) {
+    .chatbubble {
+        max-width: 90%;
+        font-size: 0.85em;
+    }
+}
+
+/* =============================================================================
+   Curriculum & Missions Badges (v3.6)
+============================================================================= */
+
+/* Curriculum-Badge */
+.curriculum-badge {
+    font-size: 0.8em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 6px;
+    background: #555;
+    color: #fff;
+}
+.curriculum-badge.badge-ok {
+    background: #4caf50;  /* grün = aktiver Stage */
+    color: #fff;
+}
+.curriculum-badge.badge-fail {
+    background: #f44336;  /* rot = Fehler/keine Daten */
+    color: #fff;
+}
+.curriculum-badge.badge-warn {
+    background: #ff9800;  /* orange = Übergangszustand */
+    color: #fff;
+}
+
+/* Missions-Badge */
+.missions-badge {
+    font-size: 0.8em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 6px;
+    background: #555;
+    color: #fff;
+}
+.missions-badge.badge-ok {
+    background: #4caf50;  /* grün = keine offenen Missionen */
+    color: #fff;
+}
+.missions-badge.badge-warn {
+    background: #ff9800;  /* orange = aktive Mission(en) offen */
+    color: #fff;
+}
+.missions-badge.badge-fail {
+    background: #f44336;  /* rot = Fehler/keine Daten */
+    color: #fff;
+}
+
+/* =============================================================================
+   Generische Badge-Klassen – wiederverwendbar für neue Module
+   ---------------------------------------------------------------------------
+   Idee:
+     - Einheitliche Farblogik für alle Badges (ok/warn/fail/off).
+     - Module definieren nur ihre Basis-Klasse (z. B. .energy-badge),
+       die Modifikatoren .badge-ok / .badge-warn / .badge-fail / .badge-off
+       übernehmen die Farben.
+============================================================================= */
+
+.badge-ok  { background: #4caf50; color: #fff; }
+.badge-warn{ background: #ff9800; color: #fff; }
+.badge-fail{ background: #f44336; color: #fff; }
+.badge-off { background: #777;    color: #fff; }
+
+/* =============================================================================
+   Badge-Utility-Klasse – Basis für alle Badges
+============================================================================= */
+.badge {
+    font-size: 0.8em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 6px;
+    display: inline-block;
+    white-space: nowrap;
+    font-weight: bold;
+}
+
+/* Generische Farbvarianten (für jede Badge verwendbar) */
+.badge-ok   { background: #4caf50; color: #fff; }   /* Grün = stabil */
+.badge-warn { background: #ff9800; color: #fff; }   /* Orange = Warnung */
+.badge-fail { background: #f44336; color: #fff; }   /* Rot = kritisch */
+.badge-off  { background: #777;    color: #fff; }   /* Grau = inaktiv */
+
+/* =============================================================================
+   ORÓMA Game Boards (TicTacToe, Connect4, Memory)
+   ---------------------------------------------------------------------------
+   Universelles Grid-System für Spiel-UI-Module.
+   Verwendbar für:
+     • TicTacToe (3x3)
+     • Connect4 / Vier Gewinnt (7x6)
+     • Memory / andere Board-Spiele
+============================================================================= */
+
+.oroma-board {
+    display: grid;
+    justify-content: center;
+    align-content: center;
+    gap: 6px;
+    margin: 1rem auto;
+    padding: 0.5rem;
+}
+
+/* Beispiel: TicTacToe (3x3) */
+.oroma-board.tictactoe {
+    grid-template-columns: repeat(3, 100px);
+    grid-template-rows: repeat(3, 100px);
+}
+
+/* Beispiel: Vier Gewinnt (7x6) */
+.oroma-board.connect4 {
+    grid-template-columns: repeat(7, 80px);
+    grid-template-rows: repeat(6, 80px);
+}
+
+/* Beispiel: Memory (4x4 oder 6x6) */
+.oroma-board.memory-4x4 {
+    grid-template-columns: repeat(4, 70px);
+    grid-template-rows: repeat(4, 70px);
+}
+.oroma-board.memory-6x6 {
+    grid-template-columns: repeat(6, 60px);
+    grid-template-rows: repeat(6, 60px);
+}
+
+/* Einheitliche Buttons / Felder */
+.oroma-board button {
+    width: 100%;
+    height: 100%;
+    font-size: 1.8rem;
+    font-weight: bold;
+    border: none;
+    border-radius: 8px;
+    background-color: #333;
+    color: #eee;
+    transition: background-color 0.2s;
+}
+.oroma-board button:hover {
+    background-color: #4caf50;
+    color: #fff;
+}
+.oroma-board button:disabled {
+    background-color: #222;
+    color: #777;
+}
+
+/* =============================================================================
+   ORÓMA TicTacToe – Zug- und Gewinn-Markierungen
+   ---------------------------------------------------------------------------
+   • .ttt-last-move   → Hervorhebung des letzten gesetzten Symbols
+   • .ttt-win-cell    → Markierung der drei Gewinnerfelder
+   • .ttt-draw-cell   → neutrale Markierung bei Unentschieden
+   Diese Klassen werden dynamisch per JS im Template gesetzt.
+============================================================================= */
+
+.oroma-board.tictactoe button.ttt-last-move {
+    background-color: #1976d2 !important;   /* Blau: letzter Zug */
+    color: #fff !important;
+    box-shadow: 0 0 10px rgba(25,118,210,0.8);
+    transform: scale(1.03);
+    transition: all 0.2s ease;
+}
+
+.oroma-board.tictactoe button.ttt-win-cell {
+    background-color: #4caf50 !important;   /* Grün: Gewinnerfeld */
+    color: #fff !important;
+    box-shadow: 0 0 12px rgba(76,175,80,0.8);
+    animation: ttt-blink-win 1.2s ease-in-out infinite alternate;
+}
+
+.oroma-board.tictactoe button.ttt-draw-cell {
+    background-color: #9c27b0 !important;   /* Violett: Unentschieden */
+    color: #fff !important;
+    box-shadow: 0 0 6px rgba(156,39,176,0.6);
+}
+
+/* sanftes Blinken für Siegerfelder */
+@keyframes ttt-blink-win {
+    from { box-shadow: 0 0 6px rgba(76,175,80,0.4); }
+    to   { box-shadow: 0 0 16px rgba(76,175,80,1.0); }
+}
+
+/* =============================================================================
+   Responsive Anpassungen (Mobile & Tablet)
+============================================================================= */
+@media (max-width: 768px) {
+    /* Navbar wird vertikal */
+    nav ul {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    nav ul li {
+        display: block;
+        margin: 2px 0;
+    }
+    nav ul li a {
+        display: block;
+        padding: 6px 10px;
+    }
+
+    /* Container mit Abstand */
+    .container {
+        padding: 0.5em;
+    }
+
+    /* Tabellen werden scrollbar */
+    .table {
+        display: block;
+        overflow-x: auto;
+        white-space: nowrap;
+    }
+
+    /* Karten / Charts füllen volle Breite */
+    .card, canvas {
+        width: 100% !important;
+    }
+}
+
+@media (max-width: 480px) {
+    body { font-size: 0.9em; }
+    nav ul li a { font-size: 0.9em; }
+    .badge {
+        font-size: 0.7em;
+        padding: 2px 4px;
+    }
+}

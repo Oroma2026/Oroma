@@ -1,0 +1,422 @@
+{% extends "base.html" %}
+{% block content %}
+<!-- =============================================================================
+ Pfad:    /opt/ai/oroma/ui/templates/chess.html
+ Projekt: ORÓMA – Headless UI (Flask)
+ Modul:   Schach-Arena Frontend (Safari-fest, Snap/SnapChain-Panel, Daily-Status)
+ Version: v1.8 (Daily + Train/Export-Status + ehrliche Chess-Einordnung)
+ Stand:   2026-03-11
+ Autor:   ORÓMA · KI-JWG-X1
+ =============================================================================
+ Änderungen v1.7
+ ───────────────
+ • Daily-/Nightly-Statuskarte über /chess/api/daily_status.
+ • Sichtbarer letzter Chess-Batch (policy/explore) mit Zeit, Quelle und Kernmetriken.
+ • Ehrliche Einordnung im UI: Chess ist produktiv v. a. als Daily-/Trace-Lieferant;
+   tabellarisches Policy-Lernen bleibt experimentell.
+ • Bestehendes Gaps-Badge / Token-Handling unverändert.
+ ============================================================================= -->
+<div class="container py-3">
+  <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+    <h1 class="me-2 mb-0">♟️ Schach-Arena</h1>
+    <span id="autoBadge" class="badge badge-off">AUTOTRAIN OFF</span>
+    <span id="gapBadge" class="badge badge-off" title="Knowledge-Gaps Gesamt / Ø-Confidence">GAPS –</span>
+
+    <div class="ms-auto d-flex flex-wrap gap-2 align-items-center">
+      <div class="input-group input-group-sm" style="width: 260px;">
+        <span class="input-group-text">Modus</span>
+        <select id="sel-mode" class="form-select">
+          <option value="oroma_vs_oroma_policy">🧠 ORÓMA vs 🧠 ORÓMA (Policy)</option>
+          <option value="oroma_vs_oroma_explore" selected>🧠 ORÓMA vs 🧠 ORÓMA (Explore)</option>
+          <option value="ki_vs_ki">🤖 KI vs 🤖 KI</option>
+          <option value="oroma_vs_ki">🧠 ORÓMA vs 🤖 KI</option>
+          <option value="oroma_vs_human">🧠 ORÓMA vs 👤 Human</option>
+        </select>
+      </div>
+
+      <div class="input-group input-group-sm" style="width: 220px;">
+        <span class="input-group-text">ORÓMA-Seite</span>
+        <select id="sel-oroma-side" class="form-select" title="Nur für ORÓMA vs KI wirksam">
+          <option value="white">Weiß</option>
+          <option value="black">Schwarz</option>
+        </select>
+      </div>
+
+      <div class="input-group input-group-sm" style="width: 190px;">
+        <span class="input-group-text">Speed</span>
+        <select id="sel-speed" class="form-select">
+          <option value="normal" selected>⏱ normal</option>
+          <option value="turbo">⚡ turbo</option>
+        </select>
+      </div>
+
+      <button id="btn-toggle" class="btn btn-success btn-sm">▶️ Start</button>
+      <button id="btn-reset"  class="btn btn-danger btn-sm">🔄 Reset</button>
+      <button id="btn-flip"   class="btn btn-secondary btn-sm">Flip</button>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <!-- Board -->
+    <div class="col-lg-7">
+      <div class="card text-bg-dark mb-3">
+        <div class="card-header">Daily / Nightly</div>
+        <div class="card-body">
+          <div id="dailyStatusText" class="small">–</div>
+          <div class="form-text mt-2">Chess dient hier produktiv vor allem als Daily-/Trace-Lieferant (episodes + snapchains). Das tabellarische Policy-Lernen bleibt experimentell.</div>
+        </div>
+      </div>
+
+      <div class="card text-bg-dark">
+        <div class="card-header d-flex align-items-center">
+          <strong class="me-2">Brett</strong>
+          <small class="text-muted">FEN-basiert, Unicode-Steine</small>
+        </div>
+        <div class="card-body">
+          <div id="board" class="chess-board shadow" role="grid" aria-label="Schachbrett 8 mal 8"></div>
+          <div class="small text-muted mt-2"><span id="legend-files" class="d-block mt-1"></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="col-lg-5">
+      <div class="card text-bg-dark mb-3">
+        <div class="card-header">Status</div>
+        <div class="card-body">
+          <div class="row g-2">
+            <div class="col-6"><div class="stat-tile"><div class="label">Am Zug</div><div id="st-turn" class="value">–</div></div></div>
+            <div class="col-6"><div class="stat-tile"><div class="label">Modus</div><div id="st-mode" class="value">–</div></div></div>
+            <div class="col-6"><div class="stat-tile"><div class="label">Sieger</div><div id="st-winner" class="value">–</div></div></div>
+            <div class="col-6"><div class="stat-tile"><div class="label">Geschwindigkeit</div><div id="st-speed" class="value">–</div></div></div>
+          </div>
+
+          <div class="mt-3 d-flex gap-2">
+            <input id="uci-input" class="form-control form-control-sm" placeholder="UCI (z. B. e2e4, Promo: e7e8q)" />
+            <button id="btn-send-uci" class="btn btn-outline-light btn-sm">Senden</button>
+          </div>
+          <div class="form-text">Im Modus <b>ORÓMA vs Human</b> darfst du ziehen, wenn <i>Schwarz</i> am Zug ist.</div>
+        </div>
+      </div>
+
+      <!-- Statistik -->
+      <div class="card text-bg-dark mb-3">
+        <div class="card-header">Statistik</div>
+        <div class="card-body">
+          <div id="statsText" class="small">–</div>
+        </div>
+      </div>
+
+      <div class="card text-bg-dark">
+        <div class="card-header d-flex align-items-center">
+          <span>Snaps & Chains</span>
+          <span class="ms-3 small text-muted" id="countersTxt">–</span>
+          <button id="btn-snaps-refresh" class="btn btn-outline-light btn-sm ms-auto">🔄</button>
+        </div>
+        <div class="card-body small">
+          <div id="snapsInfo" class="mb-2 text-muted">–</div>
+          <div class="table-responsive">
+            <table class="table table-dark table-sm align-middle mb-0">
+              <thead><tr><th>ID</th><th>Ergebnis</th><th>Züge</th><th>Zeit</th></tr></thead>
+              <tbody id="snapsBody"></tbody>
+            </table>
+          </div>
+          <div class="form-text">Quelle: <code>/chess/api/snaps</code> & <code>/chess/api/counters</code>.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast-container position-fixed bottom-0 end-0 p-3">
+    <div id="toast" class="toast text-bg-dark border-0" role="alert" data-bs-delay="2600">
+      <div class="d-flex">
+        <div id="toast-body" class="toast-body">Meldung</div>
+        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  .chess-board {
+    --tile: 64px;
+    --light: #c9c9c9;
+    --dark:  #6b6b6b;
+    --sel:   #ffd54f;
+    width: calc(var(--tile) * 8);
+    max-width: 100%;
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    grid-template-rows:    repeat(8, 1fr);
+    aspect-ratio: 1 / 1;
+    border: 2px solid #555;
+    border-radius: 6px;
+    overflow: hidden;
+    user-select: none;
+  }
+  @supports not (aspect-ratio: 1 / 1) { .chess-board { height: calc(var(--tile) * 8); } }
+  .sq { display: grid; place-items: center; font-size: calc(var(--tile) * 0.7); line-height: 1; min-width: 0; min-height: 0; cursor: pointer; position: relative; font-family: "Apple Color Emoji","Segoe UI Symbol","Noto Color Emoji",sans-serif; }
+  .sq.light { background: var(--light); color: #111; }
+  .sq.dark  { background: var(--dark);  color: #fff; }
+  .sq.sel { outline: 3px solid var(--sel); outline-offset: -3px; }
+  .sq.hl  { box-shadow: inset 0 0 0 4px #ffd54f; }
+  .stat-tile { background: #1f1f1f; border: 1px solid #333; border-radius: 6px; padding: 8px 10px; }
+  .stat-tile .label { font-size: 12px; color: #aaa; }
+  .stat-tile .value { font-weight: 600; font-size: 16px; color: #fff; }
+  .badge-ok  { background: #198754; }
+  .badge-off { background: #6c757d; }
+</style>
+
+<script>
+(function(){
+  const API = {
+    state:"/chess/api/state", move:"/chess/api/move", reset:"/chess/api/reset",
+    toggle:"/chess/api/toggle", mode:"/chess/api/mode", speed:"/chess/api/speed",
+    side:"/chess/api/oromaSide", snaps:"/chess/api/snaps", counters:"/chess/api/counters", daily:"/chess/api/daily_status"
+  };
+  const GAPS = { summary: "/gaps/api/summary" };
+  const PIECE = {"K":"\u2654","Q":"\u2655","R":"\u2656","B":"\u2657","N":"\u2658","P":"\u2659","k":"\u265A","q":"\u265B","r":"\u265C","b":"\u265D","n":"\u265E","p":"\u265F"};
+
+  let orientation="white", selectedSq=null, autoRunning=false, lastState=null;
+  const $ = (s) => document.querySelector(s);
+
+  // --- Toast ---
+  let toastObj = null;
+  function toast(msg, type){
+    const el=$("#toast"), body=$("#toast-body"); if(!el) return;
+    body.textContent=msg;
+    el.className="toast text-bg-"+(type==="success"?"success":type==="danger"?"danger":type==="warning"?"warning":"dark")+" border-0";
+    if(!toastObj && window.bootstrap?.Toast) toastObj = new window.bootstrap.Toast(el);
+    toastObj?.show();
+  }
+
+  // --- FEN/Board ---
+  function parseFEN(fen){
+    const part=(fen||"8/8/8/8/8/8/8/8 w - - 0 1").split(" ")[0], rows=part.split("/");
+    const board=[]; for(let r=0;r<8;r++){ const row=rows[r]||"8"; const arr=[];
+      for(const ch of row){ if(/\d/.test(ch)){ for(let k=0;k<parseInt(ch,10);k++) arr.push(""); } else { arr.push(ch); } }
+      while(arr.length<8) arr.push(""); board.push(arr.slice(0,8));
+    }
+    return board;
+  }
+  function uiIndexToSquare(r,c){ let rr=r,cc=c; if(orientation==="black"){ rr=7-rr; cc=7-cc; } return String.fromCharCode(97+cc)+(8-rr); }
+  function maintainSquare(){ const grid=$("#board"); if(!grid) return; const w=grid.clientWidth; if(w>0) grid.style.height=w+"px"; }
+  window.addEventListener("resize", maintainSquare);
+
+  function renderBoardFromFEN(fen){
+    const grid=$("#board"); if(!grid) return;
+    const board=parseFEN(fen); maintainSquare(); grid.innerHTML="";
+    for(let r=0;r<8;r++){ for(let c=0;c<8;c++){
+      const code=(board[r]&&board[r][c])?board[r][c]:""; const sq=uiIndexToSquare(r,c); const isLight=((r+c)%2)===0;
+      const div=document.createElement("div"); div.className="sq "+(isLight?"light":"dark"); div.dataset.sq=sq; div.textContent=PIECE[code]||"";
+      if(selectedSq===sq) div.classList.add("sel");
+      div.addEventListener("click",()=>onSquareClick(sq));
+      grid.appendChild(div);
+    } }
+    $("#legend-files").textContent=(orientation==="white")?"a b c d e f g h":"h g f e d c b a";
+  }
+  function highlightLastMove(uci){
+    document.querySelectorAll(".sq.hl").forEach(el=>el.classList.remove("hl"));
+    if(!uci||uci.length<4) return;
+    const a=document.querySelector(`.sq[data-sq="${uci.slice(0,2)}"]`);
+    const b=document.querySelector(`.sq[data-sq="${uci.slice(2,4)}"]`);
+    if(a) a.classList.add("hl"); if(b) b.classList.add("hl");
+  }
+
+  // --- Labels ---
+  function winnerLabel(w){ return w==="white"?"Weiß":w==="black"?"Schwarz":w==="draw"?"Unentschieden":"–"; }
+  function modeLabel(m){ return {"oroma_vs_oroma":"ORÓMA vs ORÓMA","ki_vs_ki":"KI vs KI","oroma_vs_ki":"ORÓMA vs KI","oroma_vs_human":"ORÓMA vs Human"}[m]||m||"–"; }
+
+  // --- State ---
+  async function loadState(){
+    try{
+      const r=await fetch(API.state,{cache:"no-store"}); if(!r.ok) return;
+      const s=await r.json(); lastState=s;
+      renderBoardFromFEN(s.fen); highlightLastMove(s.last_move);
+      $("#st-turn").textContent=(s.turn==="w"?"Weiß":"Schwarz");
+      $("#st-mode").textContent=modeLabel(s.mode);
+      $("#st-speed").textContent=s.speed||"–";
+      $("#st-winner").textContent=winnerLabel(s.winner);
+      autoRunning=!!s.auto;
+      const ab=$("#autoBadge"); ab.textContent=autoRunning?"AUTOTRAIN ON":"AUTOTRAIN OFF"; ab.className="badge "+(autoRunning?"badge-ok":"badge-off");
+      $("#btn-toggle").textContent=autoRunning?"⏸ Pause":"▶️ Start";
+      if(s.mode) $("#sel-mode").value=s.mode; if(s.speed) $("#sel-speed").value=s.speed; if(typeof s.oroma_side==="string") $("#sel-oroma-side").value=s.oroma_side;
+      renderStats(s.stats||{});
+    }catch(e){}
+  }
+
+  function renderStats(stats){
+    const wins=stats.wins||{};
+    const el=$("#statsText"); if(!el) return;
+    el.innerHTML=[
+      `Partien: ${stats.games ?? 0}`,
+      `Weiß: ${wins.white ?? 0} · Schwarz: ${wins.black ?? 0} · Remis: ${wins.draw ?? 0}`,
+      `ORÓMA gesamt: ${wins.oroma ?? 0} · KI gesamt: ${wins.ki ?? 0} · Human: ${wins.human ?? 0}`,
+      `ORÓMA (weiß): ${wins.oroma_white ?? 0} · ORÓMA (schwarz): ${wins.oroma_black ?? 0}`
+    ].join("<br>");
+  }
+
+  // --- Snaps/Chains ---
+  async function loadSnaps(){
+    try{
+      const r=await fetch(API.snaps,{cache:"no-store"}); if(!r.ok) return;
+      const j=await r.json(); const items=(j&&j.ok&&Array.isArray(j.items))?j.items:[];
+      const body=$("#snapsBody"); body.innerHTML="";
+      let cntMoves=0;
+      for(const it of items){
+        const tr=document.createElement("tr");
+        const when = it.ts ? new Date(it.ts*1000).toLocaleString() : "–";
+        const res  = it.result || "–";
+        const nm   = (typeof it.n_moves==="number") ? it.n_moves : "–";
+        if (typeof it.n_moves==="number") cntMoves+=it.n_moves;
+        tr.innerHTML = `<td>${it.id}</td><td>${res}</td><td>${nm}</td><td>${when}</td>`;
+        body.appendChild(tr);
+      }
+      $("#snapsInfo").textContent = `${items.length} Chains • Summe Züge: ${cntMoves}`;
+    }catch(e){}
+  }
+
+  async function loadCounters(){
+    try{
+      const r=await fetch(API.counters,{cache:"no-store"}); if(!r.ok) return;
+      const j=await r.json(); if(!j||!j.ok) return;
+      $("#countersTxt").textContent = `Chains: ${j.snapchains_chess}/${j.snapchains_total}`;
+    }catch(e){}
+  }
+
+  // --- Gaps Badge ---
+  function gapFetchOpts(){
+    const tk = (window.localStorage && localStorage.getItem("OROMA_UI_TOKEN")) || "";
+    return tk ? { headers: { "X-OROMA-TOKEN": tk } } : {};
+  }
+  async function loadGapsBadge(){
+    const el = $("#gapBadge"); if(!el) return;
+    try{
+      const r = await fetch(GAPS.summary, Object.assign({cache:"no-store"}, gapFetchOpts()));
+      if(r.status === 401){ el.textContent = "GAPS 🔒"; el.className="badge badge-off"; return; }
+      if(!r.ok){ el.textContent = "GAPS –"; el.className="badge badge-off"; return; }
+      const j = await r.json();
+      const data = j?.summary ? j.summary : j;
+      const cnt = (typeof data?.count === "number") ? data.count : 0;
+      const conf = (typeof data?.confidence === "number") ? data.confidence : null;
+      el.textContent = conf!=null ? `GAPS ${cnt} • Ø ${conf.toFixed(2)}` : `GAPS ${cnt}`;
+      el.className="badge badge-ok";
+    }catch(e){
+      el.textContent = "GAPS –";
+      el.className="badge badge-off";
+    }
+  }
+
+  function _fmtTS(ts){
+    if(!ts) return "–";
+    try { return new Date(Number(ts)*1000).toLocaleString(); } catch(e){ return "–"; }
+  }
+
+  function _fmtJobLine(title, item){
+    if(!item || typeof item !== "object") return `<b>${title}</b>: –`;
+    const rc = (typeof item.rc === "number") ? item.rc : 0;
+    const dur = (typeof item.dur_s === "number") ? item.dur_s.toFixed(2) : "–";
+    const timedOut = item.timed_out ? " · timeout" : "";
+    const fail = (typeof item.fail_count === "number" && item.fail_count > 0)
+      ? ` · fail_count: ${item.fail_count}` : "";
+    return [
+      `<b>${title}</b>: ${_fmtTS(item.ts)}`,
+      `rc: ${rc} · dur_s: ${dur}${timedOut}${fail}`
+    ].join("<br>");
+  }
+
+  function _fmtBatchLine(title, item){
+    if(!item || typeof item !== "object") return `<b>${title}</b>: –`;
+    const m = item.metrics || {};
+    const games = (typeof m.games === "number") ? Math.round(m.games) : "–";
+    const winsX = (typeof m.wins_x === "number") ? Math.round(m.wins_x) : "–";
+    const winsO = (typeof m.wins_o === "number") ? Math.round(m.wins_o) : "–";
+    const draws = (typeof m.draws === "number") ? Math.round(m.draws) : "–";
+    const avgMoves = (typeof m.avg_moves === "number") ? m.avg_moves.toFixed(2) : "–";
+    const epsW = (typeof m.eps_white === "number") ? m.eps_white.toFixed(2) : "–";
+    const epsB = (typeof m.eps_black === "number") ? m.eps_black.toFixed(2) : "–";
+    const mvW = (typeof m.explore_moves_white === "number") ? Math.round(m.explore_moves_white) : "–";
+    const mvB = (typeof m.explore_moves_black === "number") ? Math.round(m.explore_moves_black) : "–";
+    return [
+      `<b>${title}</b>: ${_fmtTS(item.ts_end || item.ts_start)}`,
+      `Quelle: ${(item.source || "–")}${item.label ? ` · ${item.label}` : ""}`,
+      `Games: ${games} · X: ${winsX} · O: ${winsO} · Remis: ${draws} · ØZüge: ${avgMoves}`,
+      `eps W/B: ${epsW}/${epsB} · Explore-Züge W/B: ${mvW}/${mvB}`
+    ].join("<br>");
+  }
+
+  async function loadDailyStatus(){
+    try{
+      const r = await fetch(API.daily,{cache:"no-store"}); if(!r.ok) return;
+      const j = await r.json(); if(!j || !j.ok) return;
+      const el = $("#dailyStatusText"); if(!el) return;
+      el.innerHTML = [
+        _fmtBatchLine("Letzter Explore-Batch", j.latest_explore),
+        "",
+        _fmtBatchLine("Letzter Policy-Batch", j.latest_policy),
+        "",
+        _fmtJobLine("Letzter Chess-Policy-Train", j.latest_train),
+        "",
+        _fmtJobLine("Letzter Chess-Policy-Export", j.latest_export),
+        "",
+        `<span class="text-muted">${j.note || ""}</span>`
+      ].join("<br>");
+    }catch(e){}
+  }
+
+  // --- Helpers / Actions ---
+  async function postJSON(url,obj){
+    const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(obj||{})});
+    try{return await r.json();}catch{return {ok:false};}
+  }
+  async function toggleAuto(){ const j=await postJSON(API.toggle,{}); if(j?.ok) await loadState(); }
+  async function resetGame(){ const j=await postJSON(API.reset,{}); if(!j?.ok){ toast("Reset fehlgeschlagen.","danger"); return; } selectedSq=null; await loadState(); toast("Neue Partie gestartet.","success"); }
+  async function setMode(){ const j=await postJSON(API.mode,{mode:$("#sel-mode").value}); if(!j?.ok){ toast("Moduswechsel fehlgeschlagen.","danger"); return; } await loadState(); }
+  async function setSpeed(){ const j=await postJSON(API.speed,{speed:$("#sel-speed").value}); if(!j?.ok){ toast("Geschwindigkeit konnte nicht gesetzt werden.","danger"); return; } await loadState(); }
+  async function setOromaSide(){ const j=await postJSON(API.side,{side:$("#sel-oroma-side").value}); if(!j?.ok){ toast("ORÓMA-Seite konnte nicht gesetzt werden.","danger"); return; } await loadState(); }
+  async function sendMoveUCI(uci){ const j=await postJSON(API.move,{uci}); if(!j?.ok){ toast(j?.error||"Zug abgelehnt.","warning"); return; } await loadState(); }
+
+  function onSquareClick(sq){
+    const mode=$("#sel-mode").value;
+    if(!(mode==="oroma_vs_human" && lastState && lastState.turn==="b")) return;
+    if(!selectedSq){ selectedSq=sq; renderSelection(); return; }
+    if(selectedSq===sq){ selectedSq=null; renderSelection(); return; }
+    let uci=selectedSq+sq; const fromRank=parseInt(selectedSq[1],10), toRank=parseInt(sq[1],10);
+    if((fromRank===7&&toRank===8)||(fromRank===2&&toRank===1)) uci+="q";
+    selectedSq=null; renderSelection(); sendMoveUCI(uci);
+  }
+  function renderSelection(){ document.querySelectorAll(".sq").forEach(div=>{ div.classList.toggle("sel", div.dataset.sq===selectedSq); }); }
+  function flip(){ orientation=(orientation==="white")?"black":"white"; loadState(); }
+
+  // --- Bindings ---
+  $("#btn-toggle").addEventListener("click", toggleAuto);
+  $("#btn-reset").addEventListener("click", resetGame);
+  $("#btn-flip").addEventListener("click", flip);
+  $("#sel-mode").addEventListener("change", setMode);
+  $("#sel-speed").addEventListener("change", setSpeed);
+  $("#sel-oroma-side").addEventListener("change", setOromaSide);
+  $("#btn-send-uci").addEventListener("click", ()=>{ const v=$("#uci-input").value.trim(); if(!v) return; $("#uci-input").value=""; sendMoveUCI(v); });
+  $("#uci-input").addEventListener("keydown", (ev)=>{ if(ev.key==="Enter") $("#btn-send-uci").click(); });
+  $("#btn-snaps-refresh").addEventListener("click", ()=>{ loadSnaps(); loadCounters(); loadDailyStatus(); loadGapsBadge(); });
+
+  // --- Init ---
+  (async function init(){
+    $("#sel-mode").value="oroma_vs_oroma";
+    $("#sel-speed").value="normal";
+    $("#sel-oroma-side").value="white";
+    maintainSquare();
+    await loadState();
+    await loadSnaps();
+    await loadCounters();
+    await loadDailyStatus();
+    await loadGapsBadge();
+    setInterval(loadState, 400);
+    setInterval(loadSnaps, 4000);
+    setInterval(loadCounters, 4000);
+    setInterval(loadDailyStatus, 10000);
+    setInterval(loadGapsBadge, 10000);
+  })();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,95 @@
+# ==============================================================================
+# Datei:     /etc/systemd/system/oroma-kpi.service
+# Projekt:   ORÓMA – KPI Harness (Nightly, headless)
+# Version:   v1.1
+# Stand:     2025-12-23
+# Autor:     ORÓMA · KI-JWG-X1 + GPT-5.2 Thinking
+# ==============================================================================
+#
+# Zweck
+# -----
+# Führt den KPI-Harness periodisch aus und schreibt die Ergebnisse als Zeitreihe
+# in `kpi_snapshots` (in oroma.db). Dieser Job ist bewusst "oneshot" und soll
+# nicht dauerhaft laufen.
+#
+# Warum diese Unit (robust)
+# -------------------------
+# In der Praxis kann SQLite bei parallelen Writes (Engine/DreamWorker/Forget/
+# Export/Stats) temporär "database is locked" melden. Das Tool selbst wurde
+# deshalb so gepatcht, dass es lock-robust wartet und retried.
+# Diese Unit stellt zusätzlich sicher:
+# - konsistente ENV (wie bei oroma.service)
+# - kein Root-Write in data/ und logs/
+# - definierte Log-Dateien
+#
+# Wichtige Pfade
+# --------------
+# - Code: /opt/ai/oroma/tools/kpi_harness.py
+# - DB:   /opt/ai/oroma/data/oroma.db  (OROMA_DB_PATH überschreibbar)
+# - Logs: /opt/ai/oroma/logs/kpi.out.log und kpi.err.log
+#
+# ENV / Konfiguration
+# -------------------
+# - .env.systemd / .env werden geladen (best effort)
+# - OROMA_DB_PATH kann die DB umbiegen
+# - OROMA_DB_TIMEOUT_SEC / OROMA_DB_BUSY_TIMEOUT_MS / OROMA_DB_LOCK_RETRY_SEC
+#   steuern die Lock-Toleranz des KPI-Harness (siehe tools/kpi_harness.py)
+#
+# Headless
+# --------
+# Keine GUI/Qt/Wayland/X11 Abhängigkeiten.
+# ==============================================================================
+
+[Unit]
+Description=ORÓMA KPI Nightly (headless)
+After=network-online.target oroma.service
+Wants=network-online.target
+ConditionPathExists=!/opt/ai/oroma/.use_orchestrator
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai/oroma
+SyslogIdentifier=oroma-kpi
+TimeoutStartSec=900
+Environment=OROMA_DB_TIMEOUT_SEC=60
+Environment=OROMA_DB_BUSY_TIMEOUT_MS=60000
+Environment=OROMA_DB_LOCK_RETRY_SEC=600
+
+User=oroma
+Group=oroma
+UMask=002
+
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=UTF-8
+Environment=TZ=Europe/Berlin
+Environment=PYTHONPATH=/opt/ai/oroma
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=OROMA_LOG_DIR=/opt/ai/oroma/logs
+
+ExecStartPre=/usr/bin/env bash -lc 'mkdir -p /opt/ai/oroma/logs'
+ExecStartPre=/usr/bin/env bash -lc 'touch /opt/ai/oroma/logs/kpi.out.log /opt/ai/oroma/logs/kpi.err.log'
+
+ExecStart=/usr/bin/python3 -m tools.kpi_harness
+
+StandardOutput=append:/opt/ai/oroma/logs/kpi.out.log
+StandardError=append:/opt/ai/oroma/logs/kpi.err.log
+
+# Minimal-Hardening (kompatibel, ohne exotische Keys)
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+
+ReadWritePaths=/opt/ai/oroma/logs /opt/ai/oroma/data
+
+[Install]
+WantedBy=multi-user.target

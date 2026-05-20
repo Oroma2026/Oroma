@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly ORÓMA Policy
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+
+RandomizedDelaySec=30min
+Unit=oroma-policy.service
+[Install]
+WantedBy=timers.target

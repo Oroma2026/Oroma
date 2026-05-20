@@ -1,0 +1,90 @@
+# =============================================================================
+# Pfad:    /opt/ai/oroma/systemd/oroma-usb-kernelwatch.service
+# Projekt: ORÓMA – Headless Lern-KI (Edge)
+# Version: v3.7.3
+# Stand:   2026-01-30
+# Autor:   Jörg + GPT-5.2 Thinking
+# =============================================================================
+#
+# ZWECK
+# -----
+# One-shot Service, der USB/Kernel-"Alert"-Zeilen aus dem Kernel-Journal
+# extrahiert und in ORÓMA-Logs/State schreibt.
+#
+# WARUM (Praxis-Problem / Root Cause)
+# ----------------------------------
+# In manchen Setups ist der systemd Journal-Zugriff auf Kernel-/System-Meldungen
+# standardmäßig NICHT für normale User freigegeben. Dann liefert `journalctl -k`
+# die Meldung:
+#
+#   "No journal files were opened due to insufficient permissions."
+#
+# Das ist für ORÓMA besonders kritisch, weil genau diese Kernel-Zeilen (over-current,
+# USB disconnect, uvcvideo -19 URB) die Kamera/PTZ/Audio-Ausfälle erklären.
+#
+# ENTSCHEIDUNG (minimal & robust)
+# -------------------------------
+# Wir lassen den Service als User 'oroma' laufen, geben ihm aber über systemd
+# *temporär* die notwendigen Gruppenrechte, ohne den User dauerhaft in Gruppen
+# aufnehmen zu müssen:
+#
+#   SupplementaryGroups=systemd-journal adm
+#
+# Damit ist der Watcher in der Regel journal-lesend, ohne Root zu benötigen.
+#
+# TRANSPARENZ (keine stillen Fehler)
+# ---------------------------------
+# tools/usb_kernel_watch.py schreibt in seinen State auch EUID/User/Groups und
+# signalisiert Permission-Probleme klar über:
+#   - /opt/ai/oroma/data/state/usb_kernel_watch.json
+#   - /opt/ai/oroma/logs/usb_kernel_watch.log
+#   - UI-Banner im Video-Tab
+#
+# KOPIER-HINWEIS
+# --------------
+# Diese Unit wird in der Projekt-ZIP unter systemd/ gepflegt und vom User
+# ins Live-System kopiert (/etc/systemd/system/...).
+# =============================================================================
+
+[Unit]
+Description=ORÓMA USB Kernel Alert Watch (oneshot)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+
+# ---------------------------------------------------------------------------
+# Journal-Zugriff / Permissions
+# ---------------------------------------------------------------------------
+# Wichtig:
+# - Viele Distributionen erlauben Kernel-Journal nur für 'adm'/'systemd-journal'.
+# - systemd kann SupplementaryGroups setzen, ohne den User dauerhaft zu ändern.
+# - Falls eine der Gruppen nicht existiert, wird systemd den Start verweigern;
+#   in diesem Fall entweder Gruppe anlegen oder auf Root-Variante umstellen.
+# ---------------------------------------------------------------------------
+User=oroma
+Group=oroma
+SupplementaryGroups=systemd-journal adm
+
+WorkingDirectory=/opt/ai/oroma
+
+# Direkter Aufruf (keine Shell)
+ExecStart=/usr/bin/python3 /opt/ai/oroma/tools/usb_kernel_watch.py --once
+
+# Best-effort: häufige Ausführung => keine aggressiven Limits
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+# Hardening (konservativ, ohne ORÓMA zu blockieren)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

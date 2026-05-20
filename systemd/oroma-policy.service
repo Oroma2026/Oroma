@@ -1,0 +1,88 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-policy.service
+# Projekt:  ORÓMA v3.8 – Policy-Engine (nächtliches Training & Export)
+# Version:  v3.8-r2 (systemweit, headless)
+# Stand:    2025-10-21
+# Autor:    ORÓMA · KI-JWG-X1
+# =============================================================================
+#
+# Zweck
+# ─────
+#   Führt nachts das Policy-Training sowie anschließenden Export
+#   für ein bestimmtes Namespace-Ziel (z. B. game:tictactoe) aus.
+#
+# Merkmale
+# ────────
+#   • HEADLESS, kein venv, nutzt /usr/bin/python3
+#   • Zwei sequentielle Läufe:
+#        1️⃣ Training  (--train-db)
+#        2️⃣ Export    (--export-archiv)
+#   • Logging (append) in /opt/ai/oroma/logs/policy.out/err.log
+#   • Optionaler Timer: täglich 02:45 Uhr (siehe unten)
+#
+# Anpassbare Parameter
+# ─────────────────────
+#   --limit <N>           Anzahl Trainingsdatensätze
+#   --namespace <str>     Ziel-Namespace (z. B. game:tictactoe)
+#   --min-n / --min-abs-q Export-Filter
+#
+# Nutzung
+# ───────
+#   systemctl start oroma-policy.service
+#   journalctl -u oroma-policy.service -f
+#   (oder via Timer → oroma-policy.timer)
+# =============================================================================
+
+[Unit]
+Description=ORÓMA v3.8 – Policy nightly train/export (headless)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/opt/ai/oroma/.use_orchestrator
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai/oroma
+SyslogIdentifier=oroma-policy
+
+User=oroma
+Group=oroma
+UMask=002
+
+# ENV
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+Environment=PYTHONPATH=/opt/ai/oroma
+Environment=PYTHONUNBUFFERED=1
+Environment=OROMA_LOG_DIR=/opt/ai/oroma/logs
+Environment=TZ=Europe/Berlin
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+# Bootstrap
+ExecStartPre=/usr/bin/env bash -lc 'mkdir -p /opt/ai/oroma/logs /opt/ai/oroma/data'
+ExecStartPre=/usr/bin/env bash -lc 'touch /opt/ai/oroma/logs/policy.out.log /opt/ai/oroma/logs/policy.err.log'
+
+# --- Hauptlauf: Training + Export ---
+ExecStart=/usr/bin/env bash -lc '\
+  echo "[POLICY] Training startet ..." >> /opt/ai/oroma/logs/policy.out.log; \
+  /usr/bin/python3 -m core.policy_engine --train-db --limit 50000 --namespace game:tictactoe >> /opt/ai/oroma/logs/policy.out.log 2>> /opt/ai/oroma/logs/policy.err.log; \
+  echo "[POLICY] Export startet ..." >> /opt/ai/oroma/logs/policy.out.log; \
+  /usr/bin/python3 -m core.policy_engine --export-archiv --namespace game:tictactoe --min-n 3 --min-abs-q 0.1 >> /opt/ai/oroma/logs/policy.out.log 2>> /opt/ai/oroma/logs/policy.err.log; \
+  echo "[POLICY] Durchlauf beendet." >> /opt/ai/oroma/logs/policy.out.log \
+'
+
+# Logging (systemd ≥ 240)
+StandardOutput=append:/opt/ai/oroma/logs/policy.out.log
+StandardError=append:/opt/ai/oroma/logs/policy.err.log
+
+# Härtung
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+ReadWritePaths=/opt/ai/oroma/logs /opt/ai/oroma/data
+
+[Install]
+WantedBy=multi-user.target

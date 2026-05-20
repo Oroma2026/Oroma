@@ -1,0 +1,17 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-exportgate.timer
+# Projekt:  ORÓMA v3.8 – Export-Gate Timer (täglich)
+# Stand:    2025-11-30
+# =============================================================================
+
+[Unit]
+Description=ORÓMA v3.8 – Export-Gate täglich 03:15
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=30min
+Unit=oroma-exportgate.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

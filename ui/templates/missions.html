@@ -1,0 +1,138 @@
+<!-- =============================================================================
+Pfad:    /opt/ai/oroma/ui/templates/missions.html
+Projekt: ORÓMA
+Version: v3.6
+Stand:   2025-09-27
+Zweck:   Missions-Dashboard (Erstellen, Auflisten, Fortschritt, Abschluss)
+============================================================================= -->
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <h2>🎯 Missionen</h2>
+  <p class="text-muted">Ziele definieren, Fortschritt melden, Abschluss prüfen.</p>
+
+  <!-- Neue Mission -->
+  <div class="card mb-3">
+    <div class="card-header">Neue Mission</div>
+    <div class="card-body">
+      <div class="row g-2">
+        <div class="col-md-4">
+          <input id="mName" class="form-control" placeholder="Name (z.B. 10 richtige Aufgaben)" />
+        </div>
+        <div class="col-md-4">
+          <input id="mGoal" class="form-control" placeholder="Goal (Freitext)" />
+        </div>
+        <div class="col-md-4">
+          <input id="mCriteria" class="form-control" placeholder='Kriterien JSON, z.B. {"wins":{">=":10}}' />
+        </div>
+      </div>
+      <button class="btn btn-success mt-2" onclick="newMission()">➕ Anlegen</button>
+    </div>
+  </div>
+
+  <!-- Liste -->
+  <div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      Aktive & abgeschlossene Missionen
+      <button class="btn btn-sm btn-outline-info" onclick="loadMissions()">🔄 Aktualisieren</button>
+    </div>
+    <div class="card-body">
+      <div id="mList">Lade…</div>
+    </div>
+  </div>
+</div>
+
+<script>
+function tokenHeaders(json=false){
+  const h = {};
+  if(json) h["Content-Type"] = "application/json";
+  const tok = (window.OROMA_UI_TOKEN || localStorage.getItem("OROMA_UI_TOKEN") || "");
+  if (tok) h["X-OROMA-TOKEN"] = tok;
+  return h;
+}
+
+async function newMission(){
+  const name = document.getElementById("mName").value.trim();
+  const goal = document.getElementById("mGoal").value.trim();
+  let crit = {};
+  try { crit = JSON.parse(document.getElementById("mCriteria").value || "{}"); }
+  catch(e){ alert("Kriterien JSON ungültig"); return; }
+  if(!name){ alert("Name fehlt"); return; }
+  try{
+    const r = await fetch("/missions/api/new", {
+      method:"POST",
+      headers: tokenHeaders(true),
+      body: JSON.stringify({name, goal, criteria: crit})
+    });
+    const j = await r.json();
+    if(j.ok){ alert("Mission angelegt (ID="+j.id+")"); loadMissions(); }
+    else alert("Fehler: "+(j.error||"unbekannt"));
+  }catch(e){
+    alert("API-Fehler (new): " + e);
+  }
+}
+
+function rowHtml(m){
+  const crit = JSON.stringify(m.criteria||{}, null, 0);
+  const prog = JSON.stringify(m.progress||{}, null, 0);
+  const state = m.done ? "✅ DONE" : (m.ready ? "🟢 READY" : "⏳ RUNNING");
+  return `<li class="mb-2">
+    <b>#${m.id}</b> – ${m.name} <small class="text-muted">(${new Date((m.ts||0)*1000).toLocaleString()})</small>
+    <div><small>Goal: ${m.goal||"-"}</small></div>
+    <div><small>Criteria: <code>${crit}</code></small></div>
+    <div><small>Progress: <code id="p-${m.id}">${prog}</code></small> &nbsp; <span class="badge bg-dark">${state}</span></div>
+    <div class="mt-1">
+      <input class="form-control form-control-sm" id="u-${m.id}" placeholder='Progress-Delta JSON, z.B. {"wins":"+1"}' style="max-width:360px; display:inline-block;">
+      <button class="btn btn-sm btn-primary" onclick="upd(${m.id})">⬆️ Update</button>
+      <button class="btn btn-sm btn-warning" onclick="complete(${m.id})">✅ Check & Complete</button>
+    </div>
+  </li>`;
+}
+
+async function loadMissions(){
+  try{
+    const r = await fetch("/missions/api/list", { headers: tokenHeaders() });
+    const j = await r.json();
+    const el = document.getElementById("mList");
+    if(!j.ok){ el.textContent = "Fehler beim Laden"; return; }
+    if(!j.items || !j.items.length){ el.textContent = "Keine Missionen."; return; }
+    el.innerHTML = "<ul>"+ j.items.map(rowHtml).join("") + "</ul>";
+  }catch(e){
+    document.getElementById("mList").textContent = "API-Fehler (list): " + e;
+  }
+}
+
+async function upd(id){
+  let prog = {};
+  try { prog = JSON.parse(document.getElementById("u-"+id).value||"{}"); }
+  catch(e){ alert("Progress JSON ungültig"); return; }
+  try{
+    const r = await fetch("/missions/api/update", {
+      method:"POST",
+      headers: tokenHeaders(true),
+      body: JSON.stringify({id, progress: prog})
+    });
+    const j = await r.json();
+    if(j.ok){ loadMissions(); } else alert("Fehler: "+(j.error||"unbekannt"));
+  }catch(e){
+    alert("API-Fehler (update): " + e);
+  }
+}
+
+async function complete(id){
+  try{
+    const r = await fetch("/missions/api/complete", {
+      method:"POST",
+      headers: tokenHeaders(true),
+      body: JSON.stringify({id})
+    });
+    const j = await r.json();
+    if(j.ok){ loadMissions(); } else alert("Fehler: "+(j.error||"unbekannt"));
+  }catch(e){
+    alert("API-Fehler (complete): " + e);
+  }
+}
+
+loadMissions();
+</script>
+{% endblock %}

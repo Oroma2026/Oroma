@@ -1,0 +1,31 @@
+# =============================================================================
+# Pfad:    /opt/ai/oroma/systemd/oroma-usb-kernelwatch.timer
+# Projekt: ORÓMA – Headless Lern-KI (Edge)
+# Version: v3.7.3
+# Stand:   2026-01-30
+# Autor:   Jörg + GPT-5.2 Thinking
+# =============================================================================
+#
+# ZWECK
+# -----
+# Regelmäßiger Trigger für oroma-usb-kernelwatch.service.
+#
+# INTERVAL
+# --------
+# Standard: alle 30s.
+# Das ist bewusst kurz, um "over-current" / "disconnect" schnell zu sehen,
+# ohne Log-Flut (Filter im Tool).
+# =============================================================================
+
+[Unit]
+Description=ORÓMA USB Kernel Alert Watch (timer)
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Persistent=true
+Unit=oroma-usb-kernelwatch.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,74 @@
+# ==============================================================================
+# Datei:     /etc/systemd/system/oroma-ramflush.service
+# Projekt:   ORÓMA v3.8 – RAM Flush / PolicyEngine-Statistik
+# Stand:     2025-11-30 (fix: einfache ExecStart, kein /dev/shm Namespace-Stress)
+# ==============================================================================
+
+[Unit]
+Description=ORÓMA v3.8 – RAM Flush / PolicyEngine-Statistik
+After=network-online.target oroma.service
+Wants=network-online.target
+
+# ------------------------------------------------------------------------------
+# ORCHESTRATOR-MODUS
+# ------------------------------------------------------------------------------
+# In ORÓMA wird im Orchestrator-Modus (Marker-Datei: /opt/ai/oroma/.use_orchestrator)
+# die gesamte Job-Steuerung zentral über oroma-orchestrator.service abgewickelt.
+#
+# oroma-ramflush.timer ist sehr häufig (alle 30 Sekunden). Wenn dieser Timer
+# parallel zum Orchestrator läuft, erzeugt das unnötige SQLite-Contention
+# ("database is locked") – und das wiederum kann u.a. Vision-Tokens,
+# Reward-Logs und SnapChain-Insertions massiv ausbremsen.
+#
+# Daher: Wenn Orchestrator aktiv ist, wird dieser Unit hier automatisch
+# deaktiviert (Condition negiert). Der Timer kann installiert bleiben,
+# aber der Service startet dann nicht.
+ConditionPathExists=!/opt/ai/oroma/.use_orchestrator
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai/oroma
+SyslogIdentifier=oroma-ramflush
+
+User=oroma
+Group=oroma
+UMask=002
+
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=UTF-8
+Environment=TZ=Europe/Berlin
+Environment=PYTHONPATH=/opt/ai/oroma
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=OROMA_LOG_DIR=/opt/ai/oroma/logs
+
+ExecStartPre=/usr/bin/env bash -lc 'mkdir -p /opt/ai/oroma/logs || true'
+
+# Stats-Run der Universal Policy (keine Löschung, nur Auswertung)
+ExecStart=/usr/bin/env bash -lc '/usr/bin/python3 -m core.universal_policy --namespace "game:any" --stats >> /opt/ai/oroma/logs/ramflush.out.log 2>> /opt/ai/oroma/logs/ramflush.err.log'
+
+StandardOutput=append:/opt/ai/oroma/logs/ramflush.out.log
+StandardError=append:/opt/ai/oroma/logs/ramflush.err.log
+SyslogIdentifier=oroma-ramflush
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+ProtectClock=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+
+# RAMFlush braucht nur Logs & Datenbank
+ReadWritePaths=/opt/ai/oroma/logs \
+               /opt/ai/oroma/data \
+               /opt/ai/oroma/models
+
+[Install]
+WantedBy=multi-user.target

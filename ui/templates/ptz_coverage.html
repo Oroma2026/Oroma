@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ORÓMA · PTZ Coverage</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;margin:0;background:#0b0e14;color:#e6e6e6}
+    .wrap{max-width:1100px;margin:0 auto;padding:18px}
+    .row{display:flex;gap:14px;flex-wrap:wrap}
+    .card{background:#111826;border:1px solid #1f2a3a;border-radius:12px;padding:14px;flex:1;min-width:320px}
+    h1{font-size:20px;margin:0 0 12px 0}
+    h2{font-size:14px;margin:0 0 10px 0;color:#b7c2d6;font-weight:600}
+    .muted{color:#9aa8c1;font-size:12px}
+    .kv{display:grid;grid-template-columns:160px 1fr;gap:6px 10px;font-size:13px}
+    .btn{background:#1e2a3d;color:#e6e6e6;border:1px solid #2b3b54;border-radius:10px;padding:10px 12px;cursor:pointer}
+    .btn:hover{background:#24334a}
+    input{background:#0f1624;color:#e6e6e6;border:1px solid #2b3b54;border-radius:10px;padding:10px 12px;width:100%}
+    pre{background:#0f1624;border:1px solid #24334a;border-radius:10px;padding:10px;overflow:auto;max-height:320px}
+    .pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#1b2638;border:1px solid #2b3b54;font-size:12px;color:#cfe0ff}
+    .danger{color:#ff9aa2}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>📡 PTZ Coverage <span class="pill">Staubsauger‑Sweep</span></h1>
+    <div class="muted">
+      Ziel: Blickfeld systematisch abfahren (Coverage) · Persistenz in <code>stats.db</code> · Daily‑Runner über Orchestrator.
+      Manuelles Test‑Run hier ist bewusst klein.
+    </div>
+
+    <div id="virt_warn" class="card" style="display:none; border-color:#5a3b2b;">
+      <h2>Hinweis</h2>
+      <div class="muted">
+        PTZ‑Status liefert keine absoluten Koordinaten (pan/tilt/zoom) → Coverage läuft im <b>Virtual‑Mode</b>.
+        Das ist ok für Dauerbetrieb, aber nicht 1:1 echte PTZ‑Koordinaten.
+      </div>
+    </div>
+
+    <div style="height:14px"></div>
+
+    <div class="row">
+      <div class="card">
+        <h2>Status</h2>
+        <div class="kv" id="kv"></div>
+        <div style="height:10px"></div>
+        <button class="btn" onclick="refreshState()">↻ Refresh</button>
+      </div>
+
+      <div class="card">
+        <h2>Manueller Run (synchron)</h2>
+        <div class="muted">Hinweis: Für Dauerbetrieb nutzt du den Orchestrator Daily‑Job. Dieser Run ist zum Testen.</div>
+        <div style="height:10px"></div>
+        <div class="kv">
+          <div>Policy games</div><div><input id="policy_games" type="number" min="0" value="0"></div>
+          <div>Explore games</div><div><input id="explore_games" type="number" min="0" value="10"></div>
+          <div>Seed</div><div><input id="seed" type="number" value="1"></div>
+          <div>Timeout (s)</div><div><input id="timeout_s" type="number" value="180"></div>
+        </div>
+        <div style="height:10px"></div>
+        <button class="btn" onclick="runNow()">▶ Run</button>
+        <div id="run_err" class="muted danger" style="margin-top:10px"></div>
+      </div>
+    </div>
+
+    <div style="height:14px"></div>
+
+    <div class="row">
+      <div class="card" style="min-width: 520px;">
+        <h2>Letzte Zellen</h2>
+        <pre id="last"></pre>
+      </div>
+      <div class="card" style="min-width: 520px;">
+        <h2>Älteste Zellen (lange nicht besucht)</h2>
+        <pre id="oldest"></pre>
+      </div>
+    </div>
+
+    <div style="height:14px"></div>
+    <div class="card">
+      <h2>Runner Output</h2>
+      <pre id="out"></pre>
+    </div>
+  </div>
+
+  <script>
+    async function refreshState(){
+      const r = await fetch('/ptz_coverage/api/state');
+      const j = await r.json();
+      const kv = document.getElementById('kv');
+      kv.innerHTML = '';
+      const add = (k,v)=>{ kv.innerHTML += `<div class=muted>${k}</div><div>${v}</div>`; };
+      add('ok', j.ok);
+      add('namespace', j.namespace);
+      add('cells', (j.stats && j.stats.n_cells) ?? 0);
+      add('visits', (j.stats && j.stats.n_visits) ?? 0);
+      const vw = document.getElementById('virt_warn');
+      if (vw){ vw.style.display = (j.virtual_mode ? 'block' : 'none'); }
+      document.getElementById('last').textContent = JSON.stringify((j.stats && j.stats.last) ?? [], null, 2);
+      document.getElementById('oldest').textContent = JSON.stringify((j.stats && j.stats.oldest) ?? [], null, 2);
+
+      // defaults
+      if (j.defaults){
+        if (document.getElementById('explore_games').value === '10'){
+          document.getElementById('policy_games').value = j.defaults.policy_games ?? 0;
+          document.getElementById('explore_games').value = j.defaults.explore_games ?? 10;
+        }
+      }
+    }
+
+    async function runNow(){
+      document.getElementById('run_err').textContent = '';
+      document.getElementById('out').textContent = 'running...';
+      const payload = {
+        policy_games: parseInt(document.getElementById('policy_games').value||'0',10),
+        explore_games: parseInt(document.getElementById('explore_games').value||'0',10),
+        seed: parseInt(document.getElementById('seed').value||'1',10),
+        timeout_s: parseInt(document.getElementById('timeout_s').value||'180',10)
+      };
+      try{
+        const r = await fetch('/ptz_coverage/api/run', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+        const j = await r.json();
+        document.getElementById('out').textContent = JSON.stringify(j, null, 2);
+        if (!j.ok){
+          document.getElementById('run_err').textContent = j.err ? String(j.err) : 'error';
+        }
+      }catch(e){
+        document.getElementById('out').textContent = '';
+        document.getElementById('run_err').textContent = String(e);
+      }
+      await refreshState();
+    }
+
+    refreshState();
+  </script>
+</body>
+</html>

@@ -1,0 +1,56 @@
+# ==============================================================================
+# Datei:     /etc/systemd/system/oroma-stats.service
+# Projekt:   ORÓMA – Stats Event Aggregator Service (stats.db Read-Model)
+# Version:   v3.7.5
+# Stand:     2025-12-20
+# Autor:     ORÓMA · KI-JWG-X1 + GPT-5.2 Thinking
+# ==============================================================================
+#
+# Zweck
+# -----
+#   Führt den Stats-Event-Aggregator (tools/stats_event_aggregator.py) als OneShot aus.
+#   Dieser Service ist der regulaere Fast-Path fuer Stats/Charts:
+#   - liest oroma.db read-only
+#   - erzeugt Delta-/Queue-Events in stats.db
+#   - wendet die Queue seriell auf stats_points / stats_curve_day an
+#
+#   WICHTIG:
+#   - tools/stats_snapshot.py ist bewusst NICHT Teil dieses regulaeren Pfades
+#   - Snapshot/Rebuild/Reparatur laufen separat ueber oroma-stats-repair.*
+#
+# Aktivierung:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now oroma-stats.timer
+#
+# Logs:
+#   journalctl -u oroma-stats.service -n 120 --no-pager
+# ==============================================================================
+
+[Unit]
+Description=ORÓMA – Stats Event Aggregator (stats.db Read-Model)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/opt/ai/oroma/.use_orchestrator
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai/oroma
+
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=OROMA_DBW_ENABLE=1
+
+# Anpassen, falls du NICHT als User "oroma" läufst:
+User=oroma
+Group=oroma
+UMask=002
+
+ExecStart=/usr/bin/env PYTHONPATH=/opt/ai/oroma /usr/bin/python3 /opt/ai/oroma/tools/stats_event_aggregator.py --once
+
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+
+[Install]
+WantedBy=multi-user.target

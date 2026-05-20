@@ -1,0 +1,319 @@
+<!-- =============================================================================
+ * Pfad:    /opt/ai/oroma/ui/templates/scenegraph.html
+ * Projekt: ORÓMA – Headless UI
+ * Modul:   SceneGraph Viewer
+ * Version: v3.8-r2
+ * Stand:   2025-11-28
+ * Autor:   ORÓMA · KI-JWG-X1
+ *
+ * Zweck
+ * ─────
+ *  - Zeigt SceneGraphs an, die aus MetaSnaps + SnapChains generiert wurden.
+ *  - Fokus: 2.5D-„Beziehungsraum“ zwischen:
+ *      • MetaSnaps (Konzepte / Verdichtungen)
+ *      • SnapChains (Episoden)
+ *      • Origin-Knoten (Herkunft: game:snake, ask, replay, ...)
+ *
+ * Funktionen
+ * ──────────
+ *  - Auto-Graph:
+ *      • Button „Neu aus MetaSnaps bauen“
+ *      • Steuerung: max_meta, max_chains, persist (optional)
+ *      • Darstellung:
+ *          – kurze Zusammenfassung (Nodes/Edges)
+ *          – Tabellen für Nodes & Edges
+ *          – JSON-Rohansicht (für Debugging)
+ *
+ *  - Gespeicherte SceneGraphs:
+ *      • Tabelle mit ID, Namespace, Source, Quality, Notes
+ *      • Klick lädt den Graph in dieselbe Detail-Ansicht
+ *
+ * Sicherheit / Token
+ * ──────────────────
+ *  - base.html injiziert window.OROMA_UI_TOKEN.
+ *  - API-Calls senden X-OROMA-TOKEN automatisch, wenn gesetzt.
+ * ============================================================================= -->
+{% extends "base.html" %}
+
+{% block title %}SceneGraph – ORÓMA{% endblock %}
+
+{% block content %}
+<h1>SceneGraph Viewer</h1>
+
+<section>
+  <p>
+    Hier kannst du die <strong>aktuelle Objekt-/Meta-Beziehungsstruktur</strong>
+    aus <code>meta_snaps</code> und <code>snapchains</code> inspizieren.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>Auto-Graph aus MetaSnaps</h2>
+
+  <div class="form-row">
+    <label for="max-meta">max_meta</label>
+    <input id="max-meta" type="number" min="1" max="256" value="32">
+    <label for="max-chains">max_chains_per_meta</label>
+    <input id="max-chains" type="number" min="1" max="64" value="16">
+    <label>
+      <input id="persist" type="checkbox">
+      persistieren
+    </label>
+    <button id="btn-build-auto" type="button">Neu aus MetaSnaps bauen</button>
+  </div>
+
+  <div id="auto-summary" class="summary-box">
+    <em>Noch kein SceneGraph geladen.</em>
+  </div>
+
+  <div class="split-columns">
+    <div class="column">
+      <h3>Nodes</h3>
+      <table class="simple-table" id="nodes-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Kind</th>
+            <th>Label</th>
+            <th>Score</th>
+            <th>TS</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- JS füllt hier ein -->
+        </tbody>
+      </table>
+    </div>
+    <div class="column">
+      <h3>Edges</h3>
+      <table class="simple-table" id="edges-table">
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th>Target</th>
+            <th>Label</th>
+            <th>Kind</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- JS füllt hier ein -->
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <details class="json-details">
+    <summary>Roh-JSON anzeigen</summary>
+    <pre id="graph-json" class="json-viewer"></pre>
+  </details>
+</section>
+
+<section class="panel">
+  <h2>Gespeicherte SceneGraphs</h2>
+
+  <div class="form-row">
+    <label for="list-namespace">Namespace (optional)</label>
+    <input id="list-namespace" type="text" placeholder="z.B. scene:auto_meta">
+    <button id="btn-load-list" type="button">Liste laden</button>
+  </div>
+
+  <table class="simple-table" id="scenegraph-list">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>TS</th>
+        <th>Namespace</th>
+        <th>Source</th>
+        <th>Quality</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <!-- JS füllt hier ein -->
+    </tbody>
+  </table>
+</section>
+
+<script>
+(function() {
+  function apiFetch(url) {
+    const headers = {};
+    if (window.OROMA_UI_TOKEN) {
+      headers["X-OROMA-TOKEN"] = window.OROMA_UI_TOKEN;
+    }
+    return fetch(url, { headers });
+  }
+
+  function fmtTs(ts) {
+    if (!ts) return "";
+    try {
+      const d = new Date(ts * 1000);
+      return d.toISOString().replace("T", " ").slice(0, 19);
+    } catch (e) {
+      return String(ts);
+    }
+  }
+
+  function clearTable(tbody) {
+    while (tbody.firstChild) {
+      tbody.removeChild(tbody.firstChild);
+    }
+  }
+
+  function renderNodes(nodes) {
+    const tbody = document.querySelector("#nodes-table tbody");
+    clearTable(tbody);
+    (nodes || []).forEach(function(n) {
+      const tr = document.createElement("tr");
+      function td(txt) {
+        const el = document.createElement("td");
+        el.textContent = (txt === null || txt === undefined) ? "" : String(txt);
+        return el;
+      }
+      tr.appendChild(td(n.id));
+      tr.appendChild(td(n.kind));
+      tr.appendChild(td(n.label));
+      tr.appendChild(td(n.score));
+      tr.appendChild(td(fmtTs(n.ts)));
+      tbody.appendChild(tr);
+    });
+  }
+
+  function renderEdges(edges) {
+    const tbody = document.querySelector("#edges-table tbody");
+    clearTable(tbody);
+    (edges || []).forEach(function(e) {
+      const tr = document.createElement("tr");
+      function td(txt) {
+        const el = document.createElement("td");
+        el.textContent = (txt === null || txt === undefined) ? "" : String(txt);
+        return el;
+      }
+      tr.appendChild(td(e.source));
+      tr.appendChild(td(e.target));
+      tr.appendChild(td(e.label));
+      tr.appendChild(td(e.kind));
+      tbody.appendChild(tr);
+    });
+  }
+
+  function renderSummary(meta) {
+    const box = document.getElementById("auto-summary");
+    if (!meta) {
+      box.innerHTML = "<em>Keine Metadaten verfügbar.</em>";
+      return;
+    }
+    const builtAt = meta.built_at ? fmtTs(meta.built_at) : "";
+    const saved = (meta.saved_id !== undefined && meta.saved_id !== null)
+      ? (" | saved_id=" + meta.saved_id)
+      : "";
+    box.textContent =
+      "SceneGraph: nodes=" + (meta.num_nodes || 0) +
+      ", edges=" + (meta.num_edges || 0) +
+      ", meta_snaps=" + (meta.num_meta || 0) +
+      ", built_at=" + builtAt +
+      saved;
+  }
+
+  function setGraphJson(graph) {
+    const pre = document.getElementById("graph-json");
+    pre.textContent = JSON.stringify(graph || {}, null, 2);
+  }
+
+  function buildAutoGraph() {
+    const maxMeta = document.getElementById("max-meta").value || "32";
+    const maxChains = document.getElementById("max-chains").value || "16";
+    const persist = document.getElementById("persist").checked ? "1" : "0";
+    const url = "/scenegraph/api/auto"
+      + "?max_meta=" + encodeURIComponent(maxMeta)
+      + "&max_chains=" + encodeURIComponent(maxChains)
+      + "&persist=" + encodeURIComponent(persist);
+
+    apiFetch(url)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (!data || !data.ok) {
+          alert("SceneGraph-Fehler: " + (data && data.error ? data.error : "unbekannt"));
+          return;
+        }
+        const g = data.graph || {};
+        renderNodes(g.nodes || []);
+        renderEdges(g.edges || []);
+        renderSummary(data.meta || {});
+        setGraphJson(g);
+      })
+      .catch(function(err) {
+        console.error("SceneGraph auto error:", err);
+        alert("SceneGraph-Request fehlgeschlagen (siehe Konsole).");
+      });
+  }
+
+  function renderList(items) {
+    const tbody = document.querySelector("#scenegraph-list tbody");
+    clearTable(tbody);
+    (items || []).forEach(function(it) {
+      const tr = document.createElement("tr");
+      tr.dataset.id = it.id;
+      function td(txt) {
+        const el = document.createElement("td");
+        el.textContent = (txt === null || txt === undefined) ? "" : String(txt);
+        return el;
+      }
+      tr.appendChild(td(it.id));
+      tr.appendChild(td(fmtTs(it.ts)));
+      tr.appendChild(td(it.namespace || ""));
+      tr.appendChild(td(it.source || ""));
+      tr.appendChild(td(it.quality));
+      tr.appendChild(td(it.notes || ""));
+
+      tr.addEventListener("click", function() {
+        const id = it.id;
+        apiFetch("/scenegraph/api/get/" + encodeURIComponent(id))
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            if (!data || !data.ok) {
+              alert("SceneGraph nicht gefunden (id=" + id + ")");
+              return;
+            }
+            const g = (data.graph && data.graph.graph) || {};
+            renderNodes(g.nodes || []);
+            renderEdges(g.edges || []);
+            renderSummary((data.graph && data.graph.meta) || {});
+            setGraphJson(g);
+          })
+          .catch(function(err) {
+            console.error("SceneGraph load error:", err);
+            alert("SceneGraph-Load fehlgeschlagen (siehe Konsole).");
+          });
+      });
+
+      tbody.appendChild(tr);
+    });
+  }
+
+  function loadList() {
+    const ns = document.getElementById("list-namespace").value || "";
+    let url = "/scenegraph/api/list";
+    if (ns) {
+      url += "?namespace=" + encodeURIComponent(ns);
+    }
+    apiFetch(url)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (!data || !data.ok) {
+          alert("SceneGraph-Liste: Fehler");
+          return;
+        }
+        renderList(data.items || []);
+      })
+      .catch(function(err) {
+        console.error("SceneGraph list error:", err);
+        alert("SceneGraph-Liste fehlgeschlagen (siehe Konsole).");
+      });
+  }
+
+  document.getElementById("btn-build-auto").addEventListener("click", buildAutoGraph);
+  document.getElementById("btn-load-list").addEventListener("click", loadList);
+})();
+</script>
+{% endblock %}

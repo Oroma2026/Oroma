@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <h1>📉 Knowledge Gaps</h1>
+  <p class="lead">
+    Analyse von Wissenslücken und Unsicherheiten im System.
+    <small class="text-muted">
+      API: /gaps/api/summary & /gaps/api/list
+      {% if public %}· <span class="badge bg-success">PUBLIC</span>{% else %}· <span class="badge bg-secondary">Token</span>{% endif %}
+    </small>
+  </p>
+
+  <!-- Summary -->
+  <div class="card text-bg-dark mb-3">
+    <div class="card-header">Übersicht</div>
+    <div class="card-body">
+      <div class="row">
+        <div class="col-6">
+          <div class="display-6" id="s-count">–</div>
+          <div class="text-muted">Anzahl Gaps</div>
+        </div>
+        <div class="col-6">
+          <div class="display-6" id="s-conf">–</div>
+          <div class="text-muted">Ø Confidence</div>
+        </div>
+      </div>
+      <pre id="rawSummary" class="bg-black p-2 rounded small mt-3">Lade…</pre>
+      <div id="authHint" class="small text-warning mt-2 d-none">
+        API: TOKEN REQUIRED. Öffne die Seite mit <code>?token=DEIN_TOKEN</code> oder setze einmalig im Browser:
+        <code>localStorage.setItem('OROMA_UI_TOKEN','DEIN_TOKEN')</code>.
+      </div>
+    </div>
+  </div>
+
+  <!-- Liste -->
+  <div class="card text-bg-dark">
+    <div class="card-header d-flex align-items-center">
+      <span>Details</span>
+      <button class="btn btn-outline-light btn-sm ms-auto" id="btn-refresh">🔄</button>
+    </div>
+    <div class="card-body">
+      <table class="table table-dark table-striped table-sm">
+        <thead>
+          <tr>
+            <th>Zeit</th>
+            <th>Typ</th>
+            <th>Beschreibung</th>
+            <th>Confidence</th>
+          </tr>
+        </thead>
+        <tbody id="gapTable">
+          <tr><td colspan="4" class="text-muted">Noch keine Daten…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  // Token aus injiziertem Wert oder LocalStorage
+  const TOKEN = (window.OROMA_UI_TOKEN && String(window.OROMA_UI_TOKEN)) ||
+                window.localStorage.getItem('OROMA_UI_TOKEN') || '';
+
+  async function apiFetch(url){
+    // Wenn Token vorhanden → Header + ?token= Kompatibilität
+    const headers = {};
+    let finalUrl = url;
+    if (TOKEN) {
+      headers['X-OROMA-TOKEN'] = TOKEN;
+      finalUrl = url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(TOKEN);
+    }
+    const r = await fetch(finalUrl, {headers, cache:'no-store'});
+    return r;
+  }
+
+  function setAuthHint(show){
+    const el = document.getElementById('authHint');
+    if (!el) return;
+    el.classList.toggle('d-none', !show);
+  }
+
+  async function loadSummary(){
+    try{
+      const r = await apiFetch('/gaps/api/summary');
+      if (r.status === 401) { setAuthHint(true); return; }
+      const j = await r.json();
+      document.getElementById('rawSummary').textContent = JSON.stringify(j, null, 2);
+      if (j && j.ok && j.summary){
+        const c = Number(j.summary.count || 0);
+        const a = Number(j.summary.confidence || 0);
+        document.getElementById('s-count').textContent = String(c);
+        document.getElementById('s-conf').textContent = isFinite(a) ? a.toFixed(2) : '–';
+      }
+      setAuthHint(false);
+    }catch(e){
+      console.error('Gap-Summary Fehler:', e);
+    }
+  }
+
+  async function loadList(){
+    try{
+      const r = await apiFetch('/gaps/api/list?limit=200');
+      if (r.status === 401) { setAuthHint(true); return; }
+      const j = await r.json();
+      const tb = document.getElementById('gapTable');
+      if (!j.ok || !Array.isArray(j.items) || j.items.length===0){
+        tb.innerHTML = '<tr><td colspan="4" class="text-muted">Keine Gaps</td></tr>';
+        return;
+      }
+      tb.innerHTML = '';
+      j.items.forEach(g=>{
+        const tr = document.createElement('tr');
+        const ts = (g.ts ? new Date(g.ts*1000).toLocaleString() : '–');
+        tr.innerHTML = `
+          <td>${ts}</td>
+          <td>${g.kind||'-'}</td>
+          <td>${g.desc||'-'}</td>
+          <td>${(g.confidence!=null?Number(g.confidence).toFixed(2):'-')}</td>`;
+        tb.appendChild(tr);
+      });
+      setAuthHint(false);
+    }catch(e){
+      console.error('Gap-List Fehler:', e);
+    }
+  }
+
+  document.getElementById('btn-refresh')?.addEventListener('click', ()=>{
+    loadSummary(); loadList();
+  });
+
+  loadSummary(); loadList();
+  setInterval(loadSummary, 10000);
+  setInterval(loadList,    10000);
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,128 @@
+<!-- =============================================================================
+ * Pfad:    /opt/ai/oroma/ui/templates/base.html
+ * Projekt: ORÓMA
+ * Version: v3.7.4 (robust nav + local Chart.js)
+ * Stand:   2025-12-18
+ *
+ * Zweck / Rolle
+ * ─────────────
+ *  - Zentrales Layout (Master-Template) für ALLE Dashboard-Seiten.
+ *  - Robuste Navigation ohne url_for() in Links (weniger BuildErrors).
+ *  - Bindet gemeinsame Assets ein:
+ *      • /static/style.css     → Styles
+ *      • /static/scripts.js    → zentrales Frontend (Badges/Polling)
+ *      • /static/chart.min.js  → Chart.js (offline-fähig, Safari-freundlich)
+ *
+ * Sicherheit / Token
+ * ──────────────────
+ *  - ENV OROMA_UI_TOKEN kann APIs schützen (Header: X-OROMA-TOKEN).
+ *  - Token wird optional ins window-Objekt injiziert:
+ *      window.OROMA_UI_TOKEN = "{{ ui_token|default('', true) }}";
+ * ============================================================================= -->
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}ORÓMA Dashboard{% endblock %}</title>
+
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+
+  <!-- Chart.js lokal (offline) -->
+  <script src="{{ url_for('static', filename='chart.min.js') }}"></script>
+</head>
+<body>
+  <nav>
+    <ul>
+      <!-- Kernseiten -->
+      <li><a href="/">Home</a></li>
+      <li><a href="/games">Games</a></li>
+      <li><a href="/synapses">Synapses</a></li>
+      <li><a href="/episodic">Episodic</a></li>
+      <li><a href="/memory">Memory</a></li>
+      <li><a href="/why">Why?</a></li>
+
+      <!-- Module -->
+      <li><a href="/chat">Chat</a></li>
+      <li><a href="/picar">PiCar</a></li>
+      <li><a href="/asr">ASR (Whisper)</a></li>
+      <li><a href="/asr2">ASR2 (Wrapper)</a></li>
+      <li>
+        <a href="/audio">Audio</a>
+        <span id="audio-badge" class="audio-badge">…</span>
+      </li>
+      <li><a href="/learning">Learning</a></li>
+      <li><a href="/control">Control</a></li>
+      <li><a href="/models">Models</a></li>
+      <li><a href="/knowledge">Knowledge</a> &nbsp;|&nbsp; <a href="/knowledge/search">Search</a></li>
+      <li><a href="/ask">Ask ORÓMA</a></li>
+      <li><a href="/export">Export</a></li>
+      <li><a href="/import">Import</a></li>
+      <li><a href="/replay">Replay</a></li>
+      <li><a href="/dream">Dream</a></li>
+      <li><a href="/video">Video</a></li>
+      <li><a href="/stats">Stats</a></li>
+
+      <!-- Health mit Badge -->
+      <li>
+        <a href="/health">Health</a>
+        <span id="health-badge" class="health-badge npu-off">…</span>
+      </li>
+
+      <!-- Forgetting mit Badge -->
+      <li>
+        <a href="/forgetting">Forgetting</a>
+        <span id="forgetting-badge" class="forgetting-badge">…</span>
+      </li>
+
+      <!-- Curriculum mit Badge -->
+      <li>
+        <a href="/curriculum">Curriculum</a>
+        <span id="curriculum-badge" class="curriculum-badge">…</span>
+      </li>
+
+      <!-- Missions mit Badge -->
+      <li>
+        <a href="/missions">Missions</a>
+        <span id="missions-badge" class="missions-badge">…</span>
+      </li>
+
+      <!-- Sonstiges -->
+      <li><a href="/research">Research</a></li>
+      <li><a href="/meta">MetaSnaps</a></li>
+      <li><a href="/scenegraph">SceneGraphs</a></li>
+      <li><a href="/objects">Objects</a></li>
+      <li><a href="/calculator">Calculator</a></li>
+      <li><a href="/scicalc">SciCalc+Charts</a></li>
+      <li><a href="/setcalc">SetCalc</a></li>
+      <li><a href="/empathy">Empathy</a></li>
+      <li><a href="/coverage">Coverage</a></li>
+      <li><a href="/selftest">Selftest</a></li>
+
+      <!-- Weitere Badges -->
+      <li>
+        <a href="/gaps">Gaps</a>
+        <span id="gap-badge" class="gap-badge">…</span>
+      </li>
+      <li>
+        <a href="/control">Phase</a>
+        <span id="phase-badge" class="phase-badge">…</span>
+      </li>
+      <li>
+        <a href="/asr2">ASR2</a>
+        <span id="asr-badge" class="asr-badge">…</span>
+      </li>
+    </ul>
+  </nav>
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  <script>
+    window.OROMA_UI_TOKEN = "{{ ui_token|default('', true) }}";
+  </script>
+
+  <script src="{{ url_for('static', filename='scripts.js') }}"></script>
+</body>
+</html>

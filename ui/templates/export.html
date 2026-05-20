@@ -1,0 +1,97 @@
+<!-- =============================================================================
+     Datei:   /opt/ai/oroma/ui/templates/export.html
+     Projekt: ORÓMA v3.5
+     Zweck:   UI für den Export von SnapChains & Modellen
+     Routen:  - /export
+     ============================================================================= -->
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <h1 class="mb-3">📦 Export</h1>
+  <p class="text-muted">
+    Erstelle SnapChain- oder Modell-Exporte und lade vorhandene herunter.
+  </p>
+
+  <!-- Navigation -->
+  <p>
+    {#
+      Hinweis (Bugfix / Kompat):
+        In dieser ZIP wird der Import über ui/bundle_ui.py bereitgestellt (Blueprint: bundle_ui,
+        url_prefix=/import). In base.html ist /import absichtlich als fester Link
+        umgesetzt (Kompatibilität/Bookmarks). Deshalb hier ebenfalls /import als stabiler Pfad.
+
+        Hintergrund: Ein älterer Template-Link nutzte einen nicht existierenden Endpoint
+        (z.B. "import.index" / "import_ui.page") und verursachte einen TemplateBuildError
+        → /export lieferte 500.
+    #}
+    <a href="/import" class="btn btn-outline-primary btn-sm">
+      ➡ Zum Import wechseln
+    </a>
+  </p>
+
+  <!-- Export starten -->
+  <div class="card bg-dark text-light shadow mb-3">
+    <div class="card-header">Export starten</div>
+    <div class="card-body">
+      <button class="btn btn-success btn-sm" onclick="startExport()">📤 Neuen Export erstellen</button>
+      <div id="export-msg" class="mt-2 text-info small">Noch kein Export gestartet…</div>
+    </div>
+  </div>
+
+  <!-- Verfügbare Exporte -->
+  <div class="card bg-dark text-light shadow mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>Verfügbare Exporte</span>
+      <button class="btn btn-sm btn-outline-info" onclick="loadExports()">🔄 Aktualisieren</button>
+    </div>
+    <div class="card-body">
+      <ul id="export-list" class="list-unstyled mb-0">
+        <li class="text-muted">Noch keine Exporte vorhanden…</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+async function loadExports() {
+  try {
+    const r = await fetch("/export/api/list");
+    const j = await r.json();
+    const list = document.getElementById("export-list");
+    list.innerHTML = "";
+    if (j.ok && j.files && j.files.length > 0) {
+      j.files.forEach(f => {
+        const li = document.createElement("li");
+        li.innerHTML = `<a href="/export/api/download/${f.name}" class="export-link">${f.name}</a>
+                        <small class="text-muted">(${f.size_kb} KB, ${f.mtime})</small>`;
+        list.appendChild(li);
+      });
+    } else {
+      list.innerHTML = '<li class="text-muted">Keine Exporte gefunden…</li>';
+    }
+  } catch (e) {
+    document.getElementById("export-list").innerHTML =
+      `<li class="text-danger">❌ Fehler beim Laden: ${e}</li>`;
+  }
+}
+
+async function startExport() {
+  try {
+    const r = await fetch("/export/api/export", {method: "POST"});
+    const j = await r.json();
+    const msg = document.getElementById("export-msg");
+    if (j.ok) {
+      msg.innerText = "✅ Export erstellt: " + j.file;
+      loadExports();
+    } else {
+      msg.innerText = "❌ Fehler: " + (j.error || j.msg);
+    }
+  } catch (e) {
+    document.getElementById("export-msg").innerText = "❌ API-Fehler: " + e;
+  }
+}
+
+// Initial laden
+document.addEventListener("DOMContentLoaded", loadExports);
+</script>
+{% endblock %}

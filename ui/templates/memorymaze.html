@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% block content %}
+<!-- =============================================================================
+     Pfad:     /opt/ai/oroma/ui/templates/memorymaze.html
+     Projekt:  ORÓMA – Headless UI (Flask)
+     Modul:    MemoryMaze Hybrid – Standard-UI (TicTacToe-Pattern)
+     Version:  v1.0
+     Stand:    2026-02-22
+     Autor:    ORÓMA · KI-JWG-X1 + GPT-5.2 Thinking
+
+     Zweck
+     -----
+       Diese Seite ist bewusst an das TicTacToe-Pattern angelehnt:
+         • Start/Stop (Autoplay) ohne Server-Threads (Client tickt /api/step)
+         • Apply/Reset für Parameter
+         • Status-Panel (step, pairs_left, strikes, speed, winner)
+         • Debug-Grid (ASCII)
+
+       Route bleibt stabil: /memorymaze/
+
+============================================================================= -->
+
+<main style="padding:1rem;">
+
+  <style>
+    .badge { padding:0.35rem 0.5rem; border-radius:6px; }
+    .badge-ok { background:#2b9348; color:#fff; }
+    .badge-off { background:#6c757d; color:#fff; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .gridbox { white-space:pre; line-height:1.05; font-size:12px; }
+  </style>
+
+  <div class="d-flex flex-wrap justify-content-between align-items-center mb-2">
+    <h2 class="mb-2 mb-sm-0">🧠🧩 ORÓMA MemoryMaze Hybrid</h2>
+    <div class="text-end">
+      <span id="autoBadge" class="badge ms-3 badge-off">AUTOPLAY OFF</span>
+      <span id="modeBadge" class="badge ms-1 badge-off" title="Mode">MODE</span>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-7">
+      <div class="card text-bg-dark">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>🗺️ Maze (Debug Grid)</span>
+          <small class="text-info" id="miniInfo">–</small>
+        </div>
+        <div class="card-body">
+          <pre id="grid" class="gridbox mono bg-black p-2 rounded" style="min-height:520px;">loading…</pre>
+          <div class="mt-3">
+            <button id="btnStep" class="btn btn-outline-light btn-sm">⏭ Step</button>
+            <button id="btnAuto" class="btn btn-success btn-sm ms-1">▶️ Start</button>
+            <button id="btnReset" class="btn btn-danger btn-sm ms-1">🔄 Reset</button>
+          </div>
+          <div class="mt-3 small text-muted">
+            Hinweis: Autoplay ist client-seitig (kein Thread im Service). P1/P2/P3 werden im Server pro Step via AI bewegt.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-5">
+      <div class="card text-bg-dark mb-3">
+        <div class="card-header">⚙️ Parameter</div>
+        <div class="card-body">
+          <div class="row g-2">
+            <div class="col-6">
+              <label class="form-label">Mode</label>
+              <select id="modeSel" class="form-select">
+                <option value="normal">normal</option>
+                <option value="hard_p3">hard_p3</option>
+              </select>
+            </div>
+            <div class="col-6">
+              <label class="form-label">Map</label>
+              <select id="mapSel" class="form-select">
+                <option value="sym">sym</option>
+                <option value="asym">asym</option>
+              </select>
+            </div>
+            <div class="col-6">
+              <label class="form-label">ε (Explore)</label>
+              <input id="eps" class="form-control" type="number" step="0.01" min="0" max="1" value="0.08">
+            </div>
+            <div class="col-6">
+              <label class="form-label">Seed (optional)</label>
+              <input id="seed" class="form-control" type="number" placeholder="z.B. 123">
+            </div>
+          </div>
+          <div class="mt-3">
+            <button id="btnApply" class="btn btn-outline-light btn-sm">✅ Apply</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card text-bg-dark">
+        <div class="card-header">📦 Status</div>
+        <div class="card-body">
+          <div class="small">step: <span id="step">0</span> · pairs_left: <span id="pairsLeft">0</span> · winner: <span id="winner">–</span></div>
+          <div class="small">P1 strikes: <span id="s1">0</span> · speed: <span id="v1">1.00</span></div>
+          <div class="small">P2 strikes: <span id="s2">0</span> · speed: <span id="v2">1.00</span></div>
+          <div class="small">P3 strikes: <span id="s3">0</span> · speed: <span id="v3">1.00</span> · active: <span id="p3a">0</span></div>
+          <div class="small">last_tick_ms: <span id="lt">0</span> · ai: <span id="ai">–</span></div>
+          <pre id="raw" class="bg-black p-2 rounded small text-white mono" style="min-height:240px;"></pre>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</main>
+
+<script>
+let autoplay = false;
+let timer = null;
+let pollMs = 450;
+let inFlight = false;
+
+function setBadge(id, on, onText, offText){
+  const el = document.getElementById(id);
+  if(!el) return;
+  if(on){
+    el.classList.remove('badge-off');
+    el.classList.add('badge-ok');
+    el.textContent = onText;
+  }else{
+    el.classList.remove('badge-ok');
+    el.classList.add('badge-off');
+    el.textContent = offText;
+  }
+}
+
+async function postJSON(url, payload){
+  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload||{})});
+  return await r.json();
+}
+
+function render(st){
+  document.getElementById('step').textContent = st.step ?? 0;
+  document.getElementById('pairsLeft').textContent = st.pairs_left ?? 0;
+  document.getElementById('winner').textContent = st.winner ?? '–';
+  document.getElementById('lt').textContent = st.last_tick_ms ?? 0;
+
+  const s = st.strikes || {};
+  const v = st.speed || {};
+  document.getElementById('s1').textContent = s.p1 ?? 0;
+  document.getElementById('s2').textContent = s.p2 ?? 0;
+  document.getElementById('s3').textContent = s.p3 ?? 0;
+  document.getElementById('v1').textContent = (v.p1 ?? 1).toFixed(2);
+  document.getElementById('v2').textContent = (v.p2 ?? 1).toFixed(2);
+  document.getElementById('v3').textContent = (v.p3 ?? 1).toFixed(2);
+  document.getElementById('p3a').textContent = (st.p3 && st.p3.active) ? '1' : '0';
+
+  const ai = st.ai || {};
+  document.getElementById('ai').textContent = `p1=${ai.p1||''} p2=${ai.p2||''} p3=${ai.p3||''}`;
+
+  const grid = (st.grid || []).join('\n');
+  document.getElementById('grid').textContent = grid || '(no grid)';
+
+  document.getElementById('raw').textContent = JSON.stringify(st, null, 2);
+
+  // badges
+  autoplay = !!st.autoplay;
+  setBadge('autoBadge', autoplay, 'AUTOPLAY ON', 'AUTOPLAY OFF');
+  const mode = st.mode_sel || st.mode || 'normal';
+  setBadge('modeBadge', true, `MODE ${mode}`, `MODE ${mode}`);
+
+  // sync controls
+  document.getElementById('modeSel').value = st.mode_sel || 'normal';
+  document.getElementById('mapSel').value = st.map_kind || 'sym';
+  document.getElementById('eps').value = st.eps ?? 0.08;
+  document.getElementById('seed').value = (st.seed === null || st.seed === undefined) ? '' : st.seed;
+  document.getElementById('btnAuto').textContent = autoplay ? '⏹ Stop' : '▶️ Start';
+  document.getElementById('miniInfo').textContent = `mode=${mode} · pairs_left=${st.pairs_left ?? 0}`;
+}
+
+async function loadState(){
+  const r = await fetch('/memorymaze/api/state');
+  const st = await r.json();
+  render(st);
+}
+
+async function doStep(){
+  if(inFlight) return;
+  inFlight = true;
+  try {
+    const st = await postJSON('/memorymaze/api/step', {});
+    render(st);
+  } finally {
+    inFlight = false;
+  }
+}
+
+function startTimer(){
+  if(timer) return;
+  timer = setInterval(doStep, pollMs);
+}
+
+function stopTimer(){
+  if(timer){ clearInterval(timer); timer = null; }
+}
+
+document.getElementById('btnStep').addEventListener('click', doStep);
+
+document.getElementById('btnAuto').addEventListener('click', async ()=>{
+  const target = !autoplay;
+  const st = await postJSON('/memorymaze/api/toggle_autoplay', {autoplay: target});
+  autoplay = !!st.autoplay;
+  setBadge('autoBadge', autoplay, 'AUTOPLAY ON', 'AUTOPLAY OFF');
+  document.getElementById('btnAuto').textContent = autoplay ? '⏹ Stop' : '▶️ Start';
+  if(autoplay) startTimer(); else stopTimer();
+});
+
+document.getElementById('btnReset').addEventListener('click', async ()=>{
+  const payload = {
+    mode: document.getElementById('modeSel').value,
+    map_kind: document.getElementById('mapSel').value,
+    eps: parseFloat(document.getElementById('eps').value||'0.08'),
+    seed: document.getElementById('seed').value ? parseInt(document.getElementById('seed').value) : null,
+  };
+  const st = await postJSON('/memorymaze/api/reset', payload);
+  stopTimer();
+  render(st);
+});
+
+document.getElementById('btnApply').addEventListener('click', async ()=>{
+  const payload = {
+    mode: document.getElementById('modeSel').value,
+    map_kind: document.getElementById('mapSel').value,
+    eps: parseFloat(document.getElementById('eps').value||'0.08'),
+    seed: document.getElementById('seed').value ? parseInt(document.getElementById('seed').value) : null,
+  };
+  await postJSON('/memorymaze/api/apply', payload);
+  await loadState();
+});
+
+document.addEventListener('visibilitychange', async ()=>{
+  if(document.hidden && autoplay){
+    await postJSON('/memorymaze/api/toggle_autoplay', {autoplay:false});
+    autoplay = false;
+    stopTimer();
+    await loadState();
+  }
+});
+
+loadState();
+</script>
+
+{% endblock %}

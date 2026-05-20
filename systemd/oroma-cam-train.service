@@ -1,0 +1,83 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-cam-train.service
+# Projekt:  ORÓMA – Kamera SnapToken Trainer (KMeans, headless)
+# Version:  v3.8-r2 (systemweit)
+# Stand:    2025-12-23
+# Autor:    ORÓMA · KI-JWG-X1
+# =============================================================================
+#
+# Zweck
+# ─────
+#   Führt periodisch oder manuell das Training/Refresh der Kamera-SnapTokens aus
+#   (KMeans/Clustering), damit Vision-Token stabil und dedupebar bleiben.
+#
+# Hinweise
+# ────────
+#   • Headless: kein Qt/Wayland/X11
+#   • Läuft als User "oroma" → verhindert Root-owned Logs/DB-Side-Effects
+#   • Logs append nach /opt/ai/oroma/logs/cam_train.out/err.log
+#
+# ENV
+# ───
+#   Lädt (optional) folgende Dateien:
+#     - /opt/ai/oroma/.env.systemd
+#     - /opt/ai/oroma/.env
+#
+#   Zusätzlich:
+#     PYTHONPATH=/opt/ai/oroma
+#     OROMA_LOG_DIR=/opt/ai/oroma/logs
+#
+# Manuell
+# ───────
+#   sudo systemctl start oroma-cam-train.service
+#   journalctl -u oroma-cam-train.service -n 200 --no-pager
+#
+# Timer (optional)
+# ───────────────
+#   Empfohlen via oroma-cam-train.timer (falls vorhanden) – ansonsten manuell.
+# =============================================================================
+
+[Unit]
+Description=ORÓMA – Kamera SnapToken Trainer (KMeans, headless)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai/oroma
+SyslogIdentifier=oroma-cam-train
+
+User=oroma
+Group=oroma
+UMask=002
+
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+Environment=PYTHONPATH=/opt/ai/oroma
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=Europe/Berlin
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=OROMA_LOG_DIR=/opt/ai/oroma/logs
+
+# Bootstrap
+ExecStartPre=/usr/bin/env bash -lc 'mkdir -p /opt/ai/oroma/logs /opt/ai/oroma/data'
+ExecStartPre=/usr/bin/env bash -lc 'touch /opt/ai/oroma/logs/cam_train.out.log /opt/ai/oroma/logs/cam_train.err.log'
+
+ExecStart=/usr/bin/python3 -m core.cam_token_train
+
+# Logging (systemd ≥ 240)
+StandardOutput=append:/opt/ai/oroma/logs/cam_train.out.log
+StandardError=append:/opt/ai/oroma/logs/cam_train.err.log
+
+# Härtung
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=yes
+ReadWritePaths=/opt/ai/oroma/logs /opt/ai/oroma/data
+
+[Install]
+WantedBy=multi-user.target

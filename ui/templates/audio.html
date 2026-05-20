@@ -1,0 +1,235 @@
+<!-- =============================================================================
+Pfad:    /opt/ai/oroma/ui/templates/audio.html
+Projekt: ORÓMA
+Version: v3.6 + UI-Feinschliff (2026-01-08)
+Stand:   2025-09-28 + 2026-01-08
+
+Zweck
+-----
+Audio-Dashboard (Headless-freundlich):
+  - Mic starten/stoppen
+  - Pegelmesser (Level)
+  - Kurzaufnahme als WAV erzeugen und im Browser anhören
+  - Geräteübersicht (Input/Output) inkl. markierter Auswahl
+
+Wichtige UI-Details (Patch 2026-01-08)
+-----------------------------------
+  - Statusanzeige nutzt mic_active UND mic (Backwards-Kompatibilität)
+  - Anzeige der technisch relevanten Werte:
+      open_sr / target_sr / channels / selected device indices
+  - Anzeige "letzter Audio-Fehler" (DeviceHub) direkt in der UI
+  - Markierung der aktuell ausgewählten Devices in der Liste (★)
+
+Hinweis
+-------
+Token-Header/X-OROMA-TOKEN wird automatisch über /static/scripts.js gesetzt.
+============================================================================= -->
+{% extends "base.html" %}
+{% block title %}Audio · ORÓMA{% endblock %}
+{% block content %}
+<div class="container mt-4">
+  <h2>🎙️ Audio</h2>
+  <p class="text-muted">
+    Mikrofon starten, Pegel sehen, kurz aufnehmen und direkt im Browser anhören.
+    Geräteauswahl erfolgt automatisch (ENV: OROMA_AUDIO_INPUT_NAME / OUTPUT_NAME).
+  </p>
+
+  <!-- Status & Steuerung -->
+  <div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      Mikrofon
+      <div>
+        <button id="aStart" class="btn btn-sm btn-success">▶️ Start</button>
+        <button id="aStop"  class="btn btn-sm btn-warning">⏸ Stop</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div><b>Status:</b> <span id="aStatus">-</span></div>
+      <div class="text-muted small mt-1" id="aTech">-</div>
+      <div class="text-danger small mt-1" id="aErr" style="display:none;"></div>
+      <div class="mt-2">
+        <label class="form-label"><b>Pegel</b> (<span id="aLvlTxt">0%</span>)</label>
+        <div style="height:10px;background:#eee;border-radius:6px;overflow:hidden;max-width:420px;">
+          <div id="aLvlBar" style="height:10px;width:0%;background:#1e88e5;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Aufnahme -->
+  <div class="card mb-3">
+    <div class="card-header">Aufnahme</div>
+    <div class="card-body">
+      <div class="row g-2 align-items-center">
+        <div class="col-auto">
+          <input id="aSec" class="form-control" style="width:120px" placeholder="Sekunden" value="3">
+        </div>
+        <div class="col-auto">
+          <input id="aGain" class="form-control" style="width:120px" placeholder="Gain dB" value="">
+
+        </div>
+        <div class="col-auto">
+          <button id="aRec" class="btn btn-primary">⏺ Aufnahme holen</button>
+        </div>
+      </div>
+      <audio id="aPlayer" controls class="mt-3" style="width:100%; max-width:480px;"></audio>
+    </div>
+  </div>
+
+  <!-- Geräte -->
+  <div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      Geräte
+      <button id="aReload" class="btn btn-sm btn-outline-info">🔄 Aktualisieren</button>
+    </div>
+    <div class="card-body">
+      <div class="row">
+        <div class="col-md-6">
+          <h6>Eingänge</h6>
+          <ul id="aInList" class="small"></ul>
+        </div>
+        <div class="col-md-6">
+          <h6>Ausgänge</h6>
+          <ul id="aOutList" class="small"></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Diese Seite nutzt die zentralen Helpers aus /static/scripts.js (apiGet/apiPost/toast).
+
+(function(){
+  const elStatus = document.getElementById("aStatus");
+  const elTech   = document.getElementById("aTech");
+  const elErr    = document.getElementById("aErr");
+  const elLvlBar = document.getElementById("aLvlBar");
+  const elLvlTxt = document.getElementById("aLvlTxt");
+  const elAStart = document.getElementById("aStart");
+  const elAStop  = document.getElementById("aStop");
+  const elSec    = document.getElementById("aSec");
+  const elGain   = document.getElementById("aGain");
+  const elRec    = document.getElementById("aRec");
+  const elPlay   = document.getElementById("aPlayer");
+  const elReload = document.getElementById("aReload");
+  const elIn     = document.getElementById("aInList");
+  const elOut    = document.getElementById("aOutList");
+
+  let tLevel = null;
+  let lastStatus = null; // cache für device-selection rendering
+
+  async function refreshStatus(){
+    try{
+      const j = await apiGet("/audio/api/status");
+      if(!j.ok){ elStatus.textContent="ERR"; return; }
+      lastStatus = j;
+      // Status + (neu) gewähltes Gerät anzeigen (falls bekannt)
+      const inDev = (j.in_dev_name || j.in_name || '').trim();
+      const outDev = (j.out_dev_name || j.out_name || '').trim();
+      let s = (j.enabled ? ((j.mic_active || j.mic) ? "MIC: ON" : "MIC: OFF") : "Audio deaktiviert");
+      if(j.enabled && inDev){
+        s += " · in: " + inDev;
+      }
+      if(j.enabled && outDev){
+        s += " · out: " + outDev;
+      }
+      elStatus.textContent = s;
+
+      // Technische Details (headless-debug friendly)
+      const openSr = parseInt(j.mic_open_sr||0, 10) || 0;
+      const tgtSr  = parseInt(j.sr||0, 10) || 0;
+      const ch     = parseInt(j.ch||0, 10) || 0;
+      const inIdx  = (j.in_dev_index===0 ? 0 : (j.in_dev_index||null));
+      const outIdx = (j.out_dev_index===0 ? 0 : (j.out_dev_index||null));
+      let tech = [];
+      if(openSr){ tech.push("open_sr="+openSr); }
+      if(tgtSr){ tech.push("target_sr="+tgtSr); }
+      if(ch){ tech.push("ch="+ch); }
+      if(inIdx!==null){ tech.push("in_idx="+inIdx); }
+      if(outIdx!==null){ tech.push("out_idx="+outIdx); }
+      elTech.textContent = tech.length ? ("("+tech.join(" · ")+")") : "";
+
+      // Letzter Fehler aus DeviceHub (falls vorhanden)
+      const le = (j.last_error||"").toString().trim();
+      if(le){
+        const ts = parseFloat(j.last_error_ts||0) || 0;
+        const tStr = ts ? (new Date(ts*1000)).toLocaleString() : "";
+        elErr.textContent = "Audio-Fehler: " + le + (tStr ? (" · " + tStr) : "");
+        elErr.style.display = "block";
+      }else{
+        elErr.textContent = "";
+        elErr.style.display = "none";
+      }
+
+      const p = Math.round((j.level||0)*100);
+      if(elLvlBar){ elLvlBar.style.width = Math.min(100, Math.max(0,p))+"%"; }
+      if(elLvlTxt){ elLvlTxt.textContent = p+"%"; }
+    }catch(e){ elStatus.textContent="ERR"; }
+  }
+
+  async function tickLevel(){
+    await refreshStatus();
+  }
+
+  async function startMic(){
+    try{
+      const j = await apiPost("/audio/api/mic", {action:"start"});
+      if(!j.ok) toast("Mic konnte nicht gestartet werden", "error");
+      await refreshStatus();
+    }catch(e){ toast("Mic-Start Fehler: "+e, "error"); }
+  }
+
+  async function stopMic(){
+    try{
+      await apiPost("/audio/api/mic", {action:"stop"});
+      await refreshStatus();
+    }catch(e){ toast("Mic-Stop Fehler: "+e, "error"); }
+  }
+
+  async function loadDevices(){
+    try{
+      const j = await apiGet("/audio/api/devices");
+      const selIn = lastStatus ? lastStatus.in_dev_index : null;
+      const selOut = lastStatus ? lastStatus.out_dev_index : null;
+      const fmt = (d, sel) => {
+        const star = (sel!==null && d.index===sel) ? "<b>★</b> " : "";
+        return `<li>${star}#${d.index} – ${d.name} <small class="text-muted">(in:${d.max_input_channels||0}/out:${d.max_output_channels||0})</small></li>`;
+      };
+      elIn.innerHTML  = (j.input||[]).map(d => fmt(d, selIn)).join("") || "<li>–</li>";
+      elOut.innerHTML = (j.output||[]).map(d => fmt(d, selOut)).join("") || "<li>–</li>";
+    }catch(e){
+      elIn.innerHTML = "<li>Fehler</li>";
+      elOut.innerHTML = "<li>Fehler</li>";
+    }
+  }
+
+  async function record(){
+    const sec = parseFloat(elSec.value||"3") || 3;
+    try{
+      // Blob holen (WAV)
+      const headers = getHeaders(false);
+      const g = (elGain && (elGain.value||" ").trim()) || "";
+      const urlQ = "/audio/api/wav?sec="+encodeURIComponent(sec) + (g ? "&gain_db="+encodeURIComponent(g) : "");
+      const res = await fetch(urlQ, {method:"GET", headers, credentials:"same-origin"});
+      if(!res.ok){ toast("Aufnahme fehlgeschlagen (HTTP "+res.status+")", "error"); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      elPlay.src = url;
+      elPlay.play().catch(()=>{});
+      toast("Aufnahme geladen", "ok");
+    }catch(e){ toast("Aufnahme Fehler: "+e, "error"); }
+  }
+
+  elAStart.addEventListener("click", startMic);
+  elAStop .addEventListener("click", stopMic);
+  elRec   .addEventListener("click", record);
+  elReload.addEventListener("click", loadDevices);
+
+  // Start
+  refreshStatus();
+  loadDevices();
+  tLevel = setInterval(tickLevel, 300); // ~3x/Sek Pegel
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,209 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-ptz-motor-worker.service
+# Projekt:  ORÓMA (Offline-Realtime-Organic-Memory-AI)
+# Modul:    PTZ Motor Worker – persistenter Servo-/Reflexdienst
+# Version:  v3.8.0+ptz-motor-worker-systemd-v1.4d1
+# Stand:    2026-05-16
+# Autor:    ORÓMA · KI-JWG-X1
+# Lizenz:   MIT
+# =============================================================================
+#
+# ZWECK
+# ─────
+# Diese Unit startet den neuen PTZ Motor Worker als dauerhaften, headless
+# laufenden systemd-Dienst. Der Worker ist der schnelle Motorikpfad fuer die
+# EMEET-PIXY-PTZ-Kamera und ersetzt NICHT die ORÓMA-Hauptengine. Er liest nur
+# den bereits vorhandenen global_frame_cache der Kamera-/Vision-Schicht und
+# sendet daraus abgeleitete kleine PTZ-Korrekturen.
+#
+# AKTIVIERUNGSSTATUS
+# ──────────────────
+# Diese Unit ist bewusst NICHT automatisch aktiviert. Nach dem Kopieren nach
+# /etc/systemd/system/ und `systemctl daemon-reload` bleibt sie im Zustand
+# "disabled", solange KEIN `systemctl enable ...` ausgefuehrt wird.
+#
+# Manuelles Testen:
+#
+#   sudo systemctl daemon-reload
+#   sudo systemctl start oroma-ptz-motor-worker.service
+#   sudo systemctl status oroma-ptz-motor-worker.service --no-pager
+#   sudo journalctl -u oroma-ptz-motor-worker.service -f
+#   sudo systemctl stop oroma-ptz-motor-worker.service
+#
+# Dauerhaft aktivieren erst nach abgeschlossener Integration:
+#
+#   sudo systemctl enable --now oroma-ptz-motor-worker.service
+#
+# ROLLE IM ORÓMA-GESAMTSYSTEM
+# ───────────────────────────
+#   - oroma.service stellt UI, Kamera-/Visionpfad und global_frame_cache bereit.
+#   - oroma-orchestrator.service bleibt fuer die seriellen DB-/Dream-/Policy-
+#     Jobs zustaendig.
+#   - core.ptz_attention_loop --once muss deaktiviert bleiben, solange dieser
+#     Worker laeuft, damit nicht zwei PTZ-Pfade gleichzeitig Kommandos senden.
+#   - Coverage/Arena/Target-PTZ-Jobs bleiben fuer diese Kalibrierphase aus.
+#
+# PRODUKTIONSINVARIANTEN
+# ──────────────────────
+#   - Kein DB-Schreibpfad im Hot-Loop.
+#   - Kein Qt/Wayland/X11; reiner Headless-Betrieb.
+#   - Kamera wird beim Worker-Start auf Pan/Tilt 0/0 gesetzt.
+#   - Tuningwerte entsprechen der Live-Kalibrierung vom 2026-05-10:
+#       ENERGY_MIN=0.004
+#       STRONG_SIGNAL_BYPASS=0.400
+#       STABILITY_MIN=3
+#       DOWN_CONFIRM_MIN=3
+#       UPPER_GAIN=1.35
+#       LOWER_DAMPING=0.70
+#       TARGET_CONF_MIN=0.020
+#       AXIS_LOCK_ENABLE=1
+#       AXIS_LOCK_TICKS=4
+#       AXIS_LOCK_OVERRIDE_RATIO=1.65
+#       MOVE_COOLDOWN_TICKS=3
+#       MICRO_GUARD_ENABLE=1
+#       AMOUNT_MAX=3
+#   - Logs gehen in eigene Dateien unter /opt/ai/oroma/logs, damit der
+#     Orchestrator-Log nicht mit Motorik-Ticks geflutet wird.
+#
+# INSTALLATION / ROLLBACK
+# ───────────────────────
+# Installation:
+#   sudo cp /opt/ai/oroma/systemd/oroma-ptz-motor-worker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#
+# Teststart:
+#   sudo systemctl start oroma-ptz-motor-worker.service
+#
+# Stop/Rollback:
+#   sudo systemctl stop oroma-ptz-motor-worker.service
+#   sudo systemctl disable oroma-ptz-motor-worker.service
+#   sudo rm -f /etc/systemd/system/oroma-ptz-motor-worker.service
+#   sudo systemctl daemon-reload
+#
+# =============================================================================
+
+[Unit]
+Description=ORÓMA – PTZ Motor Worker (manual/disabled by default)
+After=network-online.target oroma.service
+Wants=network-online.target
+Requires=oroma.service
+PartOf=oroma.service
+
+# ORÓMA ist auf diesem Host im Orchestrator-Modus. Die Condition verhindert,
+# dass ein versehentlich gestarteter Worker ausserhalb der erwarteten Betriebsart
+# laeuft. Ein manueller Start funktioniert, sobald der Flag existiert.
+ConditionPathExists=/opt/ai/oroma/.use_orchestrator
+
+[Service]
+Type=simple
+User=oroma
+Group=oroma
+SupplementaryGroups=video render input gpio i2c audio
+UMask=002
+WorkingDirectory=/opt/ai/oroma
+SyslogIdentifier=oroma-ptz-motor-worker
+
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=UTF-8
+Environment=TZ=Europe/Berlin
+Environment=PYTHONPATH=/opt/ai/oroma
+Environment=OROMA_BASE=/opt/ai/oroma
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=OROMA_LOG_DIR=/opt/ai/oroma/logs
+
+# Reboot-/udev-stabiler Device-Pfad der EMEET PIXY aus den Live-Tests.
+Environment=OROMA_PTZ_DEVICE=/dev/v4l/by-id/usb-EMEET_EMEET_PIXY_A250607001103370-video-index0
+
+# Schutz vor parallel arbeitenden PTZ-Pfaden. Diese Werte sind auch im
+# Orchestrator-Drop-In dokumentiert, werden hier aber absichtlich wiederholt,
+# damit der Worker isoliert und konsistent gestartet werden kann.
+Environment=OROMA_ORCH_ENABLE_PTZ_ATTENTION=0
+Environment=OROMA_ORCH_ENABLE_PTZ_COVERAGE_DAILY_RUN=0
+Environment=OROMA_ORCH_ENABLE_PTZ_ARENA_DAILY_RUN=0
+Environment=OROMA_ORCH_ENABLE_PTZ_TARGET_DAILY_RUN=0
+
+# Mapping aus den Live-Tests: horizontale Spiegelung erforderlich, vertikal nicht.
+Environment=OROMA_PTZ_FOLLOW_INVERT_X=1
+Environment=OROMA_PTZ_FOLLOW_INVERT_Y=0
+
+# Worker-Basis / Home-on-start.
+Environment=OROMA_PTZ_MOTOR_ENABLE=1
+Environment=OROMA_PTZ_MOTOR_CENTER_ON_START=1
+Environment=OROMA_PTZ_MOTOR_HOME_PAN=0
+Environment=OROMA_PTZ_MOTOR_HOME_TILT=0
+Environment=OROMA_PTZ_MOTOR_HOME_ZOOM=
+Environment=OROMA_PTZ_MOTOR_HOME_SETTLE_SEC=0.70
+
+# Loop- und Frame-Parameter.
+Environment=OROMA_PTZ_MOTOR_HZ=3
+Environment=OROMA_PTZ_MOTOR_MAX_FRAME_AGE=1.50
+Environment=OROMA_PTZ_MOTOR_STATE_WRITE_SEC=1.0
+Environment=OROMA_PTZ_MOTOR_SUMMARY_SEC=20.0
+Environment=OROMA_PTZ_MOTOR_MOTION_W=96
+Environment=OROMA_PTZ_MOTOR_MOTION_H=54
+Environment=OROMA_PTZ_MOTOR_DEADZONE=0.030
+
+# Live-Tuning 2026-05-10: beste getestete Variante fuer ruhigeres Tracking mit
+# weiterhin brauchbarer Kopf-/Oberkoerper-Reaktion.
+Environment=OROMA_PTZ_MOTOR_ENERGY_MIN=0.004
+Environment=OROMA_PTZ_MOTOR_VERTICAL_GAIN=1.35
+Environment=OROMA_PTZ_MOTOR_UPPER_BIAS_ENABLE=1
+Environment=OROMA_PTZ_MOTOR_UPPER_GAIN=1.35
+Environment=OROMA_PTZ_MOTOR_LOWER_DAMPING=0.70
+Environment=OROMA_PTZ_MOTOR_HISTORY_N=5
+Environment=OROMA_PTZ_MOTOR_DOWN_CONFIRM_MIN=3
+Environment=OROMA_PTZ_MOTOR_STABILITY_MIN=3
+Environment=OROMA_PTZ_MOTOR_STRONG_SIGNAL_BYPASS=0.400
+Environment=OROMA_PTZ_MOTOR_TARGET_ENABLE=1
+Environment=OROMA_PTZ_MOTOR_TARGET_DECAY=0.85
+Environment=OROMA_PTZ_MOTOR_TARGET_ALPHA=0.45
+Environment=OROMA_PTZ_MOTOR_TARGET_CONF_MIN=0.020
+Environment=OROMA_PTZ_MOTOR_TARGET_OVERRIDE_RATIO=1.80
+Environment=OROMA_PTZ_MOTOR_TARGET_HOLD_TICKS=6
+Environment=OROMA_PTZ_MOTOR_TARGET_HOLD_COMMAND=0
+Environment=OROMA_PTZ_MOTOR_AXIS_LOCK_ENABLE=1
+Environment=OROMA_PTZ_MOTOR_AXIS_LOCK_TICKS=4
+Environment=OROMA_PTZ_MOTOR_AXIS_LOCK_OVERRIDE_RATIO=1.65
+
+# Motor-Ausgabe / Nudge-Dynamik.
+Environment=OROMA_PTZ_MOTOR_AMOUNT_MIN=2
+Environment=OROMA_PTZ_MOTOR_AMOUNT_MAX=3
+Environment=OROMA_PTZ_MOTOR_DIST_SCALE=0.18
+Environment=OROMA_PTZ_MOTOR_E_SCALE=0.060
+Environment=OROMA_PTZ_MOTOR_REVERSAL_GUARD_SEC=0.80
+Environment=OROMA_PTZ_MOTOR_REVERSAL_RATIO=1.55
+
+# ExecStartPre laeuft trotz User=oroma bewusst mit Root-Rechten (systemd '+'-Prefix),
+# weil Live-Systeme /opt/ai/oroma/logs je nach Backup-/Deploy-Pfad root-owned
+# oder restriktiv angelegt haben koennen. Danach werden nur die benoetigten
+# Worker-Logdateien und State-Verzeichnisse auf oroma:oroma gesetzt. Ohne diesen
+# Schritt kann der manuelle Teststart mit "touch: Permission denied" im
+# start-pre abbrechen, obwohl der Worker selbst korrekt ist.
+ExecStartPre=+/usr/bin/env bash -lc 'mkdir -p /opt/ai/oroma/logs /opt/ai/oroma/data/state && touch /opt/ai/oroma/logs/ptz_motor_worker.out.log /opt/ai/oroma/logs/ptz_motor_worker.err.log && chown oroma:oroma /opt/ai/oroma/logs/ptz_motor_worker.out.log /opt/ai/oroma/logs/ptz_motor_worker.err.log && chown oroma:oroma /opt/ai/oroma/data/state'
+ExecStart=/usr/bin/python3 /opt/ai/oroma/tools/ptz_motor_worker.py
+
+# Bei manuellem Stop kein Neustart; bei Crash/Firmware-/USB-Glitch kontrolliert
+# neu starten, solange der Dienst explizit gestartet wurde.
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=30
+TimeoutStopSec=10
+KillSignal=SIGTERM
+KillMode=control-group
+
+StandardOutput=append:/opt/ai/oroma/logs/ptz_motor_worker.out.log
+StandardError=append:/opt/ai/oroma/logs/ptz_motor_worker.err.log
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+ReadWritePaths=/opt/ai/oroma/logs /opt/ai/oroma/data /opt/ai/oroma/exports /opt/ai/oroma/uploads /opt/ai/oroma/archives
+
+[Install]
+WantedBy=multi-user.target

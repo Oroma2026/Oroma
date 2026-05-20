@@ -1,0 +1,59 @@
+# =============================================================================
+# Pfad:        /opt/ai/oroma/systemd/oroma-gap-miner.service
+# Projekt:     ORÓMA
+# Komponente:  Autonomie / Learning (Knowledge Gaps)
+# Version:     v1.0
+# Stand:       2025-12-29
+# Autor:       ORÓMA · KI-JWG-X1
+# =============================================================================
+#
+# Zweck
+# -----
+# Periodisches proaktives Gap-Mining (knowledge_gaps) aus policy_rules (+ optional rules).
+# Dieses Signal macht "Unsicherheit" für Planer/Dream/Replay sichtbar.
+#
+# Orchestrator-Modus
+# ------------------
+# Wenn /opt/ai/oroma/.use_orchestrator existiert, wird diese Unit übersprungen
+# (ConditionPathExists=!...). In diesem Modus sollte gap_miner über
+# tools/oroma_orchestrator.py laufen (serielle Job-Steuerung → weniger DB-Locks).
+#
+# Logs
+# ----
+# journalctl -u oroma-gap-miner.service -n 200 --no-pager
+#
+# ENV (wichtig)
+# -------------
+# OROMA_DB_LOCK_RETRY_SEC=60
+# OROMA_DB_BUSY_TIMEOUT_MS=60000
+# OROMA_GAP_MINER_LIMIT_PER_KIND=200
+# OROMA_GAP_MINER_COOLDOWN_S=21600
+# =============================================================================
+
+[Unit]
+Description=ORÓMA Gap Miner (proaktives Knowledge-Gap Mining)
+After=network.target
+ConditionPathExists=!/opt/ai/oroma/.use_orchestrator
+
+[Service]
+Type=oneshot
+User=oroma
+Group=oroma
+WorkingDirectory=/opt/ai/oroma
+
+# Defensive SQLite Lock-Settings (können global überschrieben werden)
+Environment=OROMA_DB_LOCK_RETRY_SEC=60
+Environment=OROMA_DB_BUSY_TIMEOUT_MS=60000
+
+# Optional: Debug
+#Environment=OROMA_GAPS_DEBUG=1
+
+Environment=PYTHONPATH=/opt/ai/oroma
+ExecStart=/usr/bin/env python3 /opt/ai/oroma/tools/gap_miner.py --once
+
+# Hardening (headless)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

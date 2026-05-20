@@ -1,0 +1,525 @@
+{% extends "base.html" %}
+{% block content %}
+<!-- =============================================================================
+ Pfad:    /opt/ai/oroma/ui/templates/chess2.html
+ Projekt: ORÓMA – Headless Flask UI
+ Modul:   Chess2 Frontend – mobility-native Parallel-UI
+ Version: v3.8-r5
+ Stand:   2026-03-15
+ Autor:   Jörg + GPT-5.4 Thinking
+ =============================================================================
+ Zweck
+ -----
+ Browser-Frontend für den neuen Chess2-Stack. Dieses Template ist bewusst
+ autark, offline-tauglich und iPhone/Safari-freundlich. Gegenüber der
+ vorherigen Revision wurden drei produktive UI-Ziele umgesetzt:
+
+   1. Brett konsistent / einheitlich:
+      • feste klassische Feldfarben ohne visuelle Artefakte
+      • sauberer 8x8-Raster mit klarer Rahmenkante
+      • Koordinaten a–h / 1–8 direkt am Brett
+
+   2. Figuren klar als Weiß / Schwarz erkennbar:
+      • inline-SVG statt Unicode
+      • weiße Figuren hell gefüllt mit dunklem Rand
+      • schwarze Figuren dunkel gefüllt mit hellem Rand
+
+   3. Mehr Schach-Orientierung im Live-Spiel:
+      • letztes Zugpaar farblich markiert
+      • Schach-Quadrat des bedrohten Königs markiert
+      • legale Züge im Human-Modus per Tap-Auswahl hervorhebbar
+      • Tap auf Figur setzt UCI-Startfeld, Tap auf Ziel ergänzt das Zielfeld
+
+ Keine externen Assets, keine Fremd-Fonts, keine Bilddateien.
+ ============================================================================= -->
+<div class="container py-3">
+  <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+    <h1 class="me-2 mb-0">♟️ Chess2</h1>
+    <span class="badge bg-secondary">mobility-native</span>
+    <span id="namespaceBadge" class="badge bg-dark">Namespace: {{ default_namespace }}</span>
+    <div class="ms-auto d-flex flex-wrap gap-2 align-items-center">
+      <select id="namespaceSelect" class="form-select form-select-sm" style="width: 320px;">
+        {% for item in namespace_options %}<option value="{{ item.value }}" {% if item.value == default_namespace %}selected{% endif %}>{{ item.label }}</option>{% endfor %}
+      </select>
+      <select id="oromaVariant" class="form-select form-select-sm" style="width: 150px;">
+        {% for item in oroma_variant_options %}<option value="{{ item.value }}" {% if item.value == default_oroma_variant %}selected{% endif %}>ORÓMA {{ item.label }}</option>{% endfor %}
+      </select>
+      <select id="kiProfile" class="form-select form-select-sm" style="width: 240px;">
+        {% for item in ki_profile_options %}<option value="{{ item.value }}" {% if item.value == default_ki_profile %}selected{% endif %}>KI {{ item.label }}</option>{% endfor %}
+      </select>
+      <select id="aggroLevel" class="form-select form-select-sm" style="width: 135px;">
+        {% for item in aggro_level_options %}<option value="{{ item.value }}" {% if item.value == default_aggro_level %}selected{% endif %}>Aggro {{ item.label }}</option>{% endfor %}
+      </select>
+      <select id="mode" class="form-select form-select-sm" style="width: 260px;">
+        <option value="oroma_vs_oroma_policy">🧠 ORÓMA vs 🧠 ORÓMA (Policy)</option>
+        <option value="oroma_vs_oroma_explore" selected>🧠 ORÓMA vs 🧠 ORÓMA (Explore)</option>
+        <option value="ki_vs_ki">🤖 KI vs 🤖 KI</option>
+        <option value="oroma_vs_ki">🧠 ORÓMA vs 🤖 KI</option>
+        <option value="oroma_vs_human">🧠 ORÓMA vs 👤 Human</option>
+        <option value="human_vs_ki">👤 Human vs 🤖 KI</option>
+      </select>
+      <select id="oromaSide" class="form-select form-select-sm" style="width: 150px;">
+        <option value="white">Engine/ORÓMA Weiß</option>
+        <option value="black">Engine/ORÓMA Schwarz</option>
+      </select>
+      <select id="speed" class="form-select form-select-sm" style="width: 130px;">
+        <option value="normal" selected>⏱ normal</option>
+        <option value="turbo">⚡ turbo</option>
+      </select>
+      <button id="btnToggle" class="btn btn-success btn-sm">▶️ Start</button>
+      <button id="btnReset" class="btn btn-danger btn-sm">🔄 Reset</button>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-7">
+      <div class="card text-bg-dark">
+        <div class="card-header d-flex align-items-center justify-content-between">
+          <strong>Board</strong>
+          <span id="turnText" class="small text-muted">–</span>
+        </div>
+        <div class="card-body">
+          <div id="boardWrap" class="board-wrap">
+            <div id="board" class="chess-board" aria-label="Chess2 board"></div>
+          </div>
+          <div class="mt-3 d-flex gap-2">
+            <input id="uci" class="form-control form-control-sm" placeholder="UCI z. B. e2e4 oder e7e8q">
+            <button id="btnMove" class="btn btn-outline-light btn-sm">Senden</button>
+          </div>
+          <div class="form-text">
+            Tap auf eine Figur setzt das Startfeld. Tap auf ein markiertes Zielfeld ergänzt den Zug.
+            Im Human-Modus sind Züge nur erlaubt, wenn laut Status wirklich der Mensch am Zug ist.
+            Über Namespace + ORÓMA Stable/Aggro wählst du die ORÓMA-Linie. Über KI-Profil kannst du Legacy-KI, Chess2 oder Chess3 Stable/Aggro als Gegner bzw. Zweitengine wählen. Aggro-Standard ist Stufe 2 (1.75).
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-5">
+      <div class="card text-bg-dark mb-3">
+        <div class="card-header">Status</div>
+        <div class="card-body small">
+          <div id="statusText">–</div>
+        </div>
+      </div>
+
+      <div class="card text-bg-dark mb-3">
+        <div class="card-header">Mobility / Hash</div>
+        <div class="card-body small">
+          <div id="mobilityText">–</div>
+        </div>
+      </div>
+
+      <div class="card text-bg-dark mb-3">
+        <div class="card-header">Daily / Policy</div>
+        <div class="card-body small">
+          <div id="dailyText">–</div>
+        </div>
+      </div>
+
+      <div class="card text-bg-dark">
+        <div class="card-header">Matchup / Analyse</div>
+        <div class="card-body small">
+          <div id="matchupText">–</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  .board-wrap {
+    width: min(100%, 560px);
+  }
+  .chess-board {
+    --tile: clamp(42px, 11vw, 68px);
+    position: relative;
+    width: min(100%, calc(var(--tile) * 8));
+    display: flex;
+    flex-direction: column;
+    border: 2px solid #63594f;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #2a2521;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05), 0 4px 16px rgba(0,0,0,0.18);
+  }
+  .board-row {
+    display: grid;
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+    min-width: 0;
+  }
+  .sq {
+    position: relative;
+    display: grid;
+    min-width: 0;
+    min-height: 0;
+    height: 0;
+    padding-bottom: 100%;
+    place-items: stretch;
+    user-select: none;
+    cursor: pointer;
+    transition: box-shadow 0.12s ease, outline-color 0.12s ease, background-color 0.12s ease;
+  }
+  .sq-inner {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+  }
+  .sq.light { background: #d8c3a5; }
+  .sq.dark  { background: #8d6e63; }
+  .sq.last-from {
+    box-shadow: inset 0 0 0 999px rgba(244, 67, 54, 0.12);
+  }
+  .sq.last-from::before {
+    content: "";
+    position: absolute;
+    inset: 6%;
+    border: 3px solid rgba(229, 57, 53, 0.96);
+    border-radius: 8px;
+    pointer-events: none;
+  }
+  .sq.last-to {
+    box-shadow: inset 0 0 0 999px rgba(76, 175, 80, 0.10);
+  }
+  .sq.last-to::before {
+    content: "";
+    position: absolute;
+    inset: 6%;
+    border: 3px solid rgba(56, 142, 60, 0.96);
+    border-radius: 8px;
+    pointer-events: none;
+  }
+  .sq.check {
+    box-shadow: inset 0 0 0 999px rgba(229, 57, 53, 0.22);
+  }
+  .sq.selected {
+    outline: 3px solid rgba(255, 214, 10, 0.95);
+    outline-offset: -3px;
+  }
+  .sq.legal-target::after {
+    content: "";
+    position: absolute;
+    width: 26%;
+    height: 26%;
+    border-radius: 999px;
+    background: rgba(46, 204, 113, 0.85);
+    box-shadow: 0 0 0 2px rgba(0,0,0,0.16);
+    pointer-events: none;
+  }
+  .sq.legal-origin::before {
+    content: "";
+    position: absolute;
+    inset: 9%;
+    border: 3px solid rgba(255, 214, 10, 0.65);
+    border-radius: 8px;
+    pointer-events: none;
+  }
+  .piece-svg {
+    width: 84%;
+    height: 84%;
+    display: block;
+    filter: drop-shadow(0 1px 1px rgba(0,0,0,0.35));
+  }
+  .piece-empty {
+    width: 84%;
+    height: 84%;
+    display: block;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .sq.last-to .piece-svg {
+    filter: drop-shadow(0 0 0 rgba(0,0,0,0)) drop-shadow(0 0 2px rgba(56, 142, 60, 0.75));
+  }
+  .piece-svg.white {
+    --piece-fill: #f3efe8;
+    --piece-stroke: #1c1c1c;
+    --piece-accent: #d8d2ca;
+  }
+  .piece-svg.black {
+    --piece-fill: #1a1a1a;
+    --piece-stroke: #f1f1f1;
+    --piece-accent: #494949;
+  }
+  .sq-coord {
+    position: absolute;
+    pointer-events: none;
+    font-size: 0.64rem;
+    line-height: 1;
+    font-weight: 700;
+    opacity: 0.92;
+    text-shadow: 0 1px 1px rgba(0,0,0,0.35);
+  }
+  .sq-coord.file {
+    right: 4px;
+    bottom: 3px;
+  }
+  .sq-coord.rank {
+    left: 4px;
+    top: 3px;
+  }
+  .sq.light .sq-coord { color: rgba(25,25,25,0.65); }
+  .sq.dark .sq-coord  { color: rgba(255,255,255,0.82); }
+</style>
+
+<script>
+(function(){
+  const API = {
+    state: "/chess2/api/state",
+    move: "/chess2/api/move",
+    reset: "/chess2/api/reset",
+    toggle: "/chess2/api/toggle",
+    mode: "/chess2/api/mode",
+    speed: "/chess2/api/speed",
+    side: "/chess2/api/oromaSide",
+    namespace: "/chess2/api/namespace",
+    oromaVariant: "/chess2/api/oromaVariant",
+    kiProfile: "/chess2/api/kiProfile",
+    aggroLevel: "/chess2/api/aggroLevel",
+    daily: "/chess2/api/daily_status",
+    matchup: "/chess2/api/matchup_status"
+  };
+  const $ = s => document.querySelector(s);
+  const FILES = ["a","b","c","d","e","f","g","h"];
+  let STATE = { legal_to_by_from: {}, legal_from: [], human_to_move: false, last_from: null, last_to: null, check_square: "" };
+  let SELECTED_FROM = "";
+
+  function parseFEN(fen){
+    const part=(fen||"8/8/8/8/8/8/8/8").split(" ")[0].split("/");
+    const rows=[];
+    for(let i=0;i<8;i++){
+      const src=part[i]||"8";
+      const row=[];
+      for(const ch of src){
+        if(/\d/.test(ch)){ for(let k=0;k<parseInt(ch,10);k++) row.push(""); }
+        else row.push(ch);
+      }
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  function squareName(r,c){
+    return FILES[c] + String(8-r);
+  }
+
+  function isOwnTurnPiece(piece){
+    if(!piece) return false;
+    if(STATE.turn_side === "w") return piece === piece.toUpperCase();
+    return piece === piece.toLowerCase();
+  }
+
+  function pieceSvg(piece){
+    if(!piece) return '<span class="piece-empty" aria-hidden="true"></span>';
+    const side = piece === piece.toUpperCase() ? "white" : "black";
+    const p = piece.toLowerCase();
+    const common = 'fill="var(--piece-fill)" stroke="var(--piece-stroke)" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"';
+    const accent = 'fill="var(--piece-accent)" stroke="var(--piece-stroke)" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"';
+    const shapes = {
+      p: `
+        <circle cx="22" cy="15" r="6" ${common}></circle>
+        <path d="M16 23 C16 20, 28 20, 28 23 L28 27 C28 29, 26 31, 24 32 L20 32 C18 31, 16 29, 16 27 Z" ${common}></path>
+        <path d="M13 35 C17 33, 27 33, 31 35 L33 41 L11 41 Z" ${common}></path>
+      `,
+      r: `
+        <path d="M13 12 H17 V16 H21 V12 H25 V16 H29 V12 H33 V18 H13 Z" ${common}></path>
+        <path d="M16 19 H30 L28 31 H18 Z" ${common}></path>
+        <path d="M14 34 H32 L34 41 H12 Z" ${common}></path>
+      `,
+      n: `
+        <path d="M30 12 C25 12, 22 14, 21 18 C19 17, 17 17, 15 18 C16 21, 18 23, 19 26 L17 31 C17 34, 20 35, 24 35 H29 L31 41 H12 L14 35 C14 31, 15 28, 17 25 C15 22, 14 18, 15 14 C19 13, 23 14, 26 16 C27 14, 28 13, 30 12 Z" ${common}></path>
+        <circle cx="24.5" cy="20" r="1.6" ${accent}></circle>
+      `,
+      b: `
+        <path d="M24 9 C27 9, 29 11, 29 14 C29 16, 28 18, 26 19 C27 20, 28 22, 28 24 C28 28, 25 31, 22 33 H26 L31 41 H13 L18 33 H22 C19 31, 16 28, 16 24 C16 21, 18 18, 21 17 C19 16, 18 14, 18 12 C18 10, 20 9, 22 9 C23 9, 23.5 9, 24 9 Z" ${common}></path>
+        <path d="M20 17 L27 10" ${accent}></path>
+      `,
+      q: `
+        <circle cx="15" cy="13" r="2.6" ${common}></circle>
+        <circle cx="22" cy="10" r="2.6" ${common}></circle>
+        <circle cx="29" cy="13" r="2.6" ${common}></circle>
+        <path d="M14 18 L19 26 L22 19 L25 26 L30 18 L29 31 H15 Z" ${common}></path>
+        <path d="M13 34 H31 L34 41 H10 Z" ${common}></path>
+      `,
+      k: `
+        <path d="M22 8 H26 V12 H30 V16 H26 V20 H22 V16 H18 V12 H22 Z" ${common}></path>
+        <path d="M18 22 C18 19, 20 17, 24 17 C28 17, 30 19, 30 22 C30 26, 27 28, 25 30 H29 L33 41 H15 L19 30 H23 C21 28, 18 26, 18 22 Z" ${common}></path>
+      `
+    };
+    return `<svg class="piece-svg ${side}" viewBox="0 0 44 44" role="img" aria-label="${side} ${p}">${shapes[p] || ""}</svg>`;
+  }
+
+  function legalTargetsForSelected(){
+    return Array.isArray(STATE.legal_to_by_from?.[SELECTED_FROM]) ? STATE.legal_to_by_from[SELECTED_FROM] : [];
+  }
+
+  function selectSquare(square, piece){
+    if(!STATE.human_to_move){ return; }
+    if(SELECTED_FROM && legalTargetsForSelected().includes(square)){
+      const current = $("#uci").value || "";
+      const suffix = current.length >= 5 ? current.slice(4) : "";
+      $("#uci").value = `${SELECTED_FROM}${square}${suffix}`;
+      SELECTED_FROM = "";
+      renderBoard(STATE.fen);
+      return;
+    }
+    if(piece && isOwnTurnPiece(piece) && Array.isArray(STATE.legal_from) && STATE.legal_from.includes(square)){
+      SELECTED_FROM = square;
+      const current = $("#uci").value || "";
+      const suffix = current.length >= 5 ? current.slice(4) : "";
+      $("#uci").value = `${square}${suffix}`;
+      renderBoard(STATE.fen);
+      return;
+    }
+    SELECTED_FROM = "";
+    renderBoard(STATE.fen);
+  }
+
+  function renderBoard(fen){
+    const board=$("#board");
+    board.innerHTML="";
+    const rows=parseFEN(fen);
+    const legalTargets = legalTargetsForSelected();
+    for(let r=0;r<8;r++){
+      const rowEl = document.createElement("div");
+      rowEl.className = "board-row";
+      for(let c=0;c<8;c++){
+        const sq=document.createElement("div");
+        const inner=document.createElement("div");
+        const sqName = squareName(r,c);
+        sq.className="sq "+(((r+c)%2===0)?"light":"dark");
+        inner.className = "sq-inner";
+        const piece = rows[r][c] || "";
+        if(STATE.last_from === sqName) sq.classList.add("last-from");
+        if(STATE.last_to === sqName) sq.classList.add("last-to");
+        if(STATE.check_square === sqName) sq.classList.add("check");
+        if(Array.isArray(STATE.legal_from) && STATE.legal_from.includes(sqName)) sq.classList.add("legal-origin");
+        if(SELECTED_FROM === sqName) sq.classList.add("selected");
+        if(legalTargets.includes(sqName)) sq.classList.add("legal-target");
+        inner.innerHTML = pieceSvg(piece);
+        sq.dataset.square = sqName;
+        sq.addEventListener("click", ()=>selectSquare(sqName, piece));
+        if(r === 7){
+          const file = document.createElement("span");
+          file.className = "sq-coord file";
+          file.textContent = FILES[c];
+          sq.appendChild(file);
+        }
+        if(c === 0){
+          const rank = document.createElement("span");
+          rank.className = "sq-coord rank";
+          rank.textContent = String(8 - r);
+          sq.appendChild(rank);
+        }
+        sq.appendChild(inner);
+        rowEl.appendChild(sq);
+      }
+      board.appendChild(rowEl);
+    }
+  }
+
+  async function post(url, data){
+    const res=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data||{})});
+    const out = await res.json();
+    if(!res.ok || out?.ok === false){
+      const msg = out?.err || `HTTP ${res.status}`;
+      throw new Error(String(msg));
+    }
+    return out;
+  }
+
+  async function loadDaily(){
+    try{
+      const ns = encodeURIComponent((document.querySelector("#namespaceSelect")||{}).value || "game:chess2");
+      const res=await fetch(`${API.daily}?namespace=${ns}`); const d=await res.json();
+      const pr=d.policy_rules||{};
+      const p=d.policy||{}; const e=d.explore||{};
+      const pAvg = (typeof (p.avg_moves) === "number") ? p.avg_moves.toFixed(2) : (p.avg_moves || 0);
+      const eAvg = (typeof (e.avg_moves) === "number") ? e.avg_moves.toFixed(2) : (e.avg_moves || 0);
+      $("#dailyText").innerHTML =
+        `<div>Typ: <b>${d.namespace_label||d.namespace||"–"}</b></div>`+
+        `<div>Rules: <b>${pr.rules||0}</b> · States: <b>${pr.states||0}</b></div>`+
+        `<div class="mt-2">Policy: ${p.label||"–"}</div>`+
+        `<div>games=<b>${p.games||0}</b> · W=<b>${p.wins_white||0}</b> · B=<b>${p.wins_black||0}</b> · D=<b>${p.draws||0}</b> · avg_moves=<b>${pAvg}</b></div>`+
+        `<div class="mt-2">Explore: ${e.label||"–"}</div>`+
+        `<div>games=<b>${e.games||0}</b> · W=<b>${e.wins_white||0}</b> · B=<b>${e.wins_black||0}</b> · D=<b>${e.draws||0}</b> · avg_moves=<b>${eAvg}</b></div>`+
+        `<div>learn_items=<b>${e.learn_items_count||0}</b> · bootstrap=<b>${e.bootstrap_items||0}</b> · chains=<b>${e.chains_count||0}</b></div>`;
+    }catch(err){ $("#dailyText").textContent="Daily-Status konnte nicht geladen werden."; }
+  }
+
+  async function loadMatchup(){
+    try{
+      const res = await fetch(API.matchup);
+      const d = await res.json();
+      const series = d.series || {};
+      const latest = d.latest || {};
+      function row(label, x){
+        if(!x || !x.found){ return `<div class="mt-2"><b>${label}</b>: –</div>`; }
+        return `<div class="mt-2"><b>${label}</b>: ${x.file||"–"}</div>`+
+          `<div>W(A)=<b>${x.engine_a_policy_wins_total||0}</b> · W(B)=<b>${x.engine_b_policy_wins_total||0}</b> · D=<b>${x.policy_draws_total||0}</b></div>`+
+          `<div>avg=<b>${(x.policy_avg_moves||0).toFixed ? x.policy_avg_moves.toFixed(1) : x.policy_avg_moves}</b> · flip=<b>${(x.flip_policy_avg_moves||0).toFixed ? x.flip_policy_avg_moves.toFixed(1) : x.flip_policy_avg_moves}</b></div>`+
+          `<div>rules Δ A/B=<b>${x.rules_delta_engine_a||0}</b>/<b>${x.rules_delta_engine_b||0}</b></div>`+
+          `<div>atk=<b>${x.chess3_attack_coordination_cases||0}</b> · kingline=<b>${x.chess3_king_line_open_cases||0}</b> · pasym=<b>${x.chess3_productive_asymmetry_cases||0}</b></div>`+
+          `<div>neutral=<b>${x.chess3_neutral_path_penalty_cases||0}</b> · fix=<b>${x.chess3_fixpoint_warning_cases||0}</b> · orbit=<b>${x.chess3_orbit_penalty_cases||0}</b></div>`;
+      }
+      $("#matchupText").innerHTML =
+        `<div>Latest: <b>${latest.file||"–"}</b></div>`+
+        row("A2/C2", series.a2c2)+
+        row("E1.2", series.e12);
+    }catch(err){ $("#matchupText").textContent = "Matchup-Status konnte nicht geladen werden."; }
+  }
+
+  async function refresh(){
+    try{
+      const res=await fetch(API.state); const s=await res.json();
+      STATE = s || {};
+      if(!STATE.human_to_move){ SELECTED_FROM = ""; }
+      renderBoard(s.fen);
+      $("#turnText").textContent = `Turn: ${s.turn} · Winner: ${s.winner} · Running: ${s.running ? "yes" : "no"}`;
+      $("#statusText").innerHTML =
+        `<div>Typ: <b>${s.namespace_label || s.namespace || "game:chess2"}</b></div>`+
+        `<div>Mode: <b>${s.mode}</b></div>`+
+        `<div>Speed: <b>${s.speed}</b></div>`+
+        `<div>Last action: <b>${s.last_action||"–"}</b> (${s.last_source||"–"})</div>`+
+        `<div>Human to move: <b>${s.human_to_move ? "yes" : "no"}</b></div>`+
+        `<div>Engine side: <b>${s.oroma_side||"white"}</b> · Human side: <b>${s.human_side||"black"}</b></div>`+
+        `<div>ORÓMA path: <b>${s.namespace_label || s.namespace || "game:chess2"}</b> · variant: <b>${s.oroma_variant_label || s.oroma_variant || "stable"}</b></div>`+
+        `<div>KI profile: <b>${s.effective_ki_profile_label || s.ki_profile_label || s.ki_profile || "legacy_ki"}</b> · Aggro: <b>${s.aggro_level || 2}</b> (${s.effective_ki_aggro || s.aggro_value || 1.75})</div>`+
+        `<div>Legal moves: <b>${s.legal_count}</b></div>`+
+        `<div>Preview: ${Array.isArray(s.legal_preview) ? s.legal_preview.join(", ") : "–"}</div>`;
+      $("#mobilityText").innerHTML =
+        `<div>state_hash: <code>${s.state_hash||"–"}</code></div>`+
+        `<div class="mt-2">repr=${s.repr_mode || "mobility"} · abs_sum=${s.mobility_abs_sum} · material=${s.material_bucket} · phase=${s.phase} · castling=${s.castling}</div>`+
+        `<div>pieces=${s.pieces} · in_check=${s.in_check ? "yes" : "no"} · check_square=${s.check_square || "–"}</div>`;
+      $("#btnToggle").textContent = s.running ? "⏸️ Stop" : "▶️ Start";
+      $("#mode").value = s.mode || "oroma_vs_oroma_explore";
+      $("#speed").value = s.speed || "normal";
+      $("#oromaSide").value = s.oroma_side || "white";
+      $("#namespaceSelect").value = s.namespace || "game:chess2";
+      $("#oromaVariant").value = s.oroma_variant || "stable";
+      $("#kiProfile").value = s.ki_profile || "legacy_ki";
+      $("#aggroLevel").value = String(s.aggro_level || 2);
+      $("#namespaceBadge").textContent = `Namespace: ${s.namespace || "game:chess2"} · ORÓMA ${s.oroma_variant_label || s.oroma_variant || "stable"} · KI ${s.effective_ki_profile_label || s.ki_profile_label || s.ki_profile || "legacy_ki"}`;
+    }catch(err){ /* sichtbar bleibt alter Stand */ }
+  }
+
+  $("#btnToggle").addEventListener("click", async ()=>{ await post(API.toggle,{}); await refresh(); });
+  $("#btnReset").addEventListener("click", async ()=>{ SELECTED_FROM = ""; await post(API.reset,{}); await refresh(); });
+  $("#btnMove").addEventListener("click", async ()=>{ await post(API.move,{uci: $("#uci").value||""}); $("#uci").value=""; SELECTED_FROM = ""; await refresh(); });
+  $("#mode").addEventListener("change", async ev=>{ SELECTED_FROM = ""; await post(API.mode,{mode:ev.target.value}); await refresh(); });
+  $("#speed").addEventListener("change", async ev=>{ await post(API.speed,{speed:ev.target.value}); await refresh(); });
+  $("#oromaSide").addEventListener("change", async ev=>{ SELECTED_FROM = ""; await post(API.side,{side:ev.target.value}); await refresh(); });
+  $("#namespaceSelect").addEventListener("change", async ev=>{ SELECTED_FROM = ""; await post(API.namespace,{namespace:ev.target.value}); await refresh(); await loadDaily(); });
+  $("#oromaVariant").addEventListener("change", async ev=>{ SELECTED_FROM = ""; await post(API.oromaVariant,{variant:ev.target.value}); await refresh(); });
+  $("#kiProfile").addEventListener("change", async ev=>{ SELECTED_FROM = ""; await post(API.kiProfile,{profile:ev.target.value}); await refresh(); });
+  $("#aggroLevel").addEventListener("change", async ev=>{ SELECTED_FROM = ""; await post(API.aggroLevel,{level:parseInt(ev.target.value || "2",10)}); await refresh(); });
+
+  loadDaily();
+  loadMatchup();
+  refresh();
+  setInterval(refresh, 900);
+  setInterval(loadDaily, 8000);
+  setInterval(loadMatchup, 10000);
+})();
+</script>
+{% endblock %}

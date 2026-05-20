@@ -1,0 +1,53 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-social.service
+# Projekt:  ORÓMA v3.8 – Social Resonance Tick (Empathie-Reward-Brücke)
+# Stand:    2025-11-30
+# Autor:    ORÓMA · KI-JWG-X1
+# =============================================================================
+
+[Unit]
+Description=ORÓMA v3.8 – Social Resonance Tick (Empathie-Reward-Brücke)
+After=network-online.target oroma.service
+Wants=network-online.target
+ConditionPathExists=!/opt/ai/oroma/.use_orchestrator
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai/oroma
+SyslogIdentifier=oroma-social
+
+User=oroma
+Group=oroma
+UMask=002
+
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=UTF-8
+Environment=TZ=Europe/Berlin
+Environment=PYTHONPATH=/opt/ai/oroma
+Environment=OROMA_LOG_DIR=/opt/ai/oroma/logs
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+ExecStartPre=/usr/bin/env bash -lc 'mkdir -p /opt/ai/oroma/logs'
+ExecStart=/usr/bin/python3 /opt/ai/oroma/tools/social_resonance_tick.py
+
+StandardOutput=append:/opt/ai/oroma/logs/social.out.log
+StandardError=append:/opt/ai/oroma/logs/social.err.log
+
+CPUSchedulingPolicy=idle
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+ReadWritePaths=/opt/ai/oroma/logs /opt/ai/oroma/data
+
+[Install]
+WantedBy=multi-user.target

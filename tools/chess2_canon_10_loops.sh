@@ -1,0 +1,2 @@
+#!/bin/bash
+cd /opt/ai/oroma && nohup bash -lc 'for i in $(seq 1 10); do echo "===== CHESS2_CANON RUN $i START $(date "+%F %T") =====" >> /opt/ai/oroma/logs/chess2_canon_daily_runner.log; python3 tools/chess2_canon_daily_runner.py >> /opt/ai/oroma/logs/chess2_canon_daily_runner.log 2>&1; echo "===== CHESS2_CANON RUN $i END $(date "+%F %T") =====" >> /opt/ai/oroma/logs/chess2_canon_daily_runner.log; done' >/dev/null 2>&1 &

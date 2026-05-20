@@ -1,0 +1,87 @@
+<!-- =============================================================================
+ * Pfad:    /opt/ai/oroma/ui/templates/bundle.html
+ * Projekt: ORÓMA
+ * Modul:   Bundle-Import UI (SnapChains & Modelle)
+ * Version: v3.7 (final)
+ * Stand:   2025-10-01
+ *
+ * Zweck
+ * ─────
+ *  - Einfache Upload-Seite für ORÓMA-Bundles (.zip/.tar/.tar.gz)
+ *  - Ruft POST /import/api/upload auf und zeigt das Ergebnis an.
+ *
+ * Hinweise
+ * ────────
+ *  - base.html liefert die Navigation. Link bleibt /import (Kompatibilität).
+ *  - Falls OROMA_UI_TOKEN gesetzt ist, wird er automatisch als Header gesendet.
+ * ============================================================================= -->
+{% extends "base.html" %}
+{% block title %}ORÓMA · Bundle Import{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+  <h1 class="mb-3">📦 Bundle-Import</h1>
+  <p class="text-muted">
+    Lade SnapChain- oder Modell-Archive hoch.<br>
+    Erlaubte Formate: <code>{{ exts }}</code><br>
+    Max. Größe: <b>{{ max_mb }}</b> MB
+  </p>
+
+  <div class="card bg-dark text-light shadow">
+    <div class="card-header">Datei hochladen</div>
+    <div class="card-body">
+      <form id="uploadForm" enctype="multipart/form-data">
+        <div class="row g-2">
+          <div class="col-md-8">
+            <input type="file" name="file" class="form-control" required
+                   accept=".zip,.tar,.tar.gz">
+          </div>
+          <div class="col-md-4">
+            <button class="btn btn-primary btn-sm w-100" type="submit">📥 Hochladen</button>
+          </div>
+        </div>
+      </form>
+      <div id="upload-msg" class="mt-2 small text-info">Noch keine Datei hochgeladen…</div>
+      <pre id="upload-json" class="bg-black text-light p-2 rounded small d-none"></pre>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const form   = document.getElementById("uploadForm");
+  const msgEl  = document.getElementById("upload-msg");
+  const jsonEl = document.getElementById("upload-json");
+
+  function setMsg(text, ok) {
+    msgEl.classList.remove("text-info","text-danger","text-success");
+    msgEl.classList.add(ok ? "text-success" : "text-danger");
+    msgEl.textContent = text;
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    try {
+      const headers = {};
+      if (window.OROMA_UI_TOKEN) headers["X-OROMA-TOKEN"] = window.OROMA_UI_TOKEN;
+
+      const res = await fetch("/import/api/upload", { method:"POST", body: fd, headers });
+      const j   = await res.json();
+
+      jsonEl.classList.remove("d-none");
+      jsonEl.textContent = JSON.stringify(j, null, 2);
+
+      if (j.ok) {
+        setMsg(`✅ Import erfolgreich: ${j.file} (${j.size_mb} MB)`, true);
+        form.reset();
+      } else {
+        setMsg(`❌ Fehler: ${j.error || "Unbekannter Fehler"}`, false);
+      }
+    } catch (err) {
+      setMsg(`❌ API-Fehler: ${err}`, false);
+    }
+  });
+})();
+</script>
+{% endblock %}

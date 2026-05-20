@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block content %}
+<main style="padding:1rem;text-align:center;">
+  <h2>🟡 ORÓMA Connect4 Arena</h2>
+
+  <div id="winnerBanner"
+       class="alert alert-success fw-bold d-none"
+       style="max-width:500px;margin:auto;"></div>
+
+  <div class="d-flex flex-wrap justify-content-center align-items-center gap-2 mb-2">
+    <span class="badge bg-secondary" id="badgeMode">mode: –</span>
+    <span class="badge bg-secondary" id="badgeSpeed">speed: –</span>
+    <span class="badge bg-secondary" id="badgePolicy">policy: –</span>
+  </div>
+
+  <h5 id="turnInfo" class="text-light mb-2">Am Zug: –</h5>
+
+  <div id="connect4Board" class="oroma-board connect4"></div>
+
+  <div class="mt-2 d-flex flex-wrap justify-content-center align-items-center gap-2">
+    <button id="btnReset" class="btn btn-danger btn-sm">🔄 Reset</button>
+    <button id="btnAuto" class="btn btn-success btn-sm">▶️ Start</button>
+
+    <label class="text-light small ms-2">Mode</label>
+    <select id="selMode" class="form-select form-select-sm" style="width:auto;">
+      <option value="oroma_vs_oroma_policy">oroma_vs_oroma_policy</option>
+      <option value="oroma_vs_oroma_explore">oroma_vs_oroma_explore</option>
+      <option value="oroma_vs_ki">oroma_vs_ki</option>
+      <option value="oroma_vs_human">oroma_vs_human</option>
+      <option value="ki_vs_ki">ki_vs_ki</option>
+    </select>
+
+    <label class="text-light small ms-2">Speed</label>
+    <select id="selSpeed" class="form-select form-select-sm" style="width:auto;">
+      <option value="normal">normal</option>
+      <option value="turbo">turbo</option>
+    </select>
+
+    <span id="info" class="ms-2 text-light fw-bold"></span>
+  </div>
+
+  <div id="statsBox"
+       class="mt-4 bg-dark text-light p-3 rounded"
+       style="max-width:700px;margin:auto;">
+    <h5>📊 Statistik</h5>
+    <div id="statsText" class="text-start small"></div>
+  </div>
+
+  <div id="dailyBox"
+       class="mt-3 bg-dark text-light p-3 rounded"
+       style="max-width:700px;margin:auto;">
+    <h5>🌙 Daily / Nightly</h5>
+    <div id="dailyText" class="text-start small"></div>
+  </div>
+</main>
+
+<script>
+let lastWinner=null;
+
+async function postJson(url, body){
+  const r = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})});
+  try { return await r.json(); } catch(e){ return {ok:false,error:"bad_json"}; }
+}
+
+async function loadState(){
+  const r=await fetch("/connect4/api/state");
+  if(!r.ok)return;
+  const s=await r.json();
+
+  const board=document.getElementById("connect4Board");
+  board.innerHTML="";
+  s.board.forEach((row,r)=>{
+    row.forEach((cell,c)=>{
+      const b=document.createElement("button");
+      b.textContent=cell||" ";
+      b.className="btn btn-secondary";
+      b.onclick=()=>drop(c);
+      board.appendChild(b);
+    });
+  });
+
+  document.getElementById("turnInfo").textContent=`Am Zug: ${s.turn}`;
+  document.getElementById("badgeMode").textContent=`mode: ${s.mode}`;
+  document.getElementById("badgeSpeed").textContent=`speed: ${s.speed||"-"}`;
+  if(s.policy){
+    document.getElementById("badgePolicy").textContent=
+      `policy_rules:${s.policy.policy_rules||0} · rules_active:${s.policy.rules_active||0}`;
+  }
+  const st=s.stats;
+  document.getElementById("statsText").innerHTML=
+    `Spiele: ${st.games}<br>`+
+    `🏆 ORÓMA: ${st.wins.oroma} | 🤖 KI: ${st.wins.ki} | 👤 Human: ${st.wins.human}<br>`+
+    `Gesamt-Snaps: ${st.snaps_total} · RAM: ${s.snaps_in_ram}<br>`+
+    (s.policy?(`Namespace: ${s.policy.namespace} · UP:${s.policy.have_up?"yes":"no"} · eps:${s.policy.eps} · explore_moves/game:${s.policy.explore_moves_per_game}`):"");
+
+
+  const d = s.daily || {};
+  const fmtBatch = (b, title) => {
+    if(!b) return `${title}: –`;
+    return `${title}: games=${b.games} · X=${b.wins_x} · O=${b.wins_o} · draws=${b.draws} · avg_moves=${(b.avg_moves||0).toFixed(2)} · eps=${b.eps} · explore_moves=${b.explore_moves_per_game} · chains=${b.chains_count}`;
+  };
+  document.getElementById("dailyText").innerHTML =
+    `${fmtBatch(d.latest_policy, "Policy-Batch")}<br>` +
+    `${fmtBatch(d.latest_explore, "Explore-Batch")}<br>` +
+    `Connect4 ist produktiv ein echter Policy-/Daily-Pfad; SnapChains werden jetzt parallel aus dem Daily-Runner geschrieben.`;
+
+  if(s.winner && s.winner!==lastWinner){
+    lastWinner=s.winner;
+    showWinnerBanner(s.winner);
+  }
+}
+
+function showWinnerBanner(w){
+  const b=document.getElementById("winnerBanner");
+  let text="",cls="alert-success";
+  if(w==="oroma"){text="🏆 ORÓMA hat gewonnen!";}
+  else if(w==="ki"){text="🤖 KI hat gewonnen!";cls="alert-warning";}
+  else{text=`👤 ${w} gewinnt!`;cls="alert-info";}
+  b.textContent=text;
+  b.className=`alert ${cls} fw-bold`;
+  b.classList.remove("d-none");
+  setTimeout(()=>b.classList.add("d-none"),5000);
+}
+
+async function drop(c){
+  await postJson("/connect4/api/drop",{col:c});
+  await loadState();
+}
+document.getElementById("btnReset").onclick=async()=>{
+  await postJson("/connect4/api/reset",{});
+  await loadState();
+};
+document.getElementById("btnAuto").onclick=async()=>{
+  const j=await postJson("/connect4/api/toggle",{});
+  document.getElementById("btnAuto").textContent=j.running?"⏸ Pause":"▶️ Start";
+};
+
+document.getElementById("selMode").onchange=async(ev)=>{
+  const mode=ev.target.value;
+  const j=await postJson("/connect4/api/set_mode",{mode});
+  if(!j.ok){ document.getElementById("info").textContent=`Mode-Fehler: ${j.error||"?"}`; }
+  await loadState();
+};
+
+document.getElementById("selSpeed").onchange=async(ev)=>{
+  const speed=ev.target.value;
+  const j=await postJson("/connect4/api/set_speed",{speed});
+  if(!j.ok){ document.getElementById("info").textContent=`Speed-Fehler: ${j.error||"?"}`; }
+  await loadState();
+};
+
+setInterval(loadState,800);
+document.addEventListener("DOMContentLoaded",loadState);
+</script>
+{% endblock %}

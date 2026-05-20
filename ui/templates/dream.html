@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <h1 class="mb-3">💭 Traum-Modus</h1>
+  <p class="text-muted">
+    Der <b>DreamWorker</b> sammelt SnapChains aus allen Spielen
+    (z.&nbsp;B. Snake, Pong, Memory) und konsolidiert sie in der Lern-Datenbank.<br>
+    Hier kannst du zusätzlich <b>manuelle Dream-Runs</b> starten und den Fortschritt verfolgen.
+  </p>
+
+  <!-- Systemstatus -->
+  <div class="alert alert-secondary py-2 small mb-3" id="dreamWorkerInfo">
+    🧠 <b>DreamWorker:</b> <span id="workerStatus">–</span> |
+    ⏱️ <b>Timer:</b> <span id="workerInterval">–</span>
+  </div>
+
+  <!-- Batch-Steuerung -->
+  <div class="card bg-dark text-light shadow">
+    <div class="card-header">Batch-Dream</div>
+    <div class="card-body">
+      <form id="dreamForm" class="row g-2 mb-3">
+        <div class="col-md-4">
+          <input id="seed" type="number" class="form-control" placeholder="Seed (optional)">
+        </div>
+        <div class="col-md-4">
+          <button type="submit" class="btn btn-success w-100">🌙 Dream starten</button>
+        </div>
+        <div class="col-md-4">
+          <button type="button" onclick="dreamStop()" class="btn btn-danger w-100">⏹️ Stop</button>
+        </div>
+      </form>
+
+      <div id="dreamStatus" class="small text-info mb-2">Noch nicht gestartet…</div>
+
+      <!-- Fortschrittsbalken -->
+      <div class="progress mb-3" style="height: 8px;">
+        <div id="dreamBar" class="progress-bar bg-info" role="progressbar" style="width: 0%;"></div>
+      </div>
+
+      <!-- Live-Dream-Infos -->
+      <table class="table table-dark table-sm align-middle mb-0">
+        <tbody>
+          <tr><td>🕒 Letzter Lauf</td><td id="dreamTime">–</td></tr>
+          <tr><td>📦 SnapChains</td><td id="dreamChains">–</td></tr>
+          <tr><td>🔹 Snaps</td><td id="dreamSnaps">–</td></tr>
+          <tr><td>⭐ Durchschnittliche Qualität</td><td id="dreamQuality">–</td></tr>
+          <tr><td>🧠 Exportiert</td><td id="dreamExported">–</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+async function loadStatus(){
+  try {
+    const r = await fetch("/dream/api/status");
+    const j = await r.json();
+    if(!j.ok) return;
+    const st = j.status;
+
+    // DreamWorker-Online-Status
+    const ws = document.getElementById("workerStatus");
+    const wi = document.getElementById("workerInterval");
+    ws.innerHTML = st.worker_online ? "🟢 Online" : "🔴 Offline";
+    ws.className = st.worker_online ? "text-success" : "text-danger";
+    wi.textContent = st.interval_sec ? `${st.interval_sec}s` : "–";
+
+    // Fortschritt / Status
+    let txt;
+    if(st.running){
+      txt = `⏳ Läuft... ${(st.progress*100).toFixed(1)}%`;
+    } else if(st.progress === 1.0){
+      txt = "✅ Abgeschlossen";
+    } else if(st.progress < 0){
+      txt = "❌ Fehler";
+    } else {
+      txt = "🟢 Bereit";
+    }
+    document.getElementById("dreamStatus").textContent = txt;
+
+    // Fortschrittsbalken aktualisieren
+    const bar = document.getElementById("dreamBar");
+    bar.style.width = `${Math.max(0, Math.min(100, (st.progress||0)*100))}%`;
+    bar.className = st.running ? "progress-bar bg-info" :
+                    (st.progress === 1.0 ? "progress-bar bg-success" :
+                     (st.progress < 0 ? "progress-bar bg-danger" : "progress-bar bg-secondary"));
+
+    // Live-Daten
+    if(st.last_run){
+      const dt = new Date(st.last_run*1000);
+      document.getElementById("dreamTime").textContent = dt.toLocaleString();
+    }
+    document.getElementById("dreamChains").textContent = st.chains ?? "–";
+    document.getElementById("dreamSnaps").textContent = st.snaps ?? "–";
+    document.getElementById("dreamQuality").textContent =
+      st.avg_quality ? st.avg_quality.toFixed(2) : "–";
+    document.getElementById("dreamExported").textContent =
+      st.exported ? "✅ Ja" : "–";
+
+  } catch(e){
+    console.error("[DreamUI] Fehler beim Laden des Status:", e);
+  }
+}
+
+document.getElementById("dreamForm").addEventListener("submit", async ev=>{
+  ev.preventDefault();
+  const seed = document.getElementById("seed").value;
+  const r = await fetch("/dream/api/start", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({seed})
+  });
+  const j = await r.json();
+  alert(j.msg || j.error || "Dream gestartet");
+  loadStatus();
+});
+
+async function dreamStop(){
+  await fetch("/dream/api/stop", {method:"POST"});
+  loadStatus();
+}
+
+// Alle 3 Sekunden aktualisieren
+setInterval(loadStatus, 3000);
+loadStatus();
+</script>
+{% endblock %}

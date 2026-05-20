@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block content %}
+<main style="padding:1rem;text-align:center;">
+  <h2>🏓 ORÓMA Pong Arena</h2>
+
+  <div class="d-flex flex-wrap justify-content-center align-items-center gap-2 mb-2">
+    <span class="badge bg-secondary" id="badgeMode">mode: –</span>
+    <span class="badge bg-secondary" id="badgeRunning">running: –</span>
+    <span class="badge bg-secondary" id="badgeSpeed">speed: –</span>
+    <span class="badge bg-dark" id="badgeNamespace">ns: –</span>
+    <span class="badge bg-info text-dark" id="badgePolicy">policy_rules: –</span>
+    <span class="badge bg-info text-dark" id="badgeRules">rules(active): –</span>
+  </div>
+
+  <div class="d-flex flex-wrap justify-content-center gap-2 mb-3">
+    <select class="form-select" id="modeSel" style="max-width:260px;">
+      <option value="oroma_vs_oroma_policy">oroma_vs_oroma_policy</option>
+      <option value="oroma_vs_oroma_explore">oroma_vs_oroma_explore</option>
+      <option value="oroma_vs_ki">oroma_vs_ki</option>
+      <option value="ki_vs_ki">ki_vs_ki</option>
+      <option value="oroma_vs_human">oroma_vs_human</option>
+    </select>
+
+    <select class="form-select" id="speedSel" style="max-width:160px;">
+      <option value="normal">normal</option>
+      <option value="turbo">turbo</option>
+    </select>
+
+    <button class="btn btn-success" id="btnStart">▶ Start</button>
+    <button class="btn btn-warning" id="btnPause">⏸ Pause</button>
+    <button class="btn btn-danger" id="btnReset">⟲ Reset</button>
+  </div>
+
+  <div class="card" style="max-width:720px;margin:auto;">
+    <div class="card-body">
+      <div class="d-flex justify-content-between">
+        <div><b>Score L</b>: <span id="scoreL">0</span></div>
+        <div><b>Tick</b>: <span id="tick">0</span></div>
+        <div><b>Score R</b>: <span id="scoreR">0</span></div>
+      </div>
+      <hr/>
+      <pre id="ascii" style="text-align:left;white-space:pre;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:12px; line-height:12px; overflow:auto; max-height:320px;"></pre>
+
+      <div id="humanControls" class="mt-2 d-none">
+        <div class="alert alert-info p-2 mb-2">Human Controls (Right Paddle): Use buttons below</div>
+        <div class="d-flex justify-content-center gap-2">
+          <button class="btn btn-outline-primary" id="btnUp">▲</button>
+          <button class="btn btn-outline-primary" id="btnHold">■</button>
+          <button class="btn btn-outline-primary" id="btnDown">▼</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="small text-muted mt-3">
+    API: /games/pong/api/state · Explore eps & rule counters werden live angezeigt.
+  </div>
+</main>
+
+<script>
+const API = "/pong/api";
+let last = null;
+
+function clamp(v, lo, hi){ return v<lo?lo:(v>hi?hi:v); }
+
+function renderAscii(st){
+  // coarse ASCII view
+  const W = 60, H = 18;
+  const grid = [];
+  for(let y=0;y<H;y++){ grid.push(new Array(W).fill(" ")); }
+  // paddles
+  const pyL = Math.round((st.paddles.L / (360 - st.paddles.h)) * (H-1));
+  const pyR = Math.round((st.paddles.R / (360 - st.paddles.h)) * (H-1));
+  const ph = Math.max(2, Math.round((st.paddles.h / 360) * H));
+  for(let i=0;i<ph;i++){
+    const yL = clamp(pyL+i,0,H-1), yR = clamp(pyR+i,0,H-1);
+    grid[yL][1] = "|";
+    grid[yR][W-2] = "|";
+  }
+  // ball
+  const bx = clamp(Math.round((st.ball.x/640)*(W-1)),0,W-1);
+  const by = clamp(Math.round((st.ball.y/360)*(H-1)),0,H-1);
+  grid[by][bx] = "o";
+  // frame
+  let out = "";
+  out += "+" + "-".repeat(W) + "+\n";
+  for(let y=0;y<H;y++){
+    out += "|" + grid[y].join("") + "|\n";
+  }
+  out += "+" + "-".repeat(W) + "+\n";
+  if(st.last_point){ out += "last_point=" + st.last_point + "  last_winner=" + (st.last_winner || "-") + "\n"; }
+  return out;
+}
+
+async function post(url, data){
+  const r = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(data||{})});
+  return await r.json();
+}
+
+async function tick(){
+  try{
+    const r = await fetch(API + "/state");
+    const st = await r.json();
+    last = st;
+
+    document.getElementById("badgeMode").textContent = "mode: " + st.mode;
+    document.getElementById("badgeRunning").textContent = "running: " + (st.running ? "true" : "false");
+    document.getElementById("badgeSpeed").textContent = "speed: " + st.speed;
+    document.getElementById("badgeNamespace").textContent = "ns: " + st.namespace;
+    document.getElementById("badgePolicy").textContent = "policy_rules: " + (st.policy_rules_count ?? "n/a");
+    document.getElementById("badgeRules").textContent = "rules(active): " + (st.rules_active_count ?? "n/a");
+
+    document.getElementById("scoreL").textContent = st.scoreL;
+    document.getElementById("scoreR").textContent = st.scoreR;
+    document.getElementById("tick").textContent = st.tick;
+    document.getElementById("ascii").textContent = renderAscii(st);
+
+    document.getElementById("modeSel").value = st.mode;
+    document.getElementById("speedSel").value = st.speed;
+
+    const hc = document.getElementById("humanControls");
+    if(st.mode === "oroma_vs_human"){ hc.classList.remove("d-none"); } else { hc.classList.add("d-none"); }
+  }catch(e){
+    console.log("tick err", e);
+  }
+}
+setInterval(tick, 500);
+tick();
+
+document.getElementById("btnStart").onclick = ()=>post(API + "/toggle", {running:true});
+document.getElementById("btnPause").onclick = ()=>post(API + "/toggle", {running:false});
+document.getElementById("btnReset").onclick = ()=>post(API + "/reset", {});
+document.getElementById("modeSel").onchange = (ev)=>post(API + "/mode", {mode: ev.target.value});
+document.getElementById("speedSel").onchange = (ev)=>post(API + "/speed", {speed: ev.target.value});
+
+document.getElementById("btnUp").onclick = ()=>post(API + "/move", {side:"O", action:-1});
+document.getElementById("btnHold").onclick = ()=>post(API + "/move", {side:"O", action:0});
+document.getElementById("btnDown").onclick = ()=>post(API + "/move", {side:"O", action:1});
+</script>
+{% endblock %}

@@ -1,0 +1,52 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-replay.service
+# Projekt:  ORÓMA v3.8 – SnapChain Replay (oneshot, headless)
+# Stand:    2025-11-30
+# Autor:    ORÓMA · KI-JWG-X1
+# =============================================================================
+
+[Unit]
+Description=ORÓMA v3.8 – SnapChain Replay (oneshot, headless)
+After=network-online.target oroma.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai/oroma
+SyslogIdentifier=oroma-replay
+
+User=oroma
+Group=oroma
+UMask=002
+
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=UTF-8
+Environment=TZ=Europe/Berlin
+Environment=PYTHONPATH=/opt/ai/oroma
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=OROMA_LOG_DIR=/opt/ai/oroma/logs
+
+ExecStartPre=/usr/bin/env bash -lc 'mkdir -p /opt/ai/oroma/logs'
+ExecStart=/usr/bin/python3 /opt/ai/oroma/tools/replay_auto.py --auto --speed 1.0
+
+StandardOutput=append:/opt/ai/oroma/logs/replay.out.log
+StandardError=append:/opt/ai/oroma/logs/replay.err.log
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+ReadWritePaths=/opt/ai/oroma/logs /opt/ai/oroma/data
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,32 @@
+# =============================================================================
+# Pfad:        /opt/ai/oroma/systemd/oroma-gap-miner.timer
+# Projekt:     ORÓMA
+# Komponente:  Autonomie / Learning (Knowledge Gaps)
+# Version:     v1.0
+# Stand:       2025-12-29
+# Autor:       ORÓMA · KI-JWG-X1
+# =============================================================================
+#
+# Zweck
+# -----
+# Trigger für oroma-gap-miner.service.
+#
+# WICHTIG
+# -------
+# Im Orchestrator-Modus (/opt/ai/oroma/.use_orchestrator) wird der Service
+# übersprungen. Dieser Timer bleibt dann effektiv inaktiv.
+# =============================================================================
+
+[Unit]
+Description=ORÓMA Gap Miner Timer (proaktives Knowledge-Gap Mining)
+ConditionPathExists=!/opt/ai/oroma/.use_orchestrator
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+RandomizedDelaySec=120
+Persistent=true
+Unit=oroma-gap-miner.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,245 @@
+<!--
+===============================================================================
+Datei:   /opt/ai/oroma/ui/templates/games.html
+Projekt: ORÓMA v3.7 – Headless UI (Nur-Übersicht)
+Stand:   2025-10-28
+Autor:   ORÓMA · KI-JWG-X1
+Zweck:   Schlichte Liste der verfügbaren / nicht verfügbaren Spiele.
+===============================================================================
+-->
+{% extends "base.html" %}
+{% block content %}
+<main style="padding:2rem; max-width:1100px; margin:auto;">
+  <h1>🎮 ORÓMA – Mini-Spiele (Übersicht)</h1>
+  <p class="text-muted">
+    Diese Seite zeigt nur eine kompakte Liste mit Kurz­erklärungen und direkten Links.
+    Live-Vorschau/iframes sind hier absichtlich deaktiviert, um Fehlerquellen zu vermeiden.
+  </p>
+
+  <h3 class="mt-4">✅ Verfügbar</h3>
+  {% if games_available|length > 0 %}
+    <table class="table table-dark table-striped table-sm">
+      <thead><tr><th>Name</th><th>Route</th><th>Beschreibung</th><th>Aktion</th></tr></thead>
+      <tbody>
+        {% for g in games_available %}
+          <tr>
+            <td>{{ g.title }}</td>
+            <td><code>{{ g.url }}/</code></td>
+            <td>{{ g.note or "–" }}</td>
+            <td><a class="btn btn-sm btn-primary" href="{{ g.url }}/" target="_blank">Öffnen</a></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="small text-muted">
+      Hinweise: <b>Snake</b> – Pfeiltasten steuern; <b>Pong</b> – Canvas/Autoplay;
+      <b>TicTacToe</b> – 9-Felder, einfache Heuristik/Policy.
+    </div>
+  {% else %}
+    <div class="alert alert-warning">Keine registrierten Spiele gefunden.</div>
+  {% endif %}
+
+  <h3 class="mt-4">⚠️ Nicht verfügbar</h3>
+  {% if games_unavailable|length > 0 %}
+    <table class="table table-dark table-striped table-sm">
+      <thead><tr><th>Name</th><th>Erwartete Route</th><th>Grund/Hinweis</th></tr></thead>
+      <tbody>
+        {% for g in games_unavailable %}
+          <tr>
+            <td>{{ g.title }}</td>
+            <td><code>{{ g.url_hint }}</code></td>
+            <td>{{ g.error or g.note or "–" }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="small text-muted">
+      Tipp: Module prüfen (Importfehler), Blueprint-<code>url_prefix</code> und Abhängigkeiten (pygame/OpenCV).
+    </div>
+  {% else %}
+    <div class="alert alert-success">Alle bekannten Spiele sind registriert. 🎉</div>
+  {% endif %}
+</main>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const byId = (id) => document.getElementById(id);
+  const daysSel = byId('daysSel');
+  const gameSel = byId('gameSel');
+  const varSel  = byId('varSel');
+  const btnLoad = byId('btnLoad');
+  const sumStatus = byId('sumStatus');
+  const tbl = byId('tblDaily');
+
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  }
+
+  function fmtNum(v, digits=2) {
+    if (v === null || v === undefined) return '';
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '';
+    return n.toFixed(digits);
+  }
+
+  function fmtScore(it) {
+    if (!it) return '';
+    if (it.score_key === 'avg_score_A/B') {
+      const a = fmtNum(it.scoreA_avg, 3);
+      const b = fmtNum(it.scoreB_avg, 3);
+      if (!a && !b) return '';
+      return `${a}/${b}`;
+    }
+    return fmtNum(it.score_avg, 3);
+  }
+
+  async function loadDaily() {
+    const days = Number(daysSel?.value || 30);
+    sumStatus.textContent = 'lädt…';
+    try {
+      const game = (gameSel && gameSel.value) ? String(gameSel.value) : '';
+      const variant = (varSel && varSel.value) ? String(varSel.value) : '';
+      const qsParts = [`days=${encodeURIComponent(days)}`, `limit=${encodeURIComponent(2000)}`];
+      if (game) qsParts.push(`game=${encodeURIComponent(game)}`);
+      if (variant) qsParts.push(`variant=${encodeURIComponent(variant)}`);
+
+      const r = await fetch(`/games/api/daily_summary?${qsParts.join('&')}`, { cache: 'no-store' });
+      const bodyText = await r.text();
+      let j;
+      try { j = JSON.parse(bodyText || 'null'); } catch (e) { throw new SyntaxError('Bad JSON: ' + e); }
+      if (!j || !j.ok) {
+        sumStatus.textContent = `Fehler: ${(j && j.err) ? j.err : 'unbekannt'}`;
+        return;
+      }
+
+      const rows = Array.isArray(j.rows) ? j.rows : [];
+      sumStatus.textContent = `OK · rows=${rows.length} · days=${j.days}`;
+
+      // Populate selectors once from API metadata (non-destructive).
+      if (Array.isArray(j.games_present) && gameSel && gameSel.options.length <= 1) {
+        for (const g of j.games_present) {
+          const opt = document.createElement('option');
+          opt.value = String(g);
+          opt.textContent = String(g);
+          gameSel.appendChild(opt);
+        }
+      }
+
+      const tb = tbl?.querySelector('tbody');
+      if (!tb) return;
+      tb.innerHTML = '';
+      if (!rows.length) {
+        tb.innerHTML = '<tr><td colspan="20" class="text-muted">(keine Daten)</td></tr>';
+        return;
+      }
+
+      for (const it of rows) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${esc(it.day)}</td>
+          <td>${esc(it.game)}</td>
+          <td>${esc(it.variant)}</td>
+          <td class="text-end">${esc(it.policy_n)}</td>
+          <td class="text-end">${esc(it.explore_n)}</td>
+          <td class="text-end">${esc(it.n_total)}</td>
+          <td class="text-end">${esc(it.start || "")}</td>
+          <td class="text-end">${esc(it.end || "")}</td>
+          <td class="text-end">${fmtNum(it.dt_s_avg, 2)}</td>
+          <td class="text-end">${fmtNum(it.duration_ms_avg, 2)}</td>
+          <td class="text-end">${fmtNum(it.avg_reward, 6)}</td>
+          <td class="text-end">${esc(fmtScore(it))}</td>
+          <td class="text-end">${fmtNum(it.highscore, 3)}</td>
+          <td class="text-end">${fmtNum(it.wins, 0)}</td>
+          <td class="text-end">${fmtNum(it.losses, 0)}</td>
+          <td class="text-end">${fmtNum(it.draws, 0)}</td>
+          <td class="text-end">${fmtNum(it.avg_pairs_left_end, 3)}</td>
+          <td class="text-end">${fmtNum(it.avg_strikes_p1, 3)}</td>
+          <td class="text-end">${fmtNum(it.avg_strikes_p2, 3)}</td>
+          <td class="text-end">${fmtNum(it.avg_strikes_p3, 3)}</td>
+        `;
+        tb.appendChild(tr);
+      }
+    } catch (e) {
+      sumStatus.textContent = `Fehler: ${e}`;
+    }
+  }
+
+  btnLoad?.addEventListener('click', loadDaily);
+  gameSel?.addEventListener('change', loadDaily);
+  varSel?.addEventListener('change', loadDaily);
+  loadDaily();
+});
+</script>
+
+  <h3 class="mt-4">📊 Daily Summary (DB)</h3>
+  <p class="text-muted small">
+    Statische Auswertung aus <code>episodes</code>/<code>episodic_metrics</code> (oroma.db). Ziel: Tageswerte,
+    um Lernen/Veränderung über Wochen/Monate nachvollziehen zu können.
+  </p>
+
+  <div class="card bg-dark border-secondary mb-3">
+    <div class="card-body">
+      <div class="d-flex flex-wrap align-items-center gap-2" style="gap:.5rem;">
+        <label class="text-muted small" for="daysSel" style="margin-right:.25rem;">Tage:</label>
+        <select id="daysSel" class="form-select form-select-sm" style="max-width:120px;">
+          <option value="7">7</option>
+          <option value="14">14</option>
+          <option value="30" selected>30</option>
+          <option value="90">90</option>
+          <option value="180">180</option>
+          <option value="365">365</option>
+        </select>
+        <label class="text-muted small" for="gameSel" style="margin-left:.25rem;">Game:</label>
+        <select id="gameSel" class="form-select form-select-sm" style="max-width:220px;">
+          <option value="" selected>(alle)</option>
+        </select>
+        <label class="text-muted small" for="varSel" style="margin-left:.25rem;">Variante:</label>
+        <select id="varSel" class="form-select form-select-sm" style="max-width:220px;">
+          <option value="" selected>(alle)</option>
+          <option value="normal">normal</option>
+          <option value="hard_p3">hard_p3</option>
+        </select>
+        <button id="btnLoad" class="btn btn-sm btn-outline-primary">↻ Laden</button>
+        <span id="sumStatus" class="text-muted small"></span>
+      </div>
+
+      <div class="table-responsive mt-3">
+        <table class="table table-dark table-striped table-sm" id="tblDaily">
+          <thead>
+            <tr>
+              <th>Tag</th>
+              <th>Game</th>
+              <th>Variante</th>
+              <th class="text-end">policy</th>
+              <th class="text-end">explore</th>
+              <th class="text-end">total</th>
+              <th class="text-end">start</th>
+              <th class="text-end">end</th>
+              <th class="text-end">dt_s Ø</th>
+              <th class="text-end">duration_ms Ø</th>
+          <th class="text-end">reward Ø</th>
+          <th class="text-end">score Ø</th>
+          <th class="text-end">highscore</th>
+              <th class="text-end">wins</th>
+              <th class="text-end">losses</th>
+              <th class="text-end">draws</th>
+              <th class="text-end">pairs_left Ø</th>
+              <th class="text-end">strikes_p1 Ø</th>
+              <th class="text-end">strikes_p2 Ø</th>
+              <th class="text-end">strikes_p3 Ø</th>
+            </tr>
+          </thead>
+          <tbody>
+        <tr><td colspan="20" class="text-muted">(noch nicht geladen)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="text-muted small">
+        Hinweis: nicht jedes Spiel liefert wins/draws/pairs_left. Leere Felder bedeuten: keine passenden Metrics vorhanden.
+      </div>
+    </div>
+  </div>
+
+  
+{% endblock %}

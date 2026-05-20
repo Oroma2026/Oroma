@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PTZ Targeting</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 12px; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 10px; }
+    button { padding: 8px 10px; border-radius: 8px; border: 1px solid #bbb; background: #f8f8f8; }
+    button.primary { border-color: #666; }
+    input { padding: 6px 8px; border-radius: 8px; border: 1px solid #bbb; width: 90px; }
+    select { padding: 6px 8px; border-radius: 8px; border: 1px solid #bbb; }
+    pre { background: #111; color: #ddd; padding: 10px; border-radius: 10px; overflow-x: auto; }
+    .muted { opacity: 0.7; }
+    .k { font-weight: 600; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid #bbb; background:#fafafa; }
+  </style>
+</head>
+<body>
+  <h2>🛰️ PTZ Targeting</h2>
+
+  <div class="row">
+    <div class="card">
+      <div class="row">
+        <button class="primary" id="btnStart">Start</button>
+        <button id="btnStop">Stop</button>
+        <button id="btnReset">Reset</button>
+      </div>
+      <div style="height:8px"></div>
+      <div class="row">
+        <label class="k">Mode</label>
+        <select id="mode">
+          <option value="oroma_vs_oroma_explore" selected>Explore (Default)</option>
+          <option value="oroma_vs_oroma_policy">Policy</option>
+          <option value="human">Human</option>
+        </select>
+        <label class="k">Auto-Reset</label>
+        <input id="auto_reset" type="checkbox" style="width:auto" checked />
+        <label class="k">eps</label>
+        <input id="eps" type="number" step="0.01" min="0" max="1" value="0.08" />
+        <label class="k">tick ms</label>
+        <input id="tick" type="number" step="10" min="50" max="2000" value="250" />
+        <label class="k">amount</label>
+        <input id="amt" type="number" step="1" min="1" max="1000" value="10" />
+        <label class="k">max_steps</label>
+        <input id="maxs" type="number" step="1" min="5" max="2000" value="40" />
+        <button id="btnApply">Apply</button>
+      </div>
+      <div class="muted" style="margin-top:8px">
+        Ziel: bewegtes Target (Motion-Centroid) zur Bildmitte bringen & halten.
+        <span class="pill">Default: Explore</span>
+      </div>
+    </div>
+
+    <div class="card" style="min-width:340px">
+      <div><span class="k">Status:</span> <span id="status">-</span></div>
+      <div><span class="k">Namespace:</span> <span id="ns">-</span></div>
+      <div><span class="k">Rules:</span> <span id="rules">0</span></div>
+      <div><span class="k">Steps:</span> <span id="steps">0</span> / <span id="maxSteps">0</span></div>
+      <div><span class="k">Lock:</span> <span id="lock">0</span></div>
+      <div><span class="k">Last:</span> action=<span id="la">hold</span> reward=<span id="lr">0</span></div>
+      <div class="muted" id="humanHelp" style="margin-top:6px">
+        Human: WASD/Arrow move · Q/E zoom_out/zoom_in · Space hold
+      </div>
+      <div class="muted" id="err" style="margin-top:6px"></div>
+    </div>
+  </div>
+
+  <h3>Observation</h3>
+  <pre id="obs">-</pre>
+
+<script>
+  async function jget(url) {
+    const r = await fetch(url, {cache: 'no-store'});
+    return await r.json();
+  }
+  async function jpost(url, body) {
+    const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{})});
+    return await r.json();
+  }
+
+  async function refresh() {
+    try {
+      const s = await jget('/ptz_target/api/state');
+      if(!s || !s.ok){
+        document.getElementById('err').textContent = 'ERR: ' + (s?.err || 'no data');
+        return;
+      }
+      document.getElementById('status').textContent = (s.autoplay ? 'running' : 'stopped') + ' · ' + s.mode;
+      document.getElementById('ns').textContent = s.namespace || '-';
+      document.getElementById('rules').textContent = String(s.policy_rules || 0);
+      document.getElementById('steps').textContent = String(s.steps || 0);
+      document.getElementById('maxSteps').textContent = String(s.max_steps || 0);
+      document.getElementById('lock').textContent = String(s.lock || 0);
+      document.getElementById('la').textContent = String(s.last_action || 'hold');
+      document.getElementById('lr').textContent = String((s.last_reward ?? 0).toFixed ? s.last_reward.toFixed(4) : s.last_reward);
+      document.getElementById('obs').textContent = JSON.stringify({obs: s.obs||{}}, null, 2);
+      document.getElementById('err').textContent = s.err ? ('ERR: ' + s.err) : '';
+
+      // reflect settings
+      document.getElementById('eps').value = s.eps ?? 0.08;
+      document.getElementById('tick').value = s.dt_ms ?? 250;
+      document.getElementById('amt').value = s.amount ?? 10;
+      document.getElementById('maxs').value = s.max_steps ?? 40;
+      document.getElementById('auto_reset').checked = (s.auto_reset !== undefined) ? !!s.auto_reset : true;
+      document.getElementById('mode').value = s.mode || 'oroma_vs_oroma_explore';
+    } catch(e) {
+      document.getElementById('err').textContent = 'ERR: ' + (e?.message || String(e));
+    }
+  }
+
+  document.getElementById('btnStart').onclick = async () => {
+    const st = await jget('/ptz_target/api/state');
+    if(!st.autoplay) await jpost('/ptz_target/api/toggle', {});
+    await refresh();
+  };
+  document.getElementById('btnStop').onclick = async () => {
+    const st = await jget('/ptz_target/api/state');
+    if(st.autoplay) await jpost('/ptz_target/api/toggle', {});
+    await refresh();
+  };
+  document.getElementById('btnReset').onclick = async () => { await jpost('/ptz_target/api/reset', {}); await refresh(); };
+  document.getElementById('btnApply').onclick = async () => {
+    const eps = parseFloat(document.getElementById('eps').value || '0.08');
+    const dt_ms = parseInt(document.getElementById('tick').value || '250', 10);
+    const amount = parseInt(document.getElementById('amt').value || '10', 10);
+    const max_steps = parseInt(document.getElementById('maxs').value || '40', 10);
+    const auto_reset = !!document.getElementById('auto_reset').checked;
+    await jpost('/ptz_target/api/settings', {eps, dt_ms, amount, max_steps, auto_reset});
+    const mode = document.getElementById('mode').value;
+    await jpost('/ptz_target/api/mode', {mode});
+    await refresh();
+  };
+
+  document.addEventListener('keydown', async (ev) => {
+    const mode = document.getElementById('mode').value;
+    if(mode !== 'human') return;
+    let a = null;
+    if(ev.key === 'ArrowLeft' || ev.key === 'a') a='left';
+    if(ev.key === 'ArrowRight' || ev.key === 'd') a='right';
+    if(ev.key === 'ArrowUp' || ev.key === 'w') a='up';
+    if(ev.key === 'ArrowDown' || ev.key === 's') a='down';
+    if(ev.key === 'q') a='zoom_out';
+    if(ev.key === 'e') a='zoom_in';
+    if(ev.key === ' ') a='hold';
+    if(a){ ev.preventDefault(); await jpost('/ptz_target/api/move', {action:a}); }
+  });
+
+  refresh();
+  setInterval(refresh, 1000);
+</script>
+</body>
+</html>

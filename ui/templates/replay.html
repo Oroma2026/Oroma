@@ -1,0 +1,267 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container-fluid mt-4">
+  <h1 class="mb-3">🎞️ Replay-System</h1>
+  <p class="text-muted">SnapChains abspielen, pausieren oder stoppen. Live-Status, Suche & Logs.</p>
+
+  <div class="row g-3">
+    <!-- Linke Seite: Status + Steuerung + Logs -->
+    <div class="col-lg-5">
+      <div class="card text-bg-dark mb-3 shadow-sm">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          Status
+          <button class="btn btn-sm btn-outline-info" onclick="loadStatus()">↻ Aktualisieren</button>
+        </div>
+        <div class="card-body">
+          <table class="table table-sm table-dark table-striped mb-0">
+            <tbody id="status-table">
+              <tr><td colspan="2" class="text-muted">Lade Status…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card text-bg-dark shadow-sm">
+        <div class="card-header">Replay-Steuerung</div>
+        <div class="card-body">
+          <form id="replayForm" class="row g-2 mb-2" onsubmit="return startReplay(event)">
+            <div class="col-7">
+              <input id="chain_id" type="text" class="form-control" placeholder="Chain-ID (z. B. selftest oder 123)" required>
+            </div>
+            <div class="col-3">
+              <input id="speed" type="number" step="0.1" min="0.1" class="form-control" placeholder="Speed" value="1.0">
+            </div>
+            <div class="col-2">
+              <button type="submit" class="btn btn-success w-100">▶️ Start</button>
+            </div>
+          </form>
+          <div class="btn-group w-100" role="group">
+            <button class="btn btn-warning" onclick="replayPause()">⏸️ Pause</button>
+            <button class="btn btn-info" onclick="replayResume()">⏯️ Resume</button>
+            <button class="btn btn-danger" onclick="replayStop()">⏹️ Stop</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card text-bg-dark mt-3 shadow-sm">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          Replay-Logs
+          <button class="btn btn-sm btn-outline-info" onclick="loadLogs()">↻</button>
+        </div>
+        <div class="card-body p-0">
+          <pre id="logs" class="bg-black text-white small p-2" style="max-height:260px; overflow-y:auto;">…</pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Rechte Seite: Chainsuche -->
+    <div class="col-lg-7">
+      <div class="card text-bg-dark shadow-sm">
+        <div class="card-header">Chains suchen (FS/DB)</div>
+        <div class="card-body">
+          <form class="row g-2 align-items-end">
+            <div class="col-md-4">
+              <label class="form-label">Filter (Teilstring)</label>
+              <input id="q" type="text" class="form-control" placeholder="z. B. selftest, 2025-10, cam_">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Quelle</label>
+              <select id="source" class="form-select">
+                <option value="all">FS + DB</option>
+                <option value="fs">nur FS</option>
+                <option value="db">nur DB</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Sortierung</label>
+              <select id="sort" class="form-select">
+                <option value="ts_desc">Neueste zuerst</option>
+                <option value="ts_asc">Älteste zuerst</option>
+                <option value="id_asc">ID ↑</option>
+                <option value="id_desc">ID ↓</option>
+              </select>
+            </div>
+            <div class="col-md-2">
+              <button type="button" class="btn btn-primary w-100" onclick="searchChains(true)">Suchen</button>
+            </div>
+          </form>
+
+          <div class="d-flex justify-content-between align-items-center mt-3">
+            <small class="text-muted" id="meta">—</small>
+            <div class="btn-group">
+              <button class="btn btn-sm btn-outline-secondary" onclick="prevPage()">« Prev</button>
+              <button class="btn btn-sm btn-outline-secondary" onclick="nextPage()">Next »</button>
+            </div>
+          </div>
+
+          <div class="table-responsive mt-2">
+            <table class="table table-dark table-striped table-sm align-middle">
+              <thead>
+                <tr>
+                  <th style="width: 90px;">Quelle</th>
+                  <th>ID</th>
+                  <th style="width: 160px;">Zeit</th>
+                  <th style="width: 90px;">Größe/Origin</th>
+                  <th style="width: 110px;">Aktion</th>
+                </tr>
+              </thead>
+              <tbody id="chains-body">
+                <tr><td colspan="5" class="text-muted">Bitte filtern (mind. 2 Zeichen) oder einfach suchen.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="d-flex justify-content-end">
+            <div class="btn-group">
+              <button class="btn btn-sm btn-outline-secondary" onclick="prevPage()">« Prev</button>
+              <button class="btn btn-sm btn-outline-secondary" onclick="nextPage()">Next »</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* -------------------- Status -------------------- */
+async function loadStatus() {
+  try {
+    const r = await fetch("/replay/api/status");
+    const j = await r.json();
+    const st = j.state || {};
+    const tb = document.getElementById("status-table");
+    tb.innerHTML = "";
+    const rows = [
+      ["running", st.running],
+      ["paused", st.paused],
+      ["chain_id", st.chain_id ?? "—"],
+      ["step", st.step ?? "—"],
+      ["total_steps", st.total_steps ?? "—"],
+      ["progress_pct", st.progress_pct ?? "—"],
+      ["speed", st.speed ?? "—"],
+      ["elapsed_time", st.elapsed_time ?? "—"],
+      ["last_event", st.last_event ?? "—"],
+    ];
+    for (const [k,v] of rows) tb.innerHTML += `<tr><td>${k}</td><td>${v}</td></tr>`;
+  } catch (e) { console.error("Status-Fehler:", e); }
+}
+
+/* -------------------- Control -------------------- */
+async function startReplay(ev) {
+  ev && ev.preventDefault();
+  const chain_id = document.getElementById("chain_id").value.trim();
+  const speed = parseFloat(document.getElementById("speed").value || "1.0");
+  if (!chain_id) { alert("Bitte Chain-ID angeben."); return false; }
+  const r = await fetch("/replay/api/start", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({chain_id, speed})
+  });
+  const j = await r.json();
+  alert(j.ok ? `Replay gestartet (${chain_id} @ ${speed})` : `Fehler: ${j.error||"unknown"}`);
+  loadStatus();
+  return false;
+}
+async function replayPause(){ await fetch("/replay/api/pause",{method:"POST"}); loadStatus(); }
+async function replayResume(){ await fetch("/replay/api/resume",{method:"POST"}); loadStatus(); }
+async function replayStop(){ await fetch("/replay/api/stop",{method:"POST"}); loadStatus(); }
+
+/* -------------------- Logs -------------------- */
+async function loadLogs() {
+  try {
+    const r = await fetch("/replay/api/logs?limit=30");
+    const j = await r.json();
+    const box = document.getElementById("logs");
+    if (!j.ok) { box.textContent = "Fehler: "+(j.error||"unknown"); return; }
+    const lines = (j.items||[]).map(it => {
+      const t = new Date((it.ts_run||0)*1000).toLocaleString();
+      return `#${it.id}  [${t}]  chain=${it.chain_id}  steps=${it.steps}  speed=${it.speed}  status=${it.status}` + (it.info ? `  info=${it.info}` : "");
+    });
+    box.textContent = lines.join("\n") || "Keine Logs.";
+    box.scrollTop = box.scrollHeight;
+  } catch (e) { console.error("Logs-Fehler:", e); }
+}
+
+/* -------------------- Chains: Suche/Paging -------------------- */
+let qState = { q:"", source:"all", sort:"ts_desc", offset:0, limit:50, lastCount:0 };
+
+function readQuery() {
+  qState.q = document.getElementById("q").value.trim();
+  qState.source = document.getElementById("source").value;
+  qState.sort = document.getElementById("sort").value;
+}
+
+async function searchChains(reset=false) {
+  readQuery();
+  if (reset) qState.offset = 0;
+  const params = new URLSearchParams({
+    source: qState.source,
+    q: qState.q,
+    sort: qState.sort,
+    offset: String(qState.offset),
+    limit: String(qState.limit),
+  });
+  try {
+    const r = await fetch("/replay/api/chains?"+params.toString());
+    const j = await r.json();
+    const body = document.getElementById("chains-body");
+    const meta = document.getElementById("meta");
+    if (!j.ok) {
+      body.innerHTML = `<tr><td colspan="5" class="text-danger">Fehler: ${j.error||"unknown"}</td></tr>`;
+      meta.textContent = "—";
+      return;
+    }
+    qState.lastCount = j.total_count || 0;
+    meta.textContent = `Quelle=${j.source} · Treffer gesamt=${j.total_count} · Seite=${j.offset+1}..${j.offset+(j.page_count||0)} (Limit=${j.limit})` + (j.q ? ` · Filter="${j.q}"` : "");
+    if (!j.items || j.items.length === 0) {
+      body.innerHTML = `<tr><td colspan="5" class="text-muted">Keine Einträge.</td></tr>`;
+      return;
+    }
+    body.innerHTML = "";
+    for (const it of j.items) {
+      const when = it.ts ? new Date(it.ts*1000).toLocaleString() : "—";
+      const size = it.size_kb != null ? (it.size_kb+" KB") : (it.origin||"—");
+      body.innerHTML += `
+        <tr>
+          <td><span class="badge bg-secondary">${it.source}</span></td>
+          <td class="text-break">${String(it.id)}</td>
+          <td>${when}</td>
+          <td>${size}</td>
+          <td><button class="btn btn-sm btn-success" onclick="quickStart('${String(it.id)}')">Start</button></td>
+        </tr>`;
+    }
+  } catch (e) { console.error("Chains-Fehler:", e); }
+}
+
+function nextPage() {
+  qState.offset = Math.min(qState.offset + qState.limit, Math.max(0, qState.lastCount - 1));
+  searchChains(false);
+}
+function prevPage() {
+  qState.offset = Math.max(0, qState.offset - qState.limit);
+  searchChains(false);
+}
+async function quickStart(id) {
+  document.getElementById("chain_id").value = id;
+  await startReplay();
+}
+
+/* Type-Ahead Suche */
+let typeTimer = null;
+document.getElementById("q").addEventListener("input", () => {
+  clearTimeout(typeTimer);
+  typeTimer = setTimeout(() => {
+    const val = document.getElementById("q").value.trim();
+    if (val.length >= 2) searchChains(true);
+  }, 250);
+});
+
+/* Init */
+loadStatus();
+loadLogs();
+searchChains(true);
+setInterval(loadStatus, 3000);
+setInterval(loadLogs, 15000);
+</script>
+{% endblock %}

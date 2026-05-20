@@ -1,0 +1,50 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-selftest.service
+# Projekt:  ORÓMA v3.8 – UI-Selftest (Routenprüfung, HEADLESS)
+# Stand:    2025-11-30 (fix: einfache ExecStart)
+# =============================================================================
+
+[Unit]
+Description=ORÓMA v3.8 – UI-Selftest (Flask-Routenprüfung)
+After=network-online.target oroma.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai/oroma
+SyslogIdentifier=oroma-selftest
+
+User=oroma
+Group=oroma
+UMask=002
+
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+
+Environment=PYTHONPATH=/opt/ai/oroma
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=UTF-8
+Environment=TZ=Europe/Berlin
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=OROMA_LOG_DIR=/opt/ai/oroma/logs
+
+# Log-Verzeichnis sicherstellen
+ExecStartPre=/usr/bin/env bash -lc 'mkdir -p /opt/ai/oroma/logs && touch /opt/ai/oroma/logs/selftest.log || true'
+
+# Einfache, einzeilige ExecStart ohne komplexes Quoting
+ExecStart=/usr/bin/env bash -lc '/usr/bin/python3 /opt/ai/oroma/tools/ui_selftest.py >> /opt/ai/oroma/logs/selftest.log 2>&1'
+
+StandardOutput=append:/opt/ai/oroma/logs/selftest.log
+StandardError=append:/opt/ai/oroma/logs/selftest.log
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+ReadWritePaths=/opt/ai/oroma/logs /opt/ai/oroma/data
+
+[Install]
+WantedBy=multi-user.target

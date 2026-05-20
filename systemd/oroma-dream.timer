@@ -1,0 +1,18 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-dream.timer
+# Projekt:  ORÓMA v3.8 – DreamWorker Timer
+# Stand:    2025-11-30
+# =============================================================================
+
+[Unit]
+Description=ORÓMA v3.8 – DreamWorker (alle 30 Minuten)
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=30min
+Unit=oroma-dream.service
+Persistent=true
+
+RandomizedDelaySec=180s
+[Install]
+WantedBy=timers.target

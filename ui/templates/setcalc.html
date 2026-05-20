@@ -1,0 +1,47 @@
+{# =============================================================================
+ Pfad:    /opt/ai/oroma/ui/templates/setcalc.html
+ Projekt: ORÓMA v3.6 Patch 2 (SetCalc – Mengenlehre)
+ Stand:   2025-09-28
+
+ Zweck
+ ─────
+ - UI-Template für Mengenoperationen.
+ - Eingabe: A, B, optional Universum U.
+ - Buttons für Union, Schnitt, Differenz, Komplement, Potenzmenge, Kartesisch.
+ - Ergebnis: Textausgabe + Venn-Diagramm (Chart.js).
+ 
+ Hinweise
+ ────────
+ - Events/Logik → scripts.js → safeInitSetCalc().
+ - Damit konsistent mit scicalc.html & calculator.html.
+ ============================================================================= #}
+
+{% extends "base.html" %}
+{% block title %}SetCalc (Mengenlehre){% endblock %}
+
+{% block content %}
+<h1>SetCalc – Mengenlehre</h1>
+
+<div style="display:grid; gap:8px; grid-template-columns: 1fr;">
+  <label>Menge A: <input id="setA" value="1,2,3,4"></label>
+  <label>Menge B: <input id="setB" value="3,4,5,6"></label>
+  <label>Universum U (für Komplement): <input id="setU" value="1,2,3,4,5,6,7,8"></label>
+</div>
+
+<div style="margin:10px 0;">
+  <button id="btnUnion">A ∪ B</button>
+  <button id="btnInter">A ∩ B</button>
+  <button id="btnDiff">A \\ B</button>
+  <button id="btnCompl">Komplement (U \\ A)</button>
+  <button id="btnPow">P(A)</button>
+  <button id="btnCart">A × B</button>
+  <button id="btnVenn">Venn-Diagramm</button>
+</div>
+
+<pre id="setcalcResult" style="min-height:2.2em; background:#0f172a; color:#e6e6e6; padding:10px; border-radius:8px;"></pre>
+
+<canvas id="setVennChart" width="560" height="260" style="display:none;"></canvas>
+
+{# Chart.js für das Venn-Balkendiagramm (falls nicht bereits global in base.html geladen) #}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% endblock %}

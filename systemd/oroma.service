@@ -1,0 +1,128 @@
+# ==============================================================================
+# Datei:     /etc/systemd/system/oroma.service
+# Projekt:   ORÓMA v3.8 – Engine + Flask-UI + Circadian/DreamWorker (headless)
+# Stand:     2025-11-30
+# Autor:     ORÓMA · KI-JWG-X1
+# Zweck:     Startet die ORÓMA-Engine (run_oroma.py) als Systemdienst.
+# ==============================================================================
+
+[Unit]
+Description=ORÓMA v3.8 – Engine + Flask-UI + Circadian/DreamWorker (headless)
+After=network-online.target sound.target alsa-restore.service oroma-db-writer.service
+Wants=network-online.target sound.target oroma-db-writer.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ai/oroma
+
+# optionale Env-Dateien
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+
+User=oroma
+Group=oroma
+UMask=002
+
+# Damit ExecStartPre (mkdir/chown) als root laufen kann,
+# obwohl der Dienst selbst als User=oroma läuft.
+PermissionsStartOnly=true
+
+# ------------------------------------------------------------------------------
+# PRODUKTIONSFIX – File Descriptor Limit (NOFILE)
+# ------------------------------------------------------------------------------
+# Hintergrund:
+#   In Logs trat Errno 24 ("Too many open files") auf. Wenn das System an die
+#   FD-Grenze kommt, brechen u.a. Picamera2 *und* SQLite-Open weg.
+#
+# Maßnahme:
+#   - Erhöht das FD-Limit für den ORÓMA-Service.
+#   - Ergänzt die Code-Fixes (sauberes close()) und ist nicht-destruktiv.
+# ------------------------------------------------------------------------------
+LimitNOFILE=8192
+
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=UTF-8
+Environment=TZ=Europe/Berlin
+Environment=PYTHONPATH=/opt/ai/oroma
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/opt/hailo/bin
+Environment=LD_LIBRARY_PATH=/usr/local/lib:/usr/lib:/opt/hailo/lib
+Environment=OROMA_AUDIO_HOSTAPI=ALSA
+
+Environment=OROMA_LOG_DIR=/opt/ai/oroma/logs
+Environment=DEVICE_LOG_DIR=/opt/ai/oroma/log
+Environment=OROMA_SNAPCHAINS=/opt/ai/oroma/data/snapchains
+Environment=OROMA_SNAP_DIR=/opt/ai/oroma/data/snaps
+# --- Kamera AV-SnapTokens direkt im Dienst erzwingen ---
+Environment=OROMA_CAMERA_BACKEND=opencv
+Environment=VISION_BACKEND=opencv
+Environment=OROMA_VISION_BACKEND=opencv
+Environment=OROMA_AV_SNAPS=1
+Environment=OROMA_AV_SNAPS_EVERY_TICKS=8
+Environment=OROMA_AV_MIN_MOTION=0.0
+Environment=OROMA_AV_MIN_QUALITY=0.03
+Environment=OROMA_AV_FASTDB=0
+# DB-Tuning für alle ORÓMA-Prozesse, die über systemd laufen
+Environment=OROMA_DB_WAL=1
+Environment=OROMA_DB_BUSY_TIMEOUT_MS=60000
+Environment=OROMA_DB_TIMEOUT_SEC=60
+Environment=OROMA_DB_LOCK_RETRY_SEC=60
+
+Environment=OROMA_ASR_AVLINK=1
+Environment=OROMA_AV_LABEL_WINDOW_SEC=120
+Environment=OROMA_AV_LABEL_STRICT_MAX_DT=15
+Environment=OROMA_AV_LABEL_MAX_CANDIDATES=200
+
+# Input/Output bewusst über PortAudio "default" laufen lassen
+Environment=OROMA_AUDIO_INPUT_NAME=default
+Environment=OROMA_AUDIO_OUTPUT_NAME=default
+
+# Open-SR Strategie beibehalten
+Environment=OROMA_AUDIO_OPEN_SR_MODE=device
+Environment=OROMA_AUDIO_OPEN_SR=48000
+Environment=OROMA_AUDIO_OPEN_SR_PROBE=48000,44100,32000,16000
+Environment=OROMA_AUDIO_SR=16000
+
+ExecStartPre=/usr/bin/env bash -lc 'mkdir -p /opt/ai/oroma/logs /opt/ai/oroma/log /opt/ai/oroma/data/state "${OROMA_SNAPCHAINS}" "${OROMA_SNAP_DIR}" /opt/ai/oroma/exports /opt/ai/oroma/uploads /opt/ai/oroma/archives'
+ExecStartPre=/usr/bin/env bash -lc 'chown -R oroma:oroma /opt/ai/oroma/logs /opt/ai/oroma/log /opt/ai/oroma/data /opt/ai/oroma/exports /opt/ai/oroma/uploads /opt/ai/oroma/archives || true'
+
+ExecStart=/usr/bin/python3 -u /opt/ai/oroma/run_oroma.py
+
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=60
+TimeoutStopSec=30
+# OOMPolicy entfernt (ältere systemd-Version)
+
+PrivateTmp=no
+RestrictRealtime=no
+MemoryDenyWriteExecute=no
+
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+ProtectClock=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+
+ReadWritePaths=/opt/ai/oroma/logs \
+               /opt/ai/oroma/log \
+               /opt/ai/oroma/data \
+               /opt/ai/oroma/data/snaps \
+               /opt/ai/oroma/data/snapchains \
+               /opt/ai/oroma/models \
+               /opt/ai/oroma/exports \
+               /opt/ai/oroma/uploads \
+               /opt/ai/oroma/archives
+
+SupplementaryGroups=video render input gpio i2c audio
+
+StandardOutput=append:/opt/ai/oroma/logs/service.out.log
+StandardError=append:/opt/ai/oroma/logs/service.err.log
+SyslogIdentifier=oroma
+
+[Install]
+WantedBy=multi-user.target

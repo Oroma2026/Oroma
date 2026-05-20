@@ -1,0 +1,11 @@
+[Unit]
+Description=ORÓMA KPI Nightly Timer
+
+[Timer]
+OnCalendar=*-*-* 03:10:00
+Persistent=true
+
+RandomizedDelaySec=30min
+Unit=oroma-kpi.service
+[Install]
+WantedBy=timers.target

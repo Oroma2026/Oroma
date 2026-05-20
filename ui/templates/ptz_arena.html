@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PTZ Arena</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 12px; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 10px; }
+    button { padding: 8px 10px; border-radius: 8px; border: 1px solid #bbb; background: #f8f8f8; }
+    button.primary { border-color: #666; }
+    input { padding: 6px 8px; border-radius: 8px; border: 1px solid #bbb; width: 90px; }
+    select { padding: 6px 8px; border-radius: 8px; border: 1px solid #bbb; }
+    pre { background: #111; color: #ddd; padding: 10px; border-radius: 10px; overflow-x: auto; }
+    .muted { opacity: 0.7; }
+    .k { font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h2>📷 PTZ Arena</h2>
+  <div class="row">
+    <div class="card">
+      <div class="row">
+        <button class="primary" id="btnToggle">Start/Stop</button>
+        <button id="btnReset">Reset</button>
+        <button id="btnCenter">Center</button>
+      </div>
+      <div style="height:8px"></div>
+      <div class="row">
+        <label class="k">Mode</label>
+        <select id="mode">
+          <option value="oroma_vs_oroma_explore" selected>Explore (Default)</option>
+          <option value="oroma_vs_oroma_policy">Policy</option>
+        </select>
+        <label class="k">eps</label>
+        <input id="eps" type="number" step="0.01" min="0" max="1" value="0.08" />
+        <label class="k">tick ms</label>
+        <input id="tick" type="number" step="10" min="50" max="2000" value="200" />
+        <label class="k">amount</label>
+        <input id="amt" type="number" step="1" min="1" max="1000" value="10" />
+        <label class="k">max_steps</label>
+        <input id="maxs" type="number" step="1" min="5" max="2000" value="60" />
+        <button id="btnApply">Apply</button>
+      </div>
+      <div class="muted" style="margin-top:8px">
+        Hinweis: PTZ-Arena ist bewusst „sanft“ (rate-limited). Default ist Explore.
+      </div>
+    </div>
+
+    <div class="card" style="min-width:320px">
+      <div><span class="k">Status:</span> <span id="status">-</span></div>
+      <div><span class="k">Namespace:</span> <span id="ns">-</span></div>
+      <div><span class="k">Rules:</span> <span id="rules">0</span></div>
+      <div><span class="k">Steps:</span> <span id="steps">0</span> / <span id="maxSteps">0</span></div>
+      <div><span class="k">Last:</span> action=<span id="la">hold</span> reward=<span id="lr">0</span></div>
+      <div><span class="k">PTZ:</span> pan=<span id="pan">0</span> tilt=<span id="tilt">0</span> zoom=<span id="zoom">0</span></div>
+      <div class="muted" id="err" style="margin-top:6px"></div>
+    </div>
+  </div>
+
+  <h3>Observation</h3>
+  <pre id="obs">-</pre>
+
+<script>
+  async function jget(url) {
+    const r = await fetch(url, {cache: 'no-store'});
+    return await r.json();
+  }
+  async function jpost(url, body) {
+    const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{})});
+    return await r.json();
+  }
+
+  async function refresh() {
+    try {
+      const s = await jget('/ptz_arena/api/state');
+      document.getElementById('status').textContent = (s.autoplay ? 'running' : 'stopped') + ' · ' + s.mode;
+      document.getElementById('ns').textContent = s.namespace || '-';
+      document.getElementById('rules').textContent = String(s.policy_rules || 0);
+      document.getElementById('steps').textContent = String(s.steps || 0);
+      document.getElementById('maxSteps').textContent = String(s.max_steps || 0);
+      document.getElementById('la').textContent = String(s.last_action || 'hold');
+      document.getElementById('lr').textContent = String((s.last_reward ?? 0).toFixed ? s.last_reward.toFixed(4) : s.last_reward);
+      const ptz = s.ptz || {};
+      document.getElementById('pan').textContent = String(ptz.pan ?? 0);
+      document.getElementById('tilt').textContent = String(ptz.tilt ?? 0);
+      document.getElementById('zoom').textContent = String(ptz.zoom ?? 0);
+      document.getElementById('obs').textContent = JSON.stringify({obs: s.obs||{}, ptz: ptz}, null, 2);
+      document.getElementById('err').textContent = s.err ? ('ERR: ' + s.err) : '';
+
+      // reflect settings
+      document.getElementById('eps').value = s.eps ?? 0.08;
+      document.getElementById('tick').value = s.tick_ms ?? 200;
+      document.getElementById('amt').value = s.amount ?? 10;
+      document.getElementById('maxs').value = s.max_steps ?? 60;
+      document.getElementById('mode').value = s.mode || 'oroma_vs_oroma_explore';
+    } catch(e) {
+      document.getElementById('err').textContent = 'ERR: ' + (e?.message || String(e));
+    }
+  }
+
+  document.getElementById('btnToggle').onclick = async () => { await jpost('/ptz_arena/api/toggle', {}); await refresh(); };
+  document.getElementById('btnReset').onclick  = async () => { await jpost('/ptz_arena/api/reset', {center:false}); await refresh(); };
+  document.getElementById('btnCenter').onclick = async () => { await jpost('/ptz_arena/api/reset', {center:true}); await refresh(); };
+  document.getElementById('btnApply').onclick  = async () => {
+    const eps = parseFloat(document.getElementById('eps').value || '0.08');
+    const tick_ms = parseInt(document.getElementById('tick').value || '200');
+    const amount = parseInt(document.getElementById('amt').value || '10');
+    const max_steps = parseInt(document.getElementById('maxs').value || '60');
+    await jpost('/ptz_arena/api/settings', {eps, tick_ms, amount, max_steps});
+    const mode = document.getElementById('mode').value;
+    await jpost('/ptz_arena/api/mode', {mode});
+    await refresh();
+  };
+
+  // default: explore
+  refresh();
+  setInterval(refresh, 1000);
+</script>
+</body>
+</html>

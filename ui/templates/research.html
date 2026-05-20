@@ -1,0 +1,172 @@
+<!-- =============================================================================
+ * Pfad:    /opt/ai/oroma/ui/templates/research.html
+ * Projekt: ORÓMA
+ * Version: v3.6 (final)
+ * Stand:   2025-09-28
+ *
+ * Zweck:
+ *   - UI „Forschung & Hypothesen“
+ *   - Hypothesen erfassen, listen, verwalten
+ *   - Status setzen (open/confirmed/rejected), Retest, Score/Confidence setzen
+ *
+ * Abhängigkeiten:
+ *   - base.html (lädt style.css/scripts.js, Navbar/Badges)
+ *   - Flask-Blueprint: ui/research_ui.py (nutzt core.sql_manager)
+ * ============================================================================= -->
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <h2>🔬 Forschung & Hypothesen</h2>
+  <p class="text-muted">Hypothesen anlegen, Status/Score/Confidence pflegen, Retests auslösen.</p>
+
+  <!-- Neue Hypothese -->
+  <div class="card mb-3">
+    <div class="card-header">Neue Hypothese</div>
+    <div class="card-body">
+      <textarea id="hypoText" class="form-control" rows="3"
+        placeholder="Beispiel: »Mehr Kontext im Prompt → höhere Calculator-Accuracy.«"></textarea>
+      <div class="mt-2 d-flex gap-2">
+        <button id="hypoSubmit" class="btn btn-success">➕ Anlegen</button>
+        <button id="hypoReload" class="btn btn-outline-secondary">🔄 Liste aktualisieren</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Liste Hypothesen -->
+  <div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      Gespeicherte Hypothesen
+      <small class="text-muted">zeigt die letzten 50</small>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-dark table-striped table-hover mb-0 align-middle">
+          <thead>
+            <tr>
+              <th style="width:70px">ID</th>
+              <th>Text</th>
+              <th style="width:150px">Created</th>
+              <th style="width:120px">Status</th>
+              <th style="width:110px">Score</th>
+              <th style="width:130px">Confidence</th>
+              <th style="width:150px">Last&nbsp;Tested</th>
+              <th style="width:280px">Aktionen</th>
+            </tr>
+          </thead>
+          <tbody id="hypoTbody">
+            <tr><td colspan="8" class="text-center py-3">Lade…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------- Helpers ----------
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m])); }
+function fmtNum(x, digits=3){ return (x==null||isNaN(+x)) ? "-" : (+x).toFixed(digits); }
+
+// ---------- Load List ----------
+async function loadHypotheses(){
+  const body = document.getElementById("hypoTbody");
+  body.innerHTML = '<tr><td colspan="8" class="text-center py-3">Lade…</td></tr>';
+  try{
+    const r = await fetch("/research/api/list", { headers: window.OROMA_UI_TOKEN ? {"X-OROMA-TOKEN": window.OROMA_UI_TOKEN} : {} });
+    const j = await r.json();
+    if(!j.ok){ body.innerHTML = `<tr><td colspan="8" class="text-center text-danger">Fehler: ${esc(j.error||"unbekannt")}</td></tr>`; return; }
+    const items = Array.isArray(j.items)?j.items:[];
+    if(!items.length){ body.innerHTML = '<tr><td colspan="8" class="text-center py-3">Keine Hypothesen gespeichert.</td></tr>'; return; }
+
+    body.innerHTML = items.map(h=>{
+      const badgeClass = h.status==="confirmed" ? "bg-success" : (h.status==="rejected" ? "bg-danger" : "bg-info");
+      return `<tr>
+        <td>${h.id}</td>
+        <td>${esc(h.text)}</td>
+        <td><small>${esc(h.created||"-")}</small></td>
+        <td><span class="badge ${badgeClass}">${esc(h.status||"open")}</span></td>
+        <td>${fmtNum(h.score,3)}</td>
+        <td>${fmtNum(h.confidence,3)}</td>
+        <td><small>${esc(h.last_tested||"-")}</small></td>
+        <td class="d-flex flex-wrap gap-1">
+          <button class="btn btn-sm btn-outline-success" title="Bestätigen"
+            onclick="updateHypothesis(${h.id}, 'confirmed', null)">✅</button>
+          <button class="btn btn-sm btn-outline-danger" title="Verwerfen"
+            onclick="updateHypothesis(${h.id}, 'rejected', null)">❌</button>
+          <button class="btn btn-sm btn-outline-warning" title="Retest markieren"
+            onclick="updateHypothesis(${h.id}, null, 'retest')">🔄</button>
+          <button class="btn btn-sm btn-outline-info" title="Score setzen"
+            onclick="setScore(${h.id})">𝑠</button>
+          <button class="btn btn-sm btn-outline-primary" title="Confidence setzen"
+            onclick="setConfidence(${h.id})">𝑐</button>
+          <button class="btn btn-sm btn-outline-secondary" title="Wieder öffnen"
+            onclick="updateHypothesis(${h.id}, 'open', null)">↩︎ open</button>
+        </td>
+      </tr>`;
+    }).join("");
+  }catch(e){
+    body.innerHTML = `<tr><td colspan="8" class="text-center text-danger">API-Fehler: ${esc(e)}</td></tr>`;
+  }
+}
+
+// ---------- Create ----------
+async function submitHypothesis(){
+  const ta = document.getElementById("hypoText");
+  const txt = (ta.value||"").trim();
+  if(!txt) return;
+  try{
+    const r = await fetch("/research/api/new", {
+      method:"POST",
+      headers: {"Content-Type":"application/json", ...(window.OROMA_UI_TOKEN?{"X-OROMA-TOKEN":window.OROMA_UI_TOKEN}:{})},
+      body: JSON.stringify({text: txt})
+    });
+    const j = await r.json();
+    if(j.ok){
+      ta.value = "";
+      loadHypotheses();
+    }else{
+      alert("Fehler: "+(j.error||"unbekannt"));
+    }
+  }catch(e){ alert("API-Fehler: "+e); }
+}
+
+// ---------- Update Status/Action ----------
+async function updateHypothesis(id, status=null, action=null, extra={}){
+  try{
+    const r = await fetch(`/research/api/update/${id}`, {
+      method:"POST",
+      headers: {"Content-Type":"application/json", ...(window.OROMA_UI_TOKEN?{"X-OROMA-TOKEN":window.OROMA_UI_TOKEN}:{})},
+      body: JSON.stringify(Object.assign({status, action}, extra))
+    });
+    const j = await r.json();
+    if(j.ok){ loadHypotheses(); }
+    else{ alert("Update-Fehler: "+(j.error||"unbekannt")); }
+  }catch(e){ alert("API-Fehler: "+e); }
+}
+
+// ---------- Set Score / Confidence ----------
+function readNumber(label){
+  const v = prompt(label+" (Zahl, z.B. 0.75)");
+  if(v==null) return null;
+  const n = Number(String(v).replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
+
+async function setScore(id){
+  const n = readNumber("Neuer Score");
+  if(n==null){ alert("Ungültiger Wert"); return; }
+  updateHypothesis(id, null, null, {score: n});
+}
+
+async function setConfidence(id){
+  const n = readNumber("Neue Confidence");
+  if(n==null){ alert("Ungültiger Wert"); return; }
+  updateHypothesis(id, null, null, {confidence: n});
+}
+
+// ---------- Wireup ----------
+document.getElementById("hypoSubmit").addEventListener("click", submitHypothesis);
+document.getElementById("hypoReload").addEventListener("click", loadHypotheses);
+loadHypotheses();
+</script>
+{% endblock %}

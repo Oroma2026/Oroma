@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block content %}
+<!--
+===============================================================================
+Pfad:    /opt/ai/oroma/ui/templates/vs.html
+Projekt: ORÓMA
+Modul:   UI – „Oroma vs Oroma – Pong Arena“
+Version: v3.1
+Stand:   2025-09-30
+
+Zweck
+─────
+  Minimal-UI für die headless PongArena. Pollt /vs/state und zeichnet den
+  Zustand auf ein Canvas. Start/Stop/Reset über /vs/cmd.
+
+Abhängigkeiten
+──────────────
+  • Bootstrap-Klassen optional (base.html)
+  • Fetch API (Browser)
+
+Hinweise
+────────
+  • Polling-Intervall unten anpassbar (setInterval).
+  • Buttons werden abhängig vom Running-Status (de-)aktiviert.
+===============================================================================
+-->
+<div class="container mt-4">
+  <h1 class="mb-3">🤖 Oroma vs Oroma – Pong Arena</h1>
+  <p class="lead">Zwei KI-Agenten spielen automatisch gegeneinander.</p>
+
+  <div class="card text-bg-dark mb-3">
+    <div class="card-header">Arena</div>
+    <div class="card-body text-center">
+      <canvas id="arena" width="320" height="200"
+              style="border:1px solid #888; background:black;"></canvas>
+      <p class="mt-2">
+        <button id="btn-start" onclick="sendCmd('start')" class="btn btn-success btn-sm">Start</button>
+        <button id="btn-stop"  onclick="sendCmd('stop')"  class="btn btn-danger  btn-sm">Stop</button>
+        <button id="btn-reset" onclick="sendCmd('reset')" class="btn btn-warning btn-sm">Reset</button>
+      </p>
+      <p id="scores" class="mt-2 text-info"></p>
+      <p id="status" class="mt-1 small text-secondary"></p>
+    </div>
+  </div>
+</div>
+
+<script>
+const POLL_MS = 150; // Polling-Intervall; 100–200ms ist ok
+
+async function fetchState() {
+  try {
+    const res = await fetch("/vs/state", { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    drawArena(data);
+    document.getElementById("scores").innerText =
+      "Links: " + data.scoreL + " | Rechts: " + data.scoreR;
+    document.getElementById("status").innerText =
+      "running=" + (data.running ? "yes" : "no") + " | step=" + data.step;
+    updateButtons(data.running);
+  } catch (err) {
+    document.getElementById("status").innerText = "Fehler beim Laden des Zustands: " + err;
+  }
+}
+
+function updateButtons(running) {
+  document.getElementById("btn-start").disabled = running;
+  document.getElementById("btn-stop").disabled  = !running;
+}
+
+function drawArena(s) {
+  const canvas = document.getElementById("arena");
+  const ctx = canvas.getContext("2d");
+  // Falls Canvasgröße geändert wurde, anpassen
+  if (canvas.width !== s.w || canvas.height !== s.h) {
+    canvas.width = s.w;
+    canvas.height = s.h;
+  }
+  ctx.clearRect(0, 0, s.w, s.h);
+  ctx.fillStyle = "white";
+  // Paddles
+  ctx.fillRect(5, s.lp, 5, 36);
+  ctx.fillRect(s.w - 10, s.rp, 5, 36);
+  // Ball
+  ctx.beginPath();
+  ctx.arc(s.bx, s.by, 5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+async function sendCmd(cmd) {
+  try {
+    const res = await fetch("/vs/cmd", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({cmd})
+    });
+    const data = await res.json();
+    if (!res.ok || data.ok === false) {
+      throw new Error(data.error || ("HTTP " + res.status));
+    }
+    // nach erfolgreichem Kommando sofort aktualisieren
+    drawArena(data.state);
+    updateButtons(data.state.running);
+  } catch (err) {
+    document.getElementById("status").innerText = "Fehler bei '" + cmd + "': " + err;
+  }
+}
+
+// Poll-Loop
+setInterval(fetchState, POLL_MS);
+</script>
+{% endblock %}

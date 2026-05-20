@@ -1,0 +1,1088 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <h1 class="mb-3">📷 Video-Stream</h1>
+  <p class="lead">Live-Ansicht der Kamera über <code>VisionWrapper</code>.</p>
+
+  <!-- Systeminfo -->
+  <div class="alert alert-info">
+    <strong>Status:</strong>
+    {% if alive %}<span class="badge text-bg-success">alive</span>
+    {% else %}<span class="badge text-bg-danger">offline</span>{% endif %}
+    &nbsp;|&nbsp;<strong>Backend:</strong> {{ backend|default('n/a') }}
+    {% if source %}&nbsp;|&nbsp;<strong>Source:</strong> {{ source }}{% endif %}
+    &nbsp;|&nbsp;<strong>Device:</strong> {{ device|default('n/a') }}
+  </div>
+
+  <!-- USB/KERNEL Alert Banner (best-effort) -->
+  <div id="usbAlertBox"
+       class="alert alert-warning"
+       style="display: none;">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <div>
+        <strong>USB/KERNEL Warnung:</strong>
+        <span id="usbAlertSummary" class="ms-1"></span>
+      </div>
+      <button class="btn btn-sm btn-outline-dark" type="button" onclick="refreshUsbAlert()">Neu laden</button>
+    </div>
+    <div class="small text-muted mt-2" id="usbAlertDetail"></div>
+  </div>
+
+  <!-- Device Discovery (V4L2) -->
+  <div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>Geräte (V4L2 / Reboot-sicher)</span>
+      <button class="btn btn-sm btn-outline-secondary" type="button" onclick="refreshDevices()">Neu laden</button>
+    </div>
+    <div class="card-body">
+      <p class="text-muted mb-2">
+        Hinweis: <code>/dev/videoX</code> ist nach Reboots nicht stabil. Nutze bevorzugt <code>/dev/v4l/by-id/…</code>.
+      </p>
+      <div class="small">
+        <div class="mb-2"><strong>Empfohlen (USB/by-id):</strong></div>
+        <div id="v4lById" class="mb-3 text-muted">(lädt…)</div>
+        <details class="mb-2">
+          <summary class="text-muted">Alle by-path Einträge anzeigen</summary>
+          <div id="v4lByPath" class="mt-2 text-muted">(lädt…)</div>
+        </details>
+        <details>
+          <summary class="text-muted">Roh-Ausgabe: v4l2-ctl --list-devices</summary>
+          <pre id="v4lListDevices" class="mt-2" style="white-space: pre-wrap;">(lädt…)</pre>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <!-- PTZ Controls (optional) -->
+  <div class="card mb-3">
+    <div class="card-header">PTZ (optional)</div>
+    <div class="card-body">
+      <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+        <div>
+          <strong>Device:</strong>
+          <code id="ptzDevice">{{ ptz.device if ptz and ptz.device else 'n/a' }}</code>
+          {% if ptz and ptz.supported %}
+            <span id="ptzSupportedBadge" class="badge text-bg-success">supported</span>
+          {% else %}
+            <span id="ptzSupportedBadge" class="badge text-bg-secondary">disabled</span>
+          {% endif %}
+          <span class="ms-2 text-muted" id="ptzReason">{% if ptz and ptz.reason %}{{ ptz.reason }}{% endif %}</span>
+        </div>
+      </div>
+
+      <div class="row g-2 mb-3">
+        <div class="col-12 col-lg-6">
+          <div class="btn-group" role="group" aria-label="PTZ Pan/Tilt">
+            <button type="button" class="btn btn-outline-primary" onclick="ptzCmd('left', 1, event); return false;">◀</button>
+            <button type="button" class="btn btn-outline-primary" onclick="ptzCmd('right', 1, event); return false;">▶</button>
+            <button type="button" class="btn btn-outline-primary" onclick="ptzCmd('up', 1, event); return false;">▲</button>
+            <button type="button" class="btn btn-outline-primary" onclick="ptzCmd('down', 1, event); return false;">▼</button>
+            <button type="button" class="btn btn-outline-warning" onclick="ptzCmd('center', 0, event); return false;">Center</button>
+          </div>
+        </div>
+        <div class="col-12 col-lg-6">
+          <div class="btn-group" role="group" aria-label="PTZ Zoom">
+            <button type="button" class="btn btn-outline-primary" onclick="ptzCmd('zoom_out', 1, event); return false;">Zoom −</button>
+            <button type="button" class="btn btn-outline-primary" onclick="ptzCmd('zoom_in', 1, event); return false;">Zoom +</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="small text-muted">
+        <div><strong>Pan:</strong> <span id="ptzPan">{% if ptz and ptz.controls and ptz.controls.pan_absolute %}{{ ptz.controls.pan_absolute.value }}{% else %}n/a{% endif %}</span></div>
+        <div><strong>Tilt:</strong> <span id="ptzTilt">{% if ptz and ptz.controls and ptz.controls.tilt_absolute %}{{ ptz.controls.tilt_absolute.value }}{% else %}n/a{% endif %}</span></div>
+        <div><strong>Zoom:</strong> <span id="ptzZoom">{% if ptz and ptz.controls and ptz.controls.zoom_absolute %}{{ ptz.controls.zoom_absolute.value }}{% else %}n/a{% endif %}</span></div>
+
+        <!-- Effektive Ranges (inkl. optionaler Soft-Limits) -->
+        <div class="mt-2">
+          <div><strong>Pan range:</strong> <span id="ptzPanRange">
+            {% if ptz and ptz.controls and ptz.controls.pan_absolute %}
+              {% set pan = ptz.controls.pan_absolute %}
+              {{ pan.min }}..{{ pan.max }} (step {{ pan.step }})
+              {% if 'raw_min' in pan and 'raw_max' in pan %}
+                <span class="text-muted">· raw {{ pan.raw_min }}..{{ pan.raw_max }}</span>
+              {% endif %}
+            {% else %}
+              n/a
+            {% endif %}
+          </span></div>
+          <div><strong>Tilt range:</strong> <span id="ptzTiltRange">
+            {% if ptz and ptz.controls and ptz.controls.tilt_absolute %}
+              {% set tilt = ptz.controls.tilt_absolute %}
+              {{ tilt.min }}..{{ tilt.max }} (step {{ tilt.step }})
+              {% if 'raw_min' in tilt and 'raw_max' in tilt %}
+                <span class="text-muted">· raw {{ tilt.raw_min }}..{{ tilt.raw_max }}</span>
+              {% endif %}
+            {% else %}
+              n/a
+            {% endif %}
+          </span></div>
+          <div><strong>Zoom range:</strong> <span id="ptzZoomRange">
+            {% if ptz and ptz.controls and ptz.controls.zoom_absolute %}
+              {% set zoom = ptz.controls.zoom_absolute %}
+              {{ zoom.min }}..{{ zoom.max }} (step {{ zoom.step }})
+              {% if 'raw_min' in zoom and 'raw_max' in zoom %}
+                <span class="text-muted">· raw {{ zoom.raw_min }}..{{ zoom.raw_max }}</span>
+              {% endif %}
+            {% else %}
+              n/a
+            {% endif %}
+          </span></div>
+        </div>
+
+        <div class="mt-1"><strong>Last error:</strong> <span id="ptzErr">{% if ptz and ptz.last_error %}{{ ptz.last_error }}{% else %}-{% endif %}</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PTZ Verhalten / Modus -->
+  <div class="card mb-3" id="ptzModeCard">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>🎯 PTZ-Verhalten</span>
+      <span class="badge text-bg-secondary" id="ptzModeBadge">–</span>
+    </div>
+    <div class="card-body">
+      <div class="row g-2 small mb-2">
+        <div class="col-6 col-lg-3"><strong>Modus:</strong> <span id="ptzModeLabel">{{ ptz.mode if ptz and ptz.mode else '–' }}</span></div>
+        <div class="col-6 col-lg-3"><strong>Aktion:</strong> <span id="ptzLastAction">{{ ptz.last_action if ptz and ptz.last_action else '–' }}</span></div>
+        <div class="col-6 col-lg-3"><strong>Grund:</strong> <span id="ptzLastReason">{{ ptz.last_reason if ptz and ptz.last_reason else '–' }}</span></div>
+        <div class="col-6 col-lg-3"><strong>Zuletzt:</strong> <span id="ptzLastAgo">{% if ptz and ptz.last_age_sec is defined %}vor {{ ptz.last_age_sec }}s{% else %}–{% endif %}</span></div>
+      </div>
+      <div class="small text-muted mb-2" id="ptzModeExplain">
+        Die PTZ bewegt sich nicht permanent. Je nach Lage schaltet sie zwischen Scan, zielgerichteter Reaktion, kurzer Fixierung und Helligkeits-Korrektur um. Darum kann die Kamera zeitweise still wirken, obwohl der Regelkreis aktiv ist.
+      </div>
+      <details>
+        <summary class="text-muted small">Modi-Erklärung und Bedingungen</summary>
+        <div class="small text-muted mt-2">
+          <div><strong>scan</strong> – tastet aktiv neue Bereiche ab. Hier entstehen am ehesten neue Coverage-Zellen.</div>
+          <div><strong>threat</strong> / <strong>orient</strong> / <strong>probe</strong> – reagiert auf Aktivität, Zielversatz, Interesse oder akustische/visuelle Trigger. Bewegungen sind oft klein und zielgerichtet.</div>
+          <div><strong>fixate</strong> – bleibt bewusst kurz auf einer Position. Stillstand ist hier kein Fehler.</div>
+          <div><strong>luma_recover</strong> – korrigiert wegen zu dunkel / zu hell, um wieder in einen brauchbaren Bildbereich zu kommen.</div>
+          <div><strong>disabled</strong> / <strong>idle</strong> – PTZ ist nicht aktiv oder aktuell ist keine neue Bewegung notwendig.</div>
+          <div class="mt-2"><strong>Wichtig:</strong> Kleine Nudges koennen bereits im beobachteten Ausschnitt sichtbar sein, ohne dass die reale Gesamtreichweite stark zunimmt.</div>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- PTZ Motor Worker – persistenter Motorikpfad (manual/disabled by default) -->
+  <div class="card mb-3" id="ptzMotorCard">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <span>🦾 PTZ Motor Worker</span>
+      <div class="d-flex align-items-center gap-2">
+        <span class="badge text-bg-secondary" id="ptzMotorActiveBadge">lädt…</span>
+        <button class="btn btn-sm btn-outline-secondary" type="button" onclick="refreshPtzMotor(true)">Neu laden</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="alert alert-secondary py-2 px-3 small mb-3" id="ptzMotorInfo">
+        Der Motor Worker ist der schnelle PTZ-Reflexpfad. Er bleibt bewusst <strong>disabled by default</strong>. Diese Video-UI ist <strong>read-only</strong>: sie zeigt Status, Heartbeat, Tuning und Logs, führt aber kein <code>systemctl start</code>, <code>restart</code>, <code>stop</code> oder <code>enable</code> aus. Runtime-Steuerung erfolgt ausschließlich auf der Pi-Konsole.
+      </div>
+
+      <div class="row g-2 small mb-3">
+        <div class="col-6 col-lg-3"><strong>Unit:</strong> <code id="ptzMotorUnit">oroma-ptz-motor-worker.service</code></div>
+        <div class="col-6 col-lg-3"><strong>Aktiv:</strong> <span id="ptzMotorActive">–</span></div>
+        <div class="col-6 col-lg-3"><strong>Autostart:</strong> <span id="ptzMotorEnabled">–</span></div>
+        <div class="col-6 col-lg-3"><strong>PID:</strong> <span id="ptzMotorPid">–</span></div>
+      </div>
+
+      <div class="row g-2 small mb-3">
+        <div class="col-6 col-lg-3"><strong>Heartbeat:</strong> <span id="ptzMotorHeartbeat">–</span></div>
+        <div class="col-6 col-lg-3"><strong>Reason:</strong> <span id="ptzMotorReason">–</span></div>
+        <div class="col-6 col-lg-3"><strong>Action:</strong> <span id="ptzMotorAction">–</span></div>
+        <div class="col-6 col-lg-3"><strong>Mode:</strong> <span id="ptzMotorMode">–</span></div>
+      </div>
+
+      <div class="row g-2 small mb-3">
+        <div class="col-6 col-lg-3"><strong>Frames:</strong> <span id="ptzMotorFrames">–</span></div>
+        <div class="col-6 col-lg-3"><strong>Moves:</strong> <span id="ptzMotorMoves">–</span></div>
+        <div class="col-6 col-lg-3"><strong>Fails:</strong> <span id="ptzMotorFails">–</span></div>
+        <div class="col-6 col-lg-3"><strong>dx/dy/e:</strong> <span id="ptzMotorVector">–</span></div>
+      </div>
+
+      <div class="row g-2 small mb-3">
+        <div class="col-12 col-lg-6"><strong>Tuning:</strong> <span id="ptzMotorTuning">–</span></div>
+        <div class="col-12 col-lg-6"><strong>State:</strong> <code id="ptzMotorStatePath">–</code></div>
+      </div>
+
+      <div class="row g-2 small mb-3">
+        <div class="col-12 col-lg-4"><strong>Target:</strong> <span id="ptzMotorTarget">–</span></div>
+        <div class="col-12 col-lg-4"><strong>Candidate:</strong> <span id="ptzMotorCandidate">–</span></div>
+        <div class="col-12 col-lg-4"><strong>Axis-Lock:</strong> <span id="ptzMotorAxisLock">–</span></div>
+      </div>
+
+      <div class="alert alert-light border py-2 px-3 small mb-3">
+        <strong>Runtime-Steuerung:</strong> bewusst nicht in der UI. Start/Stop/Restart nur auf der Pi-Konsole, z.B.
+        <code>sudo systemctl start oroma-ptz-motor-worker.service</code>.
+      </div>
+
+      <div class="small text-muted mb-2" id="ptzMotorLastMessage">Status wird geladen…</div>
+      <details>
+        <summary class="text-muted small">Letzte Worker-Logs anzeigen</summary>
+        <pre id="ptzMotorLogTail" class="small mt-2" style="white-space: pre-wrap; max-height: 220px; overflow: auto;">(noch nicht geladen)</pre>
+      </details>
+    </div>
+  </div>
+
+  <!-- PTZ Movement Coverage (Exploration Heatmap) -->
+  <div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>🧭 Bewegungsabdeckung (PTZ Coverage)</span>
+      <div class="d-flex gap-2 align-items-center">
+        <select id="ptzCovWindow" class="form-select form-select-sm" style="width: auto;">
+          <option value="3600">1h</option>
+          <option value="21600">6h</option>
+          <option value="86400" selected>24h</option>
+          <option value="604800">7d</option>
+          <option value="2592000">30d</option>
+        </select>
+        <select id="ptzCovBins" class="form-select form-select-sm" style="width: auto;">
+          <option value="7x4">7×4</option>
+          <option value="9x5" selected>9×5</option>
+          <option value="13x7">13×7</option>
+        </select>
+        <select id="ptzCovMode" class="form-select form-select-sm" style="width: auto;">
+          <option value="dwell" selected>Samples</option>
+          <option value="moves">Moves</option>
+        </select>
+        <button class="btn btn-sm btn-outline-secondary" type="button" onclick="refreshCoverage()">Neu laden</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div id="ptzCoverageSummary" class="text-muted small mb-2">(lädt…)</div>
+      <div class="table-responsive">
+        <table class="table table-sm table-bordered align-middle mb-2" style="table-layout: fixed;">
+          <tbody id="ptzCoverageGrid">
+            <tr><td class="text-muted small">(lädt…)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <details>
+        <summary class="text-muted">Blind Spots (unbesuchte Zellen)</summary>
+        <div id="ptzCoverageBlind" class="small text-muted mt-2">(lädt…)</div>
+      </details>
+      <p class="small text-muted mt-2 mb-1">
+        <strong>Variante 1 · Beobachteter Ausschnitt:</strong> Dieses Grid zoomt auf den Bereich, in dem im gewählten Zeitfenster wirklich PTZ-Samples gesehen wurden. Es ist fuer feine Bewegungen und Debugging gedacht. Prozentwerte beziehen sich nur auf diesen beobachteten Ausschnitt, nicht auf die volle mechanische Reichweite.
+      </p>
+      <p class="small text-muted mb-0">
+        Hinweis: Coverage basiert auf <code>metrics</code> (<code>ptz:pan</code>/<code>ptz:tilt</code>). Dadurch ist es backend-unabhängig und zeigt auch UI-Button-Moves.
+      </p>
+    </div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-header">🗺️ Reale PTZ-Gesamtreichweite</div>
+    <div class="card-body">
+      <div id="ptzCoverageSummaryFull" class="text-muted small mb-2">(lädt…)</div>
+      <div class="table-responsive">
+        <table class="table table-sm table-bordered align-middle mb-2" style="table-layout: fixed;">
+          <tbody id="ptzCoverageGridFull">
+            <tr><td class="text-muted small">(lädt…)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <details>
+        <summary class="text-muted">Blind Spots (unbesuchte Zellen)</summary>
+        <div id="ptzCoverageBlindFull" class="small text-muted mt-2">(lädt…)</div>
+      </details>
+      <p class="small text-muted mt-2 mb-0">
+        <strong>Variante 2 · Reale PTZ-Gesamtreichweite:</strong> Dieses Grid benutzt immer die volle Pan-/Tilt-Range der Kamera. Es zeigt die echte Gesamt-Abdeckung und ist fuer Exploration, Langzeitbewertung und Blind-Spots im gesamten Bewegungsraum gedacht.
+      </p>
+    </div>
+  </div>
+
+  <!-- Sichtbarer Kanten-Debug -->
+  <div class="card mb-3">
+    <div class="card-header">🟩 Kanten-Debug (sichtbar)</div>
+    <div class="card-body">
+      <div class="form-check form-switch mb-2">
+        <input class="form-check-input" type="checkbox" role="switch" id="edgeDebugToggle">
+        <label class="form-check-label" for="edgeDebugToggle">Kanten im Stream/Snapshot einzeichnen</label>
+      </div>
+      <div id="edgeDebugStatus" class="alert alert-secondary py-2 px-3 small mb-2">Kanten-Debug aus.</div>
+      <p class="small text-muted mb-1">
+        Bei Aktivierung wird eine grüne Kantenmaske über das Kamerabild gelegt. Im Bild muss dann deutlich <strong>EDGE DEBUG ACTIVE</strong> und oben rechts eine Schwarz/Weiß-Edge-Maske sichtbar sein.
+      </p>
+      <p class="small text-warning mb-0">
+        Falls stattdessen ein rotes Diagnosebild erscheint, greift der Edge-Pfad zwar, aber es konnte kein annotierbarer Frame erzeugt werden. Dann ist es kein "keine Kanten"-Fall, sondern ein Quell-/Decode-Problem.
+      </p>
+      <div id="edgeDiagState" class="small text-muted mt-2">Diagnose: lädt…</div>
+    </div>
+</div>
+
+<!-- Primitive Vision (Live) -->
+<div class="card mb-3">
+  <div class="card-header">🧠 Primitive Vision (Live)</div>
+  <div class="card-body">
+    <div class="row g-2 small">
+      <div class="col-6 col-lg-3"><strong>Motion:</strong> <span id="vpMotion">—</span></div>
+      <div class="col-6 col-lg-3"><strong>Edges:</strong> <span id="vpEdges">—</span></div>
+      <div class="col-6 col-lg-3"><strong>Color:</strong> <span id="vpColor">—</span></div>
+      <div class="col-6 col-lg-3"><strong>Q:</strong> <span id="vpQ">—</span></div>
+    </div>
+    <div class="row g-2 small mt-1">
+      <div class="col-6 col-lg-3"><strong>Ø5 Motion:</strong> <span id="vpMotionAvg">—</span></div>
+      <div class="col-6 col-lg-3"><strong>Ø5 Edges:</strong> <span id="vpEdgesAvg">—</span></div>
+      <div class="col-6 col-lg-3"><strong>Ø5 Color:</strong> <span id="vpColorAvg">—</span></div>
+      <div class="col-6 col-lg-3"><strong>Alter:</strong> <span id="vpAge">—</span></div>
+    </div>
+      <div class="small text-muted mt-2" id="vpState">Quelle: letzte vision/token SnapChains</div>
+    </div>
+  </div>
+
+  <div class="card text-bg-dark mb-3">
+    <div class="card-header">Live-Stream (MJPEG)</div>
+    <div class="card-body text-center">
+      <img id="video-stream-img" src="{{ url_for('video.stream') }}"
+           class="img-fluid rounded border"
+           alt="Video-Stream wird geladen..."
+           style="max-height: 70vh;">
+      <p class="mt-2 text-muted">
+        Falls der MJPEG-Stream nicht funktioniert, nutze die Snapshot-Variante.
+      </p>
+    </div>
+  </div>
+
+  <!-- Snapshot -->
+  <div class="card text-bg-dark mb-3">
+    <div class="card-header">Snapshot (manuell)</div>
+    <div class="card-body text-center">
+      <a id="snapshot-open-link" href="{{ url_for('video.snapshot') }}"
+         target="_blank"
+         class="btn btn-primary">📸 Snapshot öffnen</a>
+      <p class="mt-2 text-muted">Öffnet ein aktuelles Einzelbild (JPEG).</p>
+    </div>
+  </div>
+
+  <!-- Snapshot Auto-Refresh -->
+  <div class="card text-bg-dark">
+    <div class="card-header">Snapshot (Auto-Refresh)</div>
+    <div class="card-body text-center">
+      <img id="snapshot-auto"
+           src="{{ url_for('video.snapshot') }}?t={{ now|int }}"
+           class="img-fluid rounded border"
+           alt="Snapshot wird geladen..."
+           style="max-height: 70vh;">
+      <p class="mt-2 text-muted">
+        Bild wird alle {{ (refresh_ms|default(2000)) / 1000 }} Sekunden automatisch neu geladen.
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- JS: Auto-Refresh -->
+<script>
+  async function readJsonResponse(response) {
+    var txt = await response.text();
+    try {
+      return txt ? JSON.parse(txt) : null;
+    } catch (e) {
+      throw new Error("invalid_json:" + String(txt || "<empty>").slice(0, 200));
+    }
+  }
+
+  (function() {
+    var delay = {{ refresh_ms|default(2000) }};
+    var edgeKey = "OROMA_VIDEO_EDGE_DEBUG";
+    var edgeCapable = {{ 'true' if edge_debug_capable else 'false' }};
+
+    function edgeEnabled() {
+      try { return localStorage.getItem(edgeKey) === "1"; } catch(e) { return false; }
+    }
+    function setEdgeEnabled(v) {
+      try { localStorage.setItem(edgeKey, v ? "1" : "0"); } catch(e) {}
+    }
+    function withEdge(url) {
+      var parts = [];
+      if (edgeEnabled()) parts.push("edges=1");
+      parts.push("t=" + Date.now());
+      return url + (url.indexOf("?") >= 0 ? "&" : "?") + parts.join("&");
+    }
+    function updateEdgeStatus() {
+      var box = document.getElementById("edgeDebugStatus");
+      if (!box) return;
+      if (!edgeCapable) {
+        box.className = "alert alert-danger py-2 px-3 small mb-2";
+        box.textContent = "Edge-Debug serverseitig nicht verfügbar: cv2 oder numpy fehlt.";
+        return;
+      }
+      if (edgeEnabled()) {
+        box.className = "alert alert-success py-2 px-3 small mb-2";
+        box.textContent = "Edge-Debug aktiv. Im Bild muss deutlich 'EDGE DEBUG ACTIVE' plus eine Schwarz/Weiß-Edge-Maske oben rechts sichtbar sein.";
+      } else {
+        box.className = "alert alert-secondary py-2 px-3 small mb-2";
+        box.textContent = "Kanten-Debug aus.";
+      }
+    }
+    function rebuildStreamImage() {
+      var stream = document.getElementById("video-stream-img");
+      if (!stream || !stream.parentNode) return;
+      var repl = stream.cloneNode(false);
+      repl.id = stream.id;
+      repl.className = stream.className;
+      repl.alt = stream.alt;
+      repl.style.cssText = stream.style.cssText;
+      repl.src = withEdge("{{ url_for('video.stream') }}");
+      stream.parentNode.replaceChild(repl, stream);
+    }
+    function applyEdgeMode() {
+      var snap = document.getElementById("snapshot-auto");
+      var open = document.getElementById("snapshot-open-link");
+      var baseSnap = "{{ url_for('video.snapshot') }}";
+      rebuildStreamImage();
+      if (snap) snap.src = withEdge(baseSnap);
+      if (open) open.href = edgeEnabled() ? (baseSnap + "?edges=1") : baseSnap;
+      updateEdgeStatus();
+    }
+    function refreshSnapshot() {
+      var img = document.getElementById("snapshot-auto");
+      if (!img) return;
+      img.src = withEdge("{{ url_for('video.snapshot') }}");
+    }
+function fmtPrim(v) {
+  return (v === null || v === undefined || !isFinite(Number(v))) ? "—" : Number(v).toFixed(3);
+}
+function fmtAge(sec) {
+  sec = Number(sec || 0);
+  if (!isFinite(sec)) return "—";
+  if (sec < 60) return Math.round(sec) + "s";
+  if (sec < 3600) return Math.round(sec/60) + "m";
+  return (sec/3600).toFixed(1) + "h";
+}
+async function refreshEdgeDiag() {
+  try {
+    const r = await fetch("{{ url_for('video.api_edge_debug_state') }}", {cache: "no-store"});
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await readJsonResponse(r);
+    const el = document.getElementById("edgeDiagState");
+    if (!el) return;
+    if (j && j.ok) {
+      const src = j.source || "—";
+      const raw = j.raw_frame_available ? "raw=yes" : "raw=no";
+      const jpg = j.jpeg_available ? "jpeg=yes" : "jpeg=no";
+      const ann = j.annotatable ? "annotatable=yes" : "annotatable=no";
+      const why = j.reason ? ` · ${j.reason}` : "";
+      el.textContent = `Diagnose: ${src} · ${raw} · ${jpg} · ${ann}${why}`;
+    } else {
+      el.textContent = "Diagnose: kein Status verfügbar";
+    }
+  } catch (e) {
+    const el = document.getElementById("edgeDiagState");
+    if (el) el.textContent = "Diagnose: Fehler beim Laden (" + String(e) + ")";
+  }
+}
+
+async function refreshVisionPrimitives() {
+  try {
+    const r = await fetch("{{ url_for('video.api_vision_primitives') }}?limit=5", {cache: "no-store"});
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await readJsonResponse(r);
+    const last = (j && j.last) ? j.last : {};
+    const avg = (j && j.avg_5) ? j.avg_5 : {};
+    var el;
+    el = document.getElementById("vpMotion"); if (el) el.textContent = fmtPrim(last.motion);
+    el = document.getElementById("vpEdges"); if (el) el.textContent = fmtPrim(last.edges);
+    el = document.getElementById("vpColor"); if (el) el.textContent = fmtPrim(last.color);
+    el = document.getElementById("vpQ"); if (el) el.textContent = fmtPrim(last.q);
+    el = document.getElementById("vpMotionAvg"); if (el) el.textContent = fmtPrim(avg.motion);
+    el = document.getElementById("vpEdgesAvg"); if (el) el.textContent = fmtPrim(avg.edges);
+    el = document.getElementById("vpColorAvg"); if (el) el.textContent = fmtPrim(avg.color);
+    el = document.getElementById("vpAge"); if (el) el.textContent = fmtAge(j ? j.age_sec : null);
+    el = document.getElementById("vpState");
+    if (el) {
+      if (j && j.ok) {
+        el.textContent = `Quelle: vision/token · last_ts=${j.last_ts || 0} · count=${j.count || 0}`;
+      } else {
+        el.textContent = "Quelle: vision/token · keine aktuellen Primitive verfügbar";
+      }
+    }
+  } catch (e) {
+    var el = document.getElementById("vpState");
+    if (el) el.textContent = "Quelle: vision/token · Fehler beim Laden der Primitive (" + String(e) + ")";
+  }
+}
+
+    var toggle = document.getElementById("edgeDebugToggle");
+    if (toggle) {
+      toggle.checked = edgeEnabled();
+      toggle.disabled = !edgeCapable;
+      toggle.addEventListener("change", function() {
+        setEdgeEnabled(!!toggle.checked);
+        applyEdgeMode();
+      });
+    }
+
+    applyEdgeMode();
+    refreshVisionPrimitives();
+    refreshEdgeDiag();
+    setInterval(refreshSnapshot, delay);
+    setInterval(refreshVisionPrimitives, Math.max(1500, delay));
+    setInterval(refreshEdgeDiag, Math.max(2500, delay));
+  })();
+
+    // PTZ – simple fetch helpers (fail-closed)
+  // Ziel:
+  //   - iOS/Safari: sichtbare Fehlermeldungen statt silent catch
+  //   - robust gegen non-JSON (z.B. 503 Text)
+  async function ptzRefresh() {
+    try {
+      const r = await fetch("{{ url_for('video.ptz_status') }}", {cache: "no-store"});
+      if (!r.ok) {
+        const err = document.getElementById('ptzErr');
+        if (err) err.textContent = `PTZ status HTTP ${r.status}`;
+        return;
+      }
+      const j = await r.json();
+      const dev = document.getElementById("ptzDevice");
+      const pan = document.getElementById("ptzPan");
+      const tilt = document.getElementById("ptzTilt");
+      const zoom = document.getElementById("ptzZoom");
+      const panR = document.getElementById("ptzPanRange");
+      const tiltR = document.getElementById("ptzTiltRange");
+      const zoomR = document.getElementById("ptzZoomRange");
+      const err = document.getElementById("ptzErr");
+      const reason = document.getElementById("ptzReason");
+      const badge = document.getElementById("ptzSupportedBadge");
+
+      function fmtRange(ctrl) {
+        if (!ctrl || (ctrl.min === undefined) || (ctrl.max === undefined)) return "n/a";
+        let s = `${ctrl.min}..${ctrl.max}`;
+        if (ctrl.step !== undefined) s += ` (step ${ctrl.step})`;
+        if ((ctrl.raw_min !== undefined) && (ctrl.raw_max !== undefined)) s += ` · raw ${ctrl.raw_min}..${ctrl.raw_max}`;
+        return s;
+      }
+
+      if (dev) dev.textContent = (j && j.device) ? j.device : "n/a";
+      if (reason) reason.textContent = (j && j.reason) ? j.reason : "";
+      if (badge) {
+        const supported = !!(j && j.supported);
+        badge.textContent = supported ? "supported" : "disabled";
+        badge.className = supported ? "badge text-bg-success" : "badge text-bg-secondary";
+      }
+      if (pan) pan.textContent = (j && j.controls && j.controls.pan_absolute) ? j.controls.pan_absolute.value : "n/a";
+      if (tilt) tilt.textContent = (j && j.controls && j.controls.tilt_absolute) ? j.controls.tilt_absolute.value : "n/a";
+      if (zoom) zoom.textContent = (j && j.controls && j.controls.zoom_absolute) ? j.controls.zoom_absolute.value : "n/a";
+      if (panR) panR.textContent = (j && j.controls && j.controls.pan_absolute) ? fmtRange(j.controls.pan_absolute) : "n/a";
+      if (tiltR) tiltR.textContent = (j && j.controls && j.controls.tilt_absolute) ? fmtRange(j.controls.tilt_absolute) : "n/a";
+      if (zoomR) zoomR.textContent = (j && j.controls && j.controls.zoom_absolute) ? fmtRange(j.controls.zoom_absolute) : "n/a";
+      if (err) err.textContent = (j && j.last_error) ? j.last_error : "-";
+
+      const modeLabel = document.getElementById("ptzModeLabel");
+      const modeBadge = document.getElementById("ptzModeBadge");
+      const lastAction = document.getElementById("ptzLastAction");
+      const lastReason = document.getElementById("ptzLastReason");
+      const lastAgo = document.getElementById("ptzLastAgo");
+      const decision = (j && j.last_decision) ? j.last_decision : {};
+      const mode = (j && (j.mode || j.ptz_mode)) ? String(j.mode || j.ptz_mode) : "–";
+      const action = (decision && decision.action) ? String(decision.action) : ((j && j.last_action) ? String(j.last_action) : "–");
+      const reasonTxt = (decision && decision.reason) ? String(decision.reason) : ((j && j.last_reason) ? String(j.last_reason) : "–");
+      const ts = (decision && decision.ts) ? Number(decision.ts) : ((j && j.last_ts) ? Number(j.last_ts) : 0);
+      if (modeLabel) modeLabel.textContent = mode;
+      if (lastAction) lastAction.textContent = action || "–";
+      if (lastReason) lastReason.textContent = reasonTxt || "–";
+      if (lastAgo) {
+        if (ts > 0 && isFinite(ts)) {
+          const ago = Math.max(0, Math.round((Date.now() / 1000) - ts));
+          lastAgo.textContent = `vor ${ago}s`;
+        } else {
+          lastAgo.textContent = "–";
+        }
+      }
+      if (modeBadge) {
+        const modeColors = {scan:'info', threat:'danger', orient:'warning', probe:'warning', fixate:'secondary', luma_recover:'dark', disabled:'secondary', idle:'light', hold:'light'};
+        modeBadge.textContent = mode;
+        modeBadge.className = `badge text-bg-${modeColors[mode] || 'secondary'}`;
+      }
+    } catch (e) {
+      try {
+        const err = document.getElementById('ptzErr');
+        if (err) err.textContent = 'ptzRefresh failed: ' + String(e);
+      } catch (_) {}
+    }
+  }
+
+  async function ptzCmd(action, amount, ev) {
+    try {
+      if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+    } catch (_) {}
+
+    try {
+      const r = await fetch("{{ url_for('video.ptz_command') }}", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({action: action, amount: amount}),
+        cache: "no-store"
+      });
+
+      // Robust: server may return non-JSON (e.g. 503 text)
+      const txt = await r.text();
+      let j = null;
+      try { j = txt ? JSON.parse(txt) : null; } catch (_) { j = null; }
+
+      if (!r.ok) {
+        const err = document.getElementById('ptzErr');
+        if (err) err.textContent = `PTZ HTTP ${r.status}: ` + (j && j.error ? j.error : (txt || 'error'));
+      }
+
+      if (j && j.status) {
+        const st = j.status;
+        const pan = document.getElementById("ptzPan");
+        const tilt = document.getElementById("ptzTilt");
+        const zoom = document.getElementById("ptzZoom");
+        const panR = document.getElementById("ptzPanRange");
+        const tiltR = document.getElementById("ptzTiltRange");
+        const zoomR = document.getElementById("ptzZoomRange");
+        const err = document.getElementById("ptzErr");
+
+        function fmtRange(ctrl) {
+          if (!ctrl || (ctrl.min === undefined) || (ctrl.max === undefined)) return "n/a";
+          let s = `${ctrl.min}..${ctrl.max}`;
+          if (ctrl.step !== undefined) s += ` (step ${ctrl.step})`;
+          if ((ctrl.raw_min !== undefined) && (ctrl.raw_max !== undefined)) s += ` · raw ${ctrl.raw_min}..${ctrl.raw_max}`;
+          return s;
+        }
+
+        if (pan) pan.textContent = (st.controls && st.controls.pan_absolute) ? st.controls.pan_absolute.value : "n/a";
+        if (tilt) tilt.textContent = (st.controls && st.controls.tilt_absolute) ? st.controls.tilt_absolute.value : "n/a";
+        if (zoom) zoom.textContent = (st.controls && st.controls.zoom_absolute) ? st.controls.zoom_absolute.value : "n/a";
+        if (panR) panR.textContent = (st.controls && st.controls.pan_absolute) ? fmtRange(st.controls.pan_absolute) : "n/a";
+        if (tiltR) tiltR.textContent = (st.controls && st.controls.tilt_absolute) ? fmtRange(st.controls.tilt_absolute) : "n/a";
+        if (zoomR) zoomR.textContent = (st.controls && st.controls.zoom_absolute) ? fmtRange(st.controls.zoom_absolute) : "n/a";
+        if (err) err.textContent = (st.last_error) ? st.last_error : "-";
+      } else {
+        await ptzRefresh();
+      }
+
+      // Coverage refresh (UI button moves should reflect immediately)
+      refreshCoverage();
+    } catch (e) {
+      try {
+        const err = document.getElementById('ptzErr');
+        if (err) err.textContent = 'ptzCmd failed: ' + String(e);
+      } catch (_) {}
+    }
+  }
+
+
+  // PTZ Motor Worker – read-only status/log view (no systemctl control from UI)
+  function _fmtBool(v, yes, no) {
+    return v ? (yes || "ja") : (no || "nein");
+  }
+
+  function _fmtNumber(v, digits) {
+    const n = Number(v);
+    if (!isFinite(n)) return "–";
+    return n.toFixed(digits === undefined ? 3 : digits);
+  }
+
+  function _setText(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = (value === null || value === undefined || value === "") ? "–" : String(value);
+  }
+
+  function _updatePtzMotorUi(j) {
+    const badge = document.getElementById("ptzMotorActiveBadge");
+    const msg = document.getElementById("ptzMotorLastMessage");
+    const info = document.getElementById("ptzMotorInfo");
+    const st = (j && j.state) ? j.state : {};
+    const c = (st && st.counters) ? st.counters : {};
+    const stateStale = !!(st && st.state_stale);
+    const activeFresh = !!(j && j.active && j.heartbeat_ok && !stateStale);
+
+    _setText("ptzMotorUnit", j && j.unit ? j.unit : "oroma-ptz-motor-worker.service");
+    _setText("ptzMotorActive", j && j.active ? "running" : (j ? (j.active_state || "inactive") : "–"));
+    _setText("ptzMotorEnabled", j && j.enabled ? "enabled" : (j ? (j.unit_file_state || "disabled") : "–"));
+    _setText("ptzMotorPid", j && j.main_pid ? j.main_pid : "–");
+    _setText("ptzMotorHeartbeat", st && st.state_age_sec !== undefined && st.state_age_sec !== null ? (Number(st.state_age_sec).toFixed(1) + "s") : "–");
+    _setText("ptzMotorReason", stateStale ? "stale: " + (st.reason || "alter State") : (st.reason || "–"));
+    _setText("ptzMotorAction", activeFresh ? (st.action || st.mapped_action || "–") : "–");
+    _setText("ptzMotorMode", activeFresh ? (st.target_mode || "–") : (st.target_mode ? st.target_mode + " (alt)" : "–"));
+    _setText("ptzMotorFrames", c.frames !== undefined ? c.frames : "–");
+    _setText("ptzMotorMoves", c.moves !== undefined ? c.moves : "–");
+    _setText("ptzMotorFails", c.cmd_fail !== undefined ? c.cmd_fail : "–");
+    _setText("ptzMotorVector", "dx=" + _fmtNumber(st.dx, 3) + " dy=" + _fmtNumber(st.dy, 3) + " e=" + _fmtNumber(st.energy, 3));
+    _setText("ptzMotorStatePath", st.path || "–");
+
+    const cand = (st && st.candidate) ? st.candidate : {};
+    const targetText = [
+      "conf=" + _fmtNumber(st.target_conf, 3),
+      "age=" + (st.target_age_ticks !== undefined ? String(st.target_age_ticks) : "–"),
+      "hold=" + (st.target_hold_active ? "1" : "0"),
+      "upd=" + (st.target_update || "–")
+    ].join(" · ");
+    const candidateText = cand && cand.source
+      ? (String(cand.source) + " · axis=" + (cand.axis || "–") + " · conf=" + _fmtNumber(cand.confidence, 3))
+      : (st.candidate_source || "–");
+    const axisLockText = st.axis_lock_enabled
+      ? ((st.axis_lock_active ? "aktiv" : "bereit") + " · axis=" + (st.axis_lock_axis || "–") + " · reason=" + (st.axis_lock_reason || "–"))
+      : "aus";
+    _setText("ptzMotorTarget", activeFresh ? targetText : (stateStale ? targetText + " (alt)" : targetText));
+    _setText("ptzMotorCandidate", activeFresh ? candidateText : (stateStale && candidateText !== "–" ? candidateText + " (alt)" : candidateText));
+    _setText("ptzMotorAxisLock", activeFresh ? axisLockText : (stateStale ? axisLockText + " (alt)" : axisLockText));
+
+    const tuning = [];
+    if (st.deadzone !== undefined) tuning.push("dead=" + _fmtNumber(st.deadzone, 3));
+    if (st.stability_min !== undefined) tuning.push("stability=" + String(st.stability_min));
+    if (st.down_confirm_min !== undefined) tuning.push("down=" + String(st.down_confirm_min));
+    if (st.history_n !== undefined) tuning.push("hist=" + String(st.history_n));
+    if (st.invert_x !== undefined) tuning.push("invx=" + (st.invert_x ? "1" : "0"));
+    if (st.invert_y !== undefined) tuning.push("invy=" + (st.invert_y ? "1" : "0"));
+    if (st.target_conf_min !== undefined) tuning.push("tconf=" + _fmtNumber(st.target_conf_min, 3));
+    if (st.axis_lock_ticks !== undefined) tuning.push("axisTicks=" + String(st.axis_lock_ticks));
+    _setText("ptzMotorTuning", tuning.length ? tuning.join(" · ") : "–");
+
+    if (badge) {
+      if (j && j.active && j.heartbeat_ok && !stateStale) {
+        badge.textContent = "running";
+        badge.className = "badge text-bg-success";
+      } else if (j && j.active) {
+        badge.textContent = stateStale ? "running / state alt" : "running / heartbeat prüfen";
+        badge.className = "badge text-bg-warning";
+      } else if (j && j.unit_exists === false) {
+        badge.textContent = "unit fehlt";
+        badge.className = "badge text-bg-danger";
+      } else {
+        badge.textContent = "stopped";
+        badge.className = "badge text-bg-secondary";
+      }
+    }
+
+    if (info) {
+      if (j && j.enabled) {
+        info.className = "alert alert-warning py-2 px-3 small mb-3";
+        info.innerHTML = "Achtung: Die Unit ist aktuell <strong>enabled</strong>. Für die Kalibrierphase war <strong>disabled by default</strong> vorgesehen.";
+      } else {
+        info.className = "alert alert-secondary py-2 px-3 small mb-3";
+        info.innerHTML = "Der Motor Worker ist der schnelle PTZ-Reflexpfad. Er bleibt bewusst <strong>disabled by default</strong>. Die Video-UI ist <strong>read-only</strong> und zeigt nur Status/Logs. Start, Stop und Restart erfolgen ausschließlich per <code>sudo systemctl</code> auf der Pi-Konsole.";
+      }
+    }
+
+    if (msg) {
+      if (!j) {
+        msg.textContent = "Motor-Status nicht verfügbar.";
+      } else if (j.unit_exists === false) {
+        msg.textContent = "Unit nicht gefunden. Bitte systemd/oroma-ptz-motor-worker.service nach /etc/systemd/system/ kopieren und daemon-reload ausführen.";
+      } else if (j.active && j.heartbeat_ok && !stateStale) {
+        msg.textContent = "Worker läuft. State-Heartbeat ist frisch.";
+      } else if (j.active) {
+        msg.textContent = "Worker läuft, aber State-Heartbeat ist leer/alt. Logs prüfen.";
+      } else if (stateStale) {
+        msg.textContent = "Worker ist gestoppt. Angezeigte dx/dy/reason-Werte stammen aus einem alten State. Autostart bleibt deaktiviert.";
+      } else {
+        msg.textContent = "Worker ist gestoppt. Autostart bleibt deaktiviert.";
+      }
+    }
+
+    const logEl = document.getElementById("ptzMotorLogTail");
+    if (logEl && j && j.log_tail) {
+      const outLines = (j.log_tail.out && j.log_tail.out.lines) ? j.log_tail.out.lines : [];
+      const errLines = (j.log_tail.err && j.log_tail.err.lines) ? j.log_tail.err.lines : [];
+      const parts = [];
+      if (outLines.length) parts.push("[out]\n" + outLines.join("\n"));
+      if (errLines.length) parts.push("[err]\n" + errLines.join("\n"));
+      logEl.textContent = parts.length ? parts.join("\n\n") : "(keine Logzeilen)";
+    }
+  }
+
+  async function refreshPtzMotor(withLogs) {
+    try {
+      const url = "{{ url_for('video.ptz_motor_status') }}" + (withLogs ? "?logs=1" : "");
+      const r = await fetch(url, {cache: "no-store"});
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const j = await readJsonResponse(r);
+      _updatePtzMotorUi(j);
+      return j;
+    } catch (e) {
+      const msg = document.getElementById("ptzMotorLastMessage");
+      const badge = document.getElementById("ptzMotorActiveBadge");
+      if (msg) msg.textContent = "Motor-Status Fehler: " + String(e);
+      if (badge) {
+        badge.textContent = "Fehler";
+        badge.className = "badge text-bg-danger";
+      }
+      return null;
+    }
+  }
+
+  function ptzMotorControl(action) {
+    const msg = document.getElementById("ptzMotorLastMessage");
+    if (msg) {
+      msg.textContent = "Read-only: Worker-Steuerung erfolgt ausschließlich auf der Pi-Konsole per sudo systemctl. Angeforderte Aktion: " + String(action || "-");
+    }
+    refreshPtzMotor(true);
+  }
+
+
+// PTZ Coverage – Heatmap aus /video/api/ptz/coverage
+  async function refreshCoverage() {
+    function _abbr(n) {
+      n = Number(n || 0);
+      if (!isFinite(n)) return '0';
+      if (n >= 1e9) return (n/1e9).toFixed(1).replace(/\.0$/, '') + 'G';
+      if (n >= 1e6) return (n/1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+      if (n >= 1e3) return (n/1e3).toFixed(1).replace(/\.0$/, '') + 'k';
+      return String(Math.round(n));
+    }
+    function _renderCoverageBlock(j, sumEl, gridEl, blindEl, variantLabel) {
+      if (!sumEl || !gridEl || !blindEl) return;
+      if (!j || !j.ok || !j.supported) {
+        sumEl.textContent = (j && j.supported === false) ? "PTZ nicht aktiv – keine Coverage." : "Coverage nicht verfügbar.";
+        gridEl.innerHTML = '<tr><td class="text-muted small">n/a</td></tr>';
+        blindEl.textContent = '-';
+        return;
+      }
+      const grid = j.grid || [];
+      const maxC = Math.max(1, ...grid.flat().map(x => Number(x || 0)));
+      const maxLog = Math.log10(maxC + 1);
+      const winH = Math.round(j.window_sec/3600);
+      const base = `Coverage: ${j.coverage_pct}% (${j.visited_bins}/${j.total_bins}) · Window: ${winH}h · Variante: ${variantLabel} · Pan: ${j.pan.min}..${j.pan.max} · Tilt: ${j.tilt.min}..${j.tilt.max}`;
+      if (j.mode === 'moves') {
+        sumEl.textContent = base + ` · Steps: ${j.steps} · Moves: ${j.moves} · Raw: ${j.samples}`;
+      } else {
+        sumEl.textContent = base + ` · Samples: ${j.samples}`;
+      }
+      let html = '';
+      for (let y = 0; y < grid.length; y++) {
+        html += '<tr>';
+        for (let x = 0; x < (grid[y] || []).length; x++) {
+          const c = Number(grid[y][x] || 0);
+          const t = c <= 0 ? 245 : Math.max(40, 245 - Math.round(205 * ((Math.log10(c + 1)) / maxLog)));
+          const title = `bin(${x},${y}) = ${c}`;
+          html += `<td style="background: rgb(${t},${t},${t}); text-align:center; font-size: 0.75rem;" title="${title}">${_abbr(c)}</td>`;
+        }
+        html += '</tr>';
+      }
+      gridEl.innerHTML = html || '<tr><td class="text-muted small">n/a</td></tr>';
+      const blind = j.blind_spots || [];
+      if (!blind.length) {
+        blindEl.textContent = 'Keine (vollständig abgedeckt im Grid).';
+      } else {
+        const items = blind.map(b => `(${b.bin_x},${b.bin_y}) → pan=${b.pan}, tilt=${b.tilt}`);
+        blindEl.innerHTML = '<div>Count: ' + blind.length + '</div><pre style="white-space: pre-wrap;">' + _escapeHtml(items.join('\\n')) + '</pre>';
+      }
+    }
+    try {
+      const winEl = document.getElementById("ptzCovWindow");
+      const binsEl = document.getElementById("ptzCovBins");
+      const modeEl = document.getElementById("ptzCovMode");
+      const sumObserved = document.getElementById("ptzCoverageSummary");
+      const gridObserved = document.getElementById("ptzCoverageGrid");
+      const blindObserved = document.getElementById("ptzCoverageBlind");
+      const sumFull = document.getElementById("ptzCoverageSummaryFull");
+      const gridFull = document.getElementById("ptzCoverageGridFull");
+      const blindFull = document.getElementById("ptzCoverageBlindFull");
+      if (!winEl || !binsEl || !modeEl || !sumObserved || !gridObserved || !blindObserved || !sumFull || !gridFull || !blindFull) return;
+      const windowSec = parseInt(winEl.value || '86400', 10);
+      const parts = String(binsEl.value || '9x5').split('x');
+      const bx = parseInt(parts[0] || '9', 10);
+      const by = parseInt(parts[1] || '5', 10);
+      const mode = (modeEl && modeEl.value) ? String(modeEl.value) : 'dwell';
+      const baseUrl = "{{ url_for('video.ptz_coverage') }}" + `?window_sec=${windowSec}&bins_x=${bx}&bins_y=${by}&mode=${encodeURIComponent(mode)}`;
+      const results = await Promise.allSettled([
+        fetch(baseUrl + '&scope=observed', {cache: 'no-store'}),
+        fetch(baseUrl + '&scope=full', {cache: 'no-store'})
+      ]);
+      const rObserved = (results[0] && results[0].status === 'fulfilled') ? results[0].value : null;
+      const rFull = (results[1] && results[1].status === 'fulfilled') ? results[1].value : null;
+      if (!rObserved && !rFull) throw new Error('coverage fetch failed');
+      if (rObserved && rObserved.ok) {
+        try {
+          const jObserved = await readJsonResponse(rObserved);
+          _renderCoverageBlock(jObserved, sumObserved, gridObserved, blindObserved, 'Beobachteter Ausschnitt');
+        } catch (e) {
+          if (sumObserved) sumObserved.textContent = 'Coverage: Fehler beim Laden (' + String(e) + ')';
+          if (gridObserved) gridObserved.innerHTML = '<tr><td class="text-danger small">Fehler</td></tr>';
+          if (blindObserved) blindObserved.textContent = '-';
+        }
+      } else {
+        if (sumObserved) sumObserved.textContent = 'Coverage: Fehler beim Laden';
+        if (gridObserved) gridObserved.innerHTML = '<tr><td class="text-danger small">Fehler</td></tr>';
+        if (blindObserved) blindObserved.textContent = '-';
+      }
+      if (rFull && rFull.ok) {
+        try {
+          const jFull = await readJsonResponse(rFull);
+          _renderCoverageBlock(jFull, sumFull, gridFull, blindFull, 'Reale Gesamtreichweite');
+        } catch (e) {
+          if (sumFull) sumFull.textContent = 'Coverage: Fehler beim Laden (' + String(e) + ')';
+          if (gridFull) gridFull.innerHTML = '<tr><td class="text-danger small">Fehler</td></tr>';
+          if (blindFull) blindFull.textContent = '-';
+        }
+      } else {
+        if (sumFull) sumFull.textContent = 'Coverage: Fehler beim Laden';
+        if (gridFull) gridFull.innerHTML = '<tr><td class="text-danger small">Fehler</td></tr>';
+        if (blindFull) blindFull.textContent = '-';
+      }
+    } catch (e) {
+      try {
+        const targets = [
+          ["ptzCoverageSummary", "ptzCoverageGrid", "ptzCoverageBlind"],
+          ["ptzCoverageSummaryFull", "ptzCoverageGridFull", "ptzCoverageBlindFull"],
+        ];
+        for (const ids of targets) {
+          const sumEl = document.getElementById(ids[0]);
+          const gridEl = document.getElementById(ids[1]);
+          const blindEl = document.getElementById(ids[2]);
+          if (sumEl) sumEl.textContent = 'Coverage: Fehler beim Laden (' + String(e) + ')';
+          if (gridEl) gridEl.innerHTML = '<tr><td class="text-danger small">Fehler</td></tr>';
+          if (blindEl) blindEl.textContent = '-';
+        }
+      } catch (_) {}
+    }
+  }
+
+  // initial refresh (non-blocking)
+  ptzRefresh();
+  refreshPtzMotor(false);
+  refreshCoverage();
+  setInterval(function(){ refreshPtzMotor(false); }, 5000);
+
+  // V4L2 device discovery (best effort)
+  function _escapeHtml(s) {
+    return String(s || "").replace(/[&<>"']/g, function(c) {
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]);
+    });
+  }
+
+  function _fmtSymlink(item) {
+    const name = _escapeHtml(item.name);
+    const real = _escapeHtml(item.real || "");
+    const path = _escapeHtml(item.path || "");
+    const tgt  = _escapeHtml(item.target || "");
+    let ptz = "";
+    if (item.ptz && item.ptz.supported) {
+      ptz = ' <span class="badge text-bg-success">PTZ</span>';
+    } else if (item.ptz && item.ptz.detail) {
+      ptz = ' <span class="badge text-bg-secondary">no-ptz</span>';
+    }
+    return `<div><code>${name}</code> → <code>${real || path}</code>${ptz}<div class="text-muted">${tgt}</div></div>`;
+  }
+
+  async function refreshDevices() {
+    try {
+      const r = await fetch("{{ url_for('video.devices') }}", {cache: "no-store"});
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await readJsonResponse(r);
+      const byId = document.getElementById("v4lById");
+      const byPath = document.getElementById("v4lByPath");
+      const raw = document.getElementById("v4lListDevices");
+
+      if (!j || !j.ok) {
+        if (byId) byId.textContent = "(nicht verfügbar)";
+        if (byPath) byPath.textContent = "";
+        if (raw) raw.textContent = "";
+        return;
+      }
+
+      if (byId) {
+        const items = (j.by_id || []);
+        if (!items.length) {
+          byId.textContent = "(keine by-id Geräte gefunden)";
+        } else {
+          byId.innerHTML = items.map(_fmtSymlink).join("\n");
+        }
+      }
+
+      if (byPath) {
+        const items = (j.by_path || []);
+        if (!items.length) {
+          byPath.textContent = "(keine by-path Geräte gefunden)";
+        } else {
+          byPath.innerHTML = items.map(_fmtSymlink).join("\n");
+        }
+      }
+
+      if (raw) {
+        const o = (j.v4l2_list_devices && j.v4l2_list_devices.out) ? j.v4l2_list_devices.out : "";
+        raw.textContent = o || "(leer)";
+      }
+    } catch (e) {
+      const byId = document.getElementById("v4lById");
+      if (byId) byId.textContent = "(Fehler beim Laden)";
+    }
+  }
+
+  // ------------------------------------------------------------
+  // USB/KERNEL Alert Banner (optional)
+  // ------------------------------------------------------------
+  function _formatAgeSec(age) {
+    if (age === null || age === undefined) return "";
+    const a = Math.max(0, Number(age) || 0);
+    if (a < 60) return `${Math.round(a)}s`;
+    if (a < 3600) return `${Math.round(a/60)}m`;
+    if (a < 86400) return `${(a/3600).toFixed(1)}h`;
+    return `${(a/86400).toFixed(1)}d`;
+  }
+
+  function _updateUsbAlertBox(j) {
+    const box = document.getElementById("usbAlertBox");
+    const summary = document.getElementById("usbAlertSummary");
+    const detail = document.getElementById("usbAlertDetail");
+    if (!box || !summary || !detail) return;
+
+    if (!j || !j.exists) {
+      box.style.display = "none";
+      summary.textContent = "";
+      detail.textContent = "";
+      return;
+    }
+
+    if (!j.show) {
+      // Datei existiert, aber Alarm ist älter als Max-Age.
+      box.style.display = "none";
+      return;
+    }
+
+    // Fall 1: echter Kernel/USB-Alarm
+    const hasAlert = !!(j.last_alert_ts && j.last_alert_ts > 0);
+    const scanFail = (j.last_scan_rc !== null && j.last_scan_rc !== undefined && Number(j.last_scan_rc) !== 0);
+
+    if (hasAlert) {
+      const kind = j.last_alert_kind ? String(j.last_alert_kind) : "usb";
+      const age = _formatAgeSec(j.last_alert_age);
+      summary.textContent = `(${kind}) vor ${age}`;
+      const line = j.last_alert_line ? String(j.last_alert_line) : "";
+      detail.textContent = line;
+    } else if (scanFail) {
+      const rc = String(j.last_scan_rc);
+      const age = _formatAgeSec(j.last_scan_age);
+      summary.textContent = `(watcher) Scan-Fehler rc=${rc} vor ${age}`;
+      const e = j.last_scan_err ? String(j.last_scan_err) : "";
+      detail.textContent = e;
+    } else {
+      summary.textContent = "";
+      detail.textContent = "";
+      box.style.display = "none";
+      return;
+    }
+    box.style.display = "block";
+  }
+
+  async function refreshUsbAlert() {
+    try {
+      const r = await fetch("{{ url_for('video.api_usb_alert') }}", {cache: "no-store"});
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await readJsonResponse(r);
+      _updateUsbAlertBox(j);
+    } catch (e) {
+      const summary = document.getElementById("usbAlertSummary");
+      const detail = document.getElementById("usbAlertDetail");
+      const box = document.getElementById("usbAlertBox");
+      if (box) box.style.display = "block";
+      if (summary) summary.textContent = "(watcher) Fehler beim Laden";
+      if (detail) detail.textContent = String(e);
+    }
+  }
+
+  // initial: USB alert (server-side state) + polling
+  try {
+    const initialUsb = {{ usb_alert|tojson }};
+    _updateUsbAlertBox(initialUsb);
+  } catch (e) {}
+  setInterval(refreshUsbAlert, 10000);
+
+  // initial devices load
+  refreshDevices();
+</script>
+{% endblock %}

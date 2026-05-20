@@ -1,0 +1,374 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container-fluid py-3">
+  <h2>🧩 Episodisches Gedächtnis</h2>
+  <p class="text-muted">
+    Episoden anlegen, durchsuchen und auflisten. Die API ist tokenpflichtig, falls <code>OROMA_UI_TOKEN</code> gesetzt ist.
+    Zusätzlich werden automatisch erzeugte <strong>Vision-Sessions</strong> aus der Kamera (<code>cam_token</code>) angezeigt.
+  </p>
+
+  <div class="row">
+    <!-- Neue Episode -->
+    <div class="col-lg-6 mb-3">
+      <div class="card bg-dark text-light shadow-sm">
+        <div class="card-header">➕ Neue Episode anlegen</div>
+        <div class="card-body">
+          <form id="epiForm" class="small">
+            <div class="mb-2">
+              <label class="form-label">Titel</label>
+              <input id="epiTitle" type="text" class="form-control form-control-sm" placeholder="Episode Titel">
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Chain IDs</label>
+              <input id="epiChains" type="text" class="form-control form-control-sm" placeholder="1,2,3">
+              <div class="form-text">Kommasepariert; nur Ganzzahlen.</div>
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Centroid (Floats)</label>
+              <input id="epiCentroid" type="text" class="form-control form-control-sm" placeholder="0.1,0.2,...">
+              <div class="form-text">Kommasepariert; z. B. 9D-Vektor.</div>
+            </div>
+            <button type="submit" class="btn btn-success btn-sm">Anlegen</button>
+          </form>
+          <pre id="epiOut" class="bg-black text-light p-2 rounded mt-3 small">Noch keine Episode angelegt…</pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Ähnlichkeitssuche -->
+    <div class="col-lg-6 mb-3">
+      <div class="card bg-dark text-light shadow-sm">
+        <div class="card-header">🔍 Ähnlichkeitssuche</div>
+        <div class="card-body small">
+          <div class="input-group mb-2">
+            <input id="simCentroid" type="text" class="form-control form-control-sm" placeholder="0.1,0.2,...">
+            <button id="btnSim" class="btn btn-primary btn-sm">Suchen</button>
+          </div>
+          <div id="simResults" class="mt-2 text-muted">Noch keine Suche durchgeführt…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Episoden-Browser (klassisch) -->
+  <div class="card bg-dark text-light shadow-sm mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>📚 Episoden-Browser (Core)</span>
+      <button class="btn btn-sm btn-outline-secondary" type="button" onclick="loadEpisodes()">Neu laden</button>
+    </div>
+    <div class="card-body small">
+      <div class="table-responsive">
+        <table class="table table-dark table-striped table-sm align-middle">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Titel</th>
+              <th>Erstellt</th>
+              <th>Events</th>
+              <th>Aktion</th>
+            </tr>
+          </thead>
+          <tbody id="epiTable">
+            <tr><td colspan="5" class="text-muted">Noch keine Episoden geladen…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <pre id="epiDetails" class="bg-black text-light p-2 rounded small mt-3">Bitte Episode auswählen…</pre>
+    </div>
+  </div>
+
+  <!-- Vision-Sessions (Kamera-Autolog) -->
+  <div class="card bg-dark text-light shadow-sm">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>📷 Vision-Sessions (Kamera-Autolog)</span>
+      <button class="btn btn-sm btn-outline-secondary" type="button" onclick="loadVisionEpisodes()">Neu laden</button>
+    </div>
+    <div class="card-body small">
+      <p class="text-muted">
+        Hier werden automatisch erzeugte Episoden aus der Kamera angezeigt
+        (<code>kind='vision'</code>, <code>source='vision/token'</code>, Events: <code>cam_token</code>).
+      </p>
+      <div class="table-responsive">
+        <table class="table table-dark table-striped table-sm align-middle">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Start</th>
+              <th>Ende</th>
+              <th>Dauer</th>
+              <th>cam_token</th>
+              <th>Aktion</th>
+            </tr>
+          </thead>
+          <tbody id="visionTable">
+            <tr><td colspan="6" class="text-muted">Noch keine Vision-Sessions geladen…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <pre id="visionDetails" class="bg-black text-light p-2 rounded small mt-3">Bitte Vision-Session auswählen…</pre>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+
+  // ---------- Token / HTTP-Helper (ohne fancy Syntax) ----------
+  function getCookie(name){
+    var pairs = (document.cookie || "").split(";");
+    for (var i=0; i<pairs.length; i++){
+      var p = pairs[i].trim();
+      if (!p) continue;
+      var eq = p.indexOf("=");
+      if (eq === -1) continue;
+      var k = p.substring(0, eq).trim();
+      var v = p.substring(eq+1);
+      if (k === name) return decodeURIComponent(v);
+    }
+    return null;
+  }
+
+  function getToken(){
+    // meta[name="oroma-token"]
+    var meta = document.querySelector('meta[name="oroma-token"]');
+    if (meta && meta.content) return meta.content;
+    // localStorage
+    try {
+      if (window.localStorage) {
+        var ls = localStorage.getItem("OROMA_UI_TOKEN");
+        if (ls) return ls;
+      }
+    } catch(e){}
+    // Cookie
+    var c = getCookie("OROMA_UI_TOKEN");
+    return c || "";
+  }
+
+  function authHeaders(h){
+    h = h || {};
+    var t = getToken();
+    if (t) h["X-OROMA-TOKEN"] = t;
+    return h;
+  }
+
+  async function apiFetch(url, opts){
+    opts = opts || {};
+    opts.headers = authHeaders(opts.headers || {});
+    return fetch(url, opts);
+  }
+
+  // ---------- Helpers ----------
+  function parseFloats(s){
+    return (s||"").split(",").map(function(x){
+      var f = parseFloat(x.trim());
+      return isNaN(f) ? null : f;
+    }).filter(function(x){ return x !== null; });
+  }
+  function parseInts(s){
+    return (s||"").split(",").map(function(x){
+      var f = parseInt(x.trim(),10);
+      return isNaN(f) ? null : f;
+    }).filter(function(x){ return x !== null; });
+  }
+  function formatTs(sec){
+    if (sec === null || sec === undefined) return "–";
+    try {
+      return new Date(sec*1000).toLocaleString();
+    } catch(e){
+      return String(sec);
+    }
+  }
+  function formatDuration(tsStart, tsEnd){
+    if (tsStart === null || tsStart === undefined) return "–";
+    if (!tsEnd || tsEnd <= tsStart) return "läuft…";
+    var sec = tsEnd - tsStart;
+    if (sec < 60) return sec.toFixed(0) + " s";
+    return (sec/60).toFixed(1) + " min";
+  }
+
+  // ---------- Episoden anlegen ----------
+  function initCreateForm(){
+    var form = document.getElementById("epiForm");
+    if (!form) return;
+    form.addEventListener("submit", async function(ev){
+      ev.preventDefault();
+      var title = document.getElementById("epiTitle").value;
+      var chains = parseInts(document.getElementById("epiChains").value);
+      var cent = parseFloats(document.getElementById("epiCentroid").value);
+      var out = document.getElementById("epiOut");
+      try {
+        var r = await apiFetch("/episodic/api/create", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({title:title, chain_ids:chains, centroid:cent})
+        });
+        var d;
+        try { d = await r.json(); } catch(e){ d = {ok:false, error:"invalid JSON"}; }
+        out.innerText = JSON.stringify(d, null, 2);
+        loadEpisodes();
+      } catch(e){
+        out.innerText = "Fehler beim Anlegen: "+e;
+      }
+    });
+  }
+
+  // ---------- Ähnlichkeitssuche ----------
+  function initSimilar(){
+    var btn = document.getElementById("btnSim");
+    if (!btn) return;
+    btn.addEventListener("click", async function(){
+      var cent = parseFloats(document.getElementById("simCentroid").value);
+      var box = document.getElementById("simResults");
+      try {
+        var r = await apiFetch("/episodic/api/similar", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({centroid:cent})
+        });
+        var d;
+        try { d = await r.json(); } catch(e){ d = {ok:false, error:"invalid JSON"}; }
+        if (d.ok){
+          if (!d.top || d.top.length === 0){
+            box.innerHTML = "<span class='text-muted'>Keine ähnlichen Episoden gefunden.</span>";
+            return;
+          }
+          var html = "<ul class='list-group list-group-flush'>";
+          d.top.forEach(function(x){
+            html += "<li class='list-group-item d-flex justify-content-between bg-dark text-light'>" +
+                    "<span>Episode "+x.id+"</span>" +
+                    "<span class='badge bg-info text-dark'>"+((x.score||0).toFixed(3))+"</span>" +
+                    "</li>";
+          });
+          html += "</ul>";
+          box.innerHTML = html;
+        } else {
+          box.innerHTML = "<span class='text-danger'>Fehler: "+(d.error||"")+"</span>";
+        }
+      } catch(e){
+        box.innerHTML = "<span class='text-danger'>Fehler: "+e+"</span>";
+      }
+    });
+  }
+
+  // ---------- Episoden laden (klassisch) ----------
+  window.loadEpisodes = async function(){
+    var tb = document.getElementById("epiTable");
+    if (!tb) return;
+    try {
+      var r = await apiFetch("/episodic/api/list?limit=50");
+      var d;
+      try { d = await r.json(); } catch(e){ d = {ok:false, error:"invalid JSON"}; }
+      if (!d.ok || !d.episodes || d.episodes.length === 0){
+        tb.innerHTML = '<tr><td colspan="5" class="text-muted">Keine Episoden gefunden</td></tr>';
+        return;
+      }
+      tb.innerHTML = "";
+      d.episodes.forEach(function(ep){
+        var tr = document.createElement("tr");
+        var created = ep.created_at ? formatTs(ep.created_at) : "–";
+        var evCount = (ep.meta && typeof ep.meta.events === "number") ? ep.meta.events : 0;
+        tr.innerHTML =
+          "<td>"+ep.id+"</td>" +
+          "<td>"+(ep.title||"-")+"</td>" +
+          "<td>"+created+"</td>" +
+          "<td><span class='badge bg-secondary'>"+evCount+"</span></td>" +
+          "<td><button class='btn btn-sm btn-outline-info'>Details</button></td>";
+        tr.querySelector("button").addEventListener("click", async function(){
+          var box = document.getElementById("epiDetails");
+          try {
+            var r2 = await apiFetch("/episodic/api/get/"+ep.id);
+            var d2;
+            try { d2 = await r2.json(); } catch(e){ d2 = {ok:false, error:"invalid JSON"}; }
+            box.textContent = JSON.stringify(d2, null, 2);
+          } catch(e){
+            box.textContent = "Fehler beim Laden: "+e;
+          }
+        });
+        tb.appendChild(tr);
+      });
+    } catch(e){
+      tb.innerHTML = '<tr><td colspan="5" class="text-danger">Fehler beim Laden: '+e+'</td></tr>';
+    }
+  };
+
+  // ---------- Vision-Sessions laden ----------
+  window.loadVisionEpisodes = async function(){
+    var tb = document.getElementById("visionTable");
+    if (!tb) return;
+    try {
+      var r = await apiFetch("/episodic/api/vision/list?limit=50");
+      var d;
+      try { d = await r.json(); } catch(e){ d = {ok:false, error:"invalid JSON"}; }
+      if (!d.ok || !d.episodes || d.episodes.length === 0){
+        tb.innerHTML = '<tr><td colspan="6" class="text-muted">Keine Vision-Sessions gefunden</td></tr>';
+        document.getElementById("visionDetails").textContent = "Bitte Vision-Session auswählen…";
+        return;
+      }
+      tb.innerHTML = "";
+      d.episodes.forEach(function(ep){
+        var tr = document.createElement("tr");
+        var start = formatTs(ep.ts_start);
+        var end = ep.ts_end ? formatTs(ep.ts_end) : "offen";
+        var dur = formatDuration(ep.ts_start, ep.ts_end);
+        var camEv = (typeof ep.cam_events === "number") ? ep.cam_events : 0;
+        tr.innerHTML =
+          "<td>"+ep.id+"</td>" +
+          "<td>"+start+"</td>" +
+          "<td>"+end+"</td>" +
+          "<td>"+dur+"</td>" +
+          "<td><span class='badge bg-info text-dark'>"+camEv+"</span></td>" +
+          "<td><button class='btn btn-sm btn-outline-info'>Details</button></td>";
+        tr.querySelector("button").addEventListener("click", function(){
+          loadVisionEvents(ep.id);
+        });
+        tb.appendChild(tr);
+      });
+    } catch(e){
+      tb.innerHTML = '<tr><td colspan="6" class="text-danger">Fehler beim Laden: '+e+'</td></tr>';
+    }
+  };
+
+  // ---------- Vision-Events Details ----------
+  window.loadVisionEvents = async function(id){
+    var box = document.getElementById("visionDetails");
+    try {
+      var r = await apiFetch("/episodic/api/vision/events/"+id+"?limit=50");
+      var d;
+      try { d = await r.json(); } catch(e){ d = {ok:false, error:"invalid JSON"}; }
+      if (!d.ok){
+        box.textContent = "Fehler: "+(d.error || "unbekannt");
+        return;
+      }
+      if (!d.events || d.events.length === 0){
+        box.textContent = "Keine cam_token-Events für Episode "+id+" gefunden.";
+        return;
+      }
+      var lines = [];
+      lines.push("Episode "+id+" – "+d.events.length+" cam_token-Events:");
+      d.events.forEach(function(ev){
+        var ts = formatTs(ev.ts);
+        var q = (ev.q != null ? ev.q.toFixed(5) : "n/a");
+        var motion = (ev.motion != null ? ev.motion.toFixed(5) : "n/a");
+        var edges = (ev.edges != null ? ev.edges.toFixed(5) : "n/a");
+        var color = (ev.color != null ? ev.color.toFixed(5) : "n/a");
+        lines.push(
+          ts+"  ref="+ev.ref_table+":"+ev.ref_id+
+          "  q="+q+"  motion="+motion+"  edges="+edges+"  color="+color
+        );
+      });
+      box.textContent = lines.join("\n");
+    } catch(e){
+      box.textContent = "Fehler beim Laden: "+e;
+    }
+  };
+
+  // ---------- Init nach DOM-Load ----------
+  document.addEventListener("DOMContentLoaded", function(){
+    initCreateForm();
+    initSimilar();
+    loadEpisodes();
+    loadVisionEpisodes();
+  });
+
+})();</script>
+{% endblock %}

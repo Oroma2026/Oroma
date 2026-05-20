@@ -1,0 +1,92 @@
+<!-- =============================================================================
+Pfad:    /opt/ai/oroma/ui/templates/curriculum.html
+Projekt: ORÓMA
+Version: v3.6
+Stand:   2025-09-27
+Zweck:   Curriculum-Dashboard (Stage, Progress, Advance)
+============================================================================= -->
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <h2>📚 Curriculum</h2>
+  <p class="text-muted">Stages & Fortschritt. Der Advance-Button sendet Metriken (acc/episodes/reward_mean) und lässt automatisch weiterstufen, wenn die Kriterien erfüllt sind.</p>
+
+  <div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      Aktueller Stand
+      <button class="btn btn-sm btn-outline-info" onclick="loadState()">🔄 Aktualisieren</button>
+    </div>
+    <div class="card-body">
+      <div><b>Stage:</b> <span id="cStage">-</span> <small class="text-muted" id="cStageName"></small></div>
+      <pre id="cProgress" class="mt-2">-</pre>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">Advance (Metriken schicken)</div>
+    <div class="card-body">
+      <div class="row g-2">
+        <div class="col-md-3">
+          <input id="cAcc" class="form-control" placeholder="acc (z.B. 0.84)">
+        </div>
+        <div class="col-md-3">
+          <input id="cEpisodes" class="form-control" placeholder="episodes (z.B. 10)">
+        </div>
+        <div class="col-md-3">
+          <input id="cRw" class="form-control" placeholder="reward_mean (optional)">
+        </div>
+        <div class="col-md-3">
+          <button class="btn btn-success w-100" onclick="advance()">⏭️ Advance</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function tokenHeaders(json=false){
+  const h = {};
+  if(json) h["Content-Type"] = "application/json";
+  const tok = (window.OROMA_UI_TOKEN || localStorage.getItem("OROMA_UI_TOKEN") || "");
+  if (tok) h["X-OROMA-TOKEN"] = tok;
+  return h;
+}
+
+async function loadState(){
+  try{
+    const r = await fetch("/curriculum/api/state", { headers: tokenHeaders() });
+    const j = await r.json();
+    if(!j.ok){ alert("Fehler beim Laden"); return; }
+    document.getElementById("cStage").textContent = j.state.stage;
+    document.getElementById("cStageName").textContent = " – " + (j.stage_name || "");
+    document.getElementById("cProgress").textContent = JSON.stringify(j.state.progress || {}, null, 2);
+  }catch(e){
+    alert("API-Fehler (state): " + e);
+  }
+}
+
+async function advance(){
+  const acc = document.getElementById("cAcc").value.trim();
+  const episodes = document.getElementById("cEpisodes").value.trim();
+  const rw = document.getElementById("cRw").value.trim();
+  const metrics = {};
+  if(acc) metrics.acc = parseFloat(acc);
+  if(episodes) metrics.episodes = parseInt(episodes, 10);
+  if(rw) metrics.reward_mean = parseFloat(rw);
+  try{
+    const r = await fetch("/curriculum/api/advance", {
+      method:"POST",
+      headers: tokenHeaders(true),
+      body: JSON.stringify({metrics})
+    });
+    const j = await r.json();
+    if(!j.ok){ alert("Advance fehlgeschlagen"); return; }
+    loadState();
+  }catch(e){
+    alert("API-Fehler (advance): " + e);
+  }
+}
+
+loadState();
+</script>
+{% endblock %}

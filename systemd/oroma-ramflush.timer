@@ -1,0 +1,21 @@
+# ==============================================================================
+# Datei:     /etc/systemd/system/oroma-ramflush.timer
+# Projekt:   ORÓMA v3.8 – RAM Flush Timer
+# Stand:     2025-11-30
+# ==============================================================================
+
+[Unit]
+Description=ORÓMA v3.8 – RAM Flush Timer (alle 30 Sekunden)
+
+# Orchestrator-Modus: Timer/Service werden vom Orchestrator ersetzt.
+ConditionPathExists=!/opt/ai/oroma/.use_orchestrator
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Unit=oroma-ramflush.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target
