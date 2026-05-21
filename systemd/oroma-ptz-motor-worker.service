@@ -85,7 +85,7 @@
 [Unit]
 Description=ORÓMA – PTZ Motor Worker (manual/disabled by default)
 After=network-online.target oroma.service
-Wants=network-online.target
+Wants=network-online.target oroma-ptz-motor-reward-collector.service
 Requires=oroma.service
 PartOf=oroma.service
 
