@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: ORÓMA Security Policy
+    url: https://github.com/Oroma2026/Oroma/security/policy
+    about: Please report security issues according to SECURITY.md.

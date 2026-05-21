@@ -1,0 +1,50 @@
+name: Bug report
+description: Report a reproducible ORÓMA issue without private runtime data.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an ORÓMA issue.
+        Do not attach databases, logs, .env files, runtime state, camera/audio captures, or personal data.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Minimal steps to reproduce the issue.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, hardware, headless/runtime mode.
+      placeholder: "Debian/Raspberry Pi, Python version, ORÓMA mode, relevant service"
+    validations:
+      required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional notes
+      description: Sanitized details only. No DB dumps, logs, secrets, images, audio, or runtime state.
+    validations:
+      required: false
