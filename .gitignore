@@ -281,6 +281,7 @@ desktop.ini
 !docs/roadmap_model_update.md
 !docs/roadmap_part01.md
 !docs/roadmap_part02.md
+!docs/ptz_motor_learning_loop.md
 !docs/ui.md
 !docs/zenodo_whitepaper_v1_release.md
 !systemd/README-systemd.md
