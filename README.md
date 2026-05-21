@@ -32,7 +32,7 @@ It is an architectural exploration of **persistent, edge-deployed, memory-centri
 > **Note:** This repository currently serves as the **public landing page**.  
 > A **software snapshot release** (versioned source archive) is planned as a separate release.
 
-Full structure documentation: **`docs/PROJECT_STRUCTURE.md`**
+Full structure documentation: **`PROJECT_STRUCTURE.md`**
 
 Top-level overview (planned snapshot layout):
 - `core/` – runtime engine, memory (Snap/SnapChain), replay/dream, policy/rules, persistence
