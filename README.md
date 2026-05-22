@@ -24,6 +24,51 @@ ORÓMA is an experimental system architecture for long-running edge cognition. I
 
 ---
 
+## Quick Start / Schnellstart
+
+### EN
+
+1. Clone the public repository.
+2. Copy `.env.systemd.example` to `.env.systemd`.
+3. Copy `.env.example` to `.env`.
+4. Adjust local paths, tokens, camera/PTZ device settings, and runtime options.
+5. Start ORÓMA either directly with Python or through systemd / the orchestrator setup used on your host.
+
+Minimal example:
+
+```bash
+git clone <CODEBERG_OR_GITHUB_URL>
+cd oroma
+cp .env.systemd.example .env.systemd
+cp .env.example .env
+python3 run_oroma.py
+```
+
+### DE
+
+1. Klone das öffentliche Repository.
+2. Kopiere `.env.systemd.example` nach `.env.systemd`.
+3. Kopiere `.env.example` nach `.env`.
+4. Passe lokale Pfade, Tokens, Kamera-/PTZ-Geräte und Runtime-Optionen an.
+5. Starte ORÓMA entweder direkt per Python oder über systemd bzw. den auf deinem Host genutzten Orchestrator.
+
+Minimales Beispiel:
+
+```bash
+git clone <CODEBERG_OR_GITHUB_URL>
+cd oroma
+cp .env.systemd.example .env.systemd
+cp .env.example .env
+python3 run_oroma.py
+```
+
+See also / Siehe auch:
+- [`QUICKSTART.md`](QUICKSTART.md)
+- [`.env.example`](.env.example)
+- [`.env.systemd.example`](.env.systemd.example)
+
+---
+
 ## What is ORÓMA?
 
 ORÓMA explores a system-architecture approach to persistent, memory-centric edge cognition built around:
