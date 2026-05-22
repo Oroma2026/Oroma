@@ -286,6 +286,9 @@ desktop.ini
 !docs/zenodo_whitepaper_v1_release.md
 !systemd/README-systemd.md
 !ui/static/chart.min.js.md
+!CONTRIBUTING.md
+!SECURITY.md
+!docs/architecture_audit.md
 
 # Hard blocks that must win even if future negation rules are added above.
 # These patterns are intentionally at the end because the last matching rule wins.
