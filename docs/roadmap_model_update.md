@@ -266,18 +266,36 @@ Note
 
 Phase H — Optional: NPU Acceleration (Hailo / DeGirum)
 
-Goal: Deploy inference to NPU where beneficial.
+Goal: Deploy inference to NPU where beneficial, without confusing ORÓMA-native exports with external vendor-specific runtime artifacts.
+
+Principle
+	•	ORÓMA may be **Hailo-capable / Hailo-aware** or DeGirum-aware when compatible external runtime artifacts are available.
+	•	ORÓMA’s own export logic should primarily concern:
+	•	knowledge artifacts
+	•	policy artifacts
+	•	portable runtime bundles and metadata
+	•	Vendor-specific compiled outputs, third-party model binaries, and accelerator-toolchain products should remain **external runtime targets**, not ORÓMA-native redistributed outputs.
 
 Flow
 	•	Train on CPU (PC or Pi)
 	•	Export ONNX
-	•	Compile/convert for target runtime
+	•	Compile/convert for the external target runtime
+	•	Register the resulting compatible runtime artifact in ORÓMA
 	•	Validate outputs match CPU within tolerance
+
+Operational Boundary
+	•	ORÓMA can select, register, and use compatible accelerator artifacts.
+	•	ORÓMA should not blur the boundary between:
+	•	ORÓMA-native artifacts
+	•	third-party model artifacts
+	•	vendor-specific compiled runtime outputs
+	•	This is especially important for Hailo / NPU deployment paths where licensing, compiler chains, and redistribution conditions may differ from ORÓMA-native exports.
 
 Acceptance Criteria
 	•	Same API contract as CPU inference
 	•	Failover to CPU if NPU unavailable
 	•	No new GUI deps
+	•	External runtime targets remain clearly separated from ORÓMA-native exports
 
 ⸻
 
