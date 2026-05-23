@@ -150,6 +150,67 @@ Kurzrollen (orientierend):
 - Export/Import ist im Projekt über UI + Core-Module abgebildet (u.a. ExportGate/Bundle UI).
 - Public Snapshot Policy: DB/log/state werden typischerweise ausgeschlossen (siehe `docs/core/90_publication.md`).
 
+### 3.1 Export-Grenze: ORÓMA-eigene Artefakte vs. externe Runtime-/Vendor-Artefakte
+
+Für die praktische Nutzung auf Edge-Hardware – insbesondere auf Raspberry Pi 5 mit optionalem Hailo/NPU-Pfad – ist eine klare Trennung wichtig:
+
+#### ORÓMA-eigene Exportdomäne
+Diese Artefakte sind konzeptionell ORÓMA-intern und können durch ORÓMA gesammelt, verdichtet, gebündelt, exportiert und wieder importiert werden:
+
+- Knowledge-/Memory-Artefakte
+  - Snap-/SnapChain-bezogene Inhalte
+  - Replay-/Dream-Ergebnisse
+  - Meta-/Bundle-Daten
+- Policy-/Regel-Artefakte
+  - `policy_rules`
+  - `rules`
+  - daraus abgeleitete Explainability-/Bundle-Pakete
+- Runtime-Metadaten
+  - Registry-Einträge
+  - Aktivierungszustände
+  - kompatible Zielpfad-Informationen
+
+Kurz gesagt: **ORÓMA exportiert primär Wissen, Policies, Bundles und Runtime-Metadaten – nicht proprietäre Accelerator-Buildprodukte als eigene ORÓMA-Origin.**
+
+#### Externe Runtime-/Vendor-Artefakte
+Davon klar zu trennen sind Artefakte, die aus externen Toolchains, Modellformaten oder Vendor-spezifischen Beschleunigerpfaden stammen, z. B.:
+
+- ONNX-Modelle aus externem Training
+- GGUF-Modelle / llama.cpp-kompatible Gewichte
+- Hailo-kompilierte Zielartefakte (z. B. HEF-/Compiler-nahe Outputs)
+- DeGirum-/NPU-spezifische Runtime-Ziele
+- Third-Party-Modelle wie Whisper oder andere fremdlizenzierte Gewichte
+
+Für diese Artefakte gilt im ORÓMA-Kontext:
+
+- ORÓMA kann sie **registrieren, auswählen, aktivieren und nutzen**
+- ORÓMA kann **accelerator-aware** und **backend-aware** sein
+- ORÓMA ist damit **Hailo-capable / Hailo-aware**, wenn passende externe Artefakte vorhanden sind
+- ORÓMA sollte solche Artefakte aber **nicht pauschal als eigene, frei redistributable ORÓMA-Exports behandeln**
+
+#### Praktische Leitlinie
+
+Die saubere Grenze lautet daher:
+
+- **Knowledge Export / Policy Export / Bundle Export** → ORÓMA-eigene Exportlogik
+- **Vendor-spezifische Modellkompilierung / Accelerator-Zielformate** → externe Integrations- und Deployment-Ziele
+
+Das ist besonders für Hailo wichtig:
+
+- ORÓMA kann einen Hailo-fähigen Runtime-Pfad vorbereiten und nutzen
+- ORÓMA kann kompatible externe Hailo-Artefakte registrieren
+- die eigentliche Vendor-Toolchain und die daraus resultierenden Drittartefakte bleiben jedoch konzeptionell außerhalb des ORÓMA-Kernexports
+
+#### Dokumentationsregel
+
+In öffentlicher Doku und bei Zenodo-/Repo-Veröffentlichungen sollte deshalb sprachlich sauber getrennt werden zwischen:
+
+- **ORÓMA exports**
+- **externally compiled runtime artifacts**
+- **registered accelerator targets**
+
+Diese Trennung verhindert Lizenzmissverständnisse, falsche Ownership-Eindrücke und unnötige Vermischung von ORÓMA-Wissen mit Third-Party-Deployments.
+
 ---
 
 ## 4) UI / Dashboard
