@@ -188,6 +188,14 @@ except Exception:
     _HAS_AGENT = False
     LOG.info("agent_loop nicht verfügbar – inject_event wird übersprungen.")
 
+try:
+    from core import nmr_lite  # type: ignore
+    _HAS_NMR = True
+except Exception:
+    nmr_lite = None  # type: ignore
+    _HAS_NMR = False
+    LOG.info("nmr_lite nicht verfügbar – Replay-NMR-Integration wird übersprungen.")
+
 # -----------------------------------------------------------------------------
 # Interner Zustand
 # -----------------------------------------------------------------------------
@@ -208,6 +216,87 @@ _state: Dict[str, Any] = {
 _thread: Optional[threading.Thread] = None
 _stop_flag = threading.Event()
 _pause_flag = threading.Event()
+
+# -----------------------------------------------------------------------------
+# Optionale Replay↔NMR-Lite-Integration (konservativ / bounded)
+# -----------------------------------------------------------------------------
+def _env_bool(name: str, default: bool) -> bool:
+    v = os.getenv(name)
+    if v is None:
+        return bool(default)
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(str(os.getenv(name, str(default))).strip())
+    except Exception:
+        return float(default)
+
+
+_REPLAY_NMR_ENABLE = _env_bool("OROMA_REPLAY_NMR_ENABLE", True)
+_REPLAY_NMR_REWARD_SCALE = max(0.0, _env_float("OROMA_REPLAY_NMR_REWARD_SCALE", 0.15))
+_REPLAY_NMR_STRUCT_BONUS = max(0.0, _env_float("OROMA_REPLAY_NMR_STRUCT_BONUS", 0.10))
+_REPLAY_NMR_CROSSMODAL_BONUS = max(0.0, _env_float("OROMA_REPLAY_NMR_CROSSMODAL_BONUS", 0.05))
+
+
+def _get_nmr_output() -> Dict[str, Any]:
+    """Liest best effort den aktuellen NMR-Lite-Output.
+
+    Diese Funktion darf Replay nie destabilisieren. Bei fehlendem Modul oder
+    Laufzeitfehlern wird einfach ein leeres Dict geliefert.
+    """
+    if not (_HAS_NMR and _REPLAY_NMR_ENABLE and nmr_lite is not None):
+        return {}
+    try:
+        if hasattr(nmr_lite, "get_output"):
+            out = nmr_lite.get_output()  # type: ignore[attr-defined]
+            return dict(out) if isinstance(out, dict) else {}
+    except Exception as e:
+        LOG.debug("NMR-Output nicht verfügbar: %s", e)
+    return {}
+
+
+def _bounded_nmr_replay_bonus(nmr_out: Optional[Dict[str, Any]]) -> float:
+    """Leitet einen kleinen, konservativen Replay-Lernbonus aus NMR-Lite ab.
+
+    Ziel: Replay kann NMR-Signale bereits konsumieren, ohne bestehende Reward-
+    Pfade zu überfahren. Der Bonus bleibt absichtlich klein und bounded.
+    """
+    if not nmr_out:
+        return 0.0
+    try:
+        priority = float(nmr_out.get("nmr_priority_score", 0.0) or 0.0)
+        binding_score = float(nmr_out.get("binding_hint_score", 0.0) or 0.0)
+        binding_hint = 1.0 if int(nmr_out.get("binding_hint", 0) or 0) == 1 else 0.0
+        crossmodal_hint = 1.0 if int(nmr_out.get("crossmodal_hint", 0) or 0) == 1 else 0.0
+        confidence = float(nmr_out.get("confidence", 1.0) or 1.0)
+    except Exception:
+        return 0.0
+
+    base = (_REPLAY_NMR_REWARD_SCALE * max(0.0, min(1.0, priority)))
+    struct = (_REPLAY_NMR_STRUCT_BONUS * max(0.0, min(1.0, binding_score)) * binding_hint)
+    cross = (_REPLAY_NMR_CROSSMODAL_BONUS * crossmodal_hint)
+    bonus = (base + struct + cross) * max(0.0, min(1.0, confidence))
+    return max(0.0, min(0.30, float(bonus)))
+
+
+def _nmr_event_meta(nmr_out: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not nmr_out:
+        return {}
+    out: Dict[str, Any] = {}
+    try:
+        out["nmr_pe_ema"] = round(float(nmr_out.get("nmr_pe_ema", 0.0) or 0.0), 6)
+        out["nmr_priority_score"] = round(float(nmr_out.get("nmr_priority_score", 0.0) or 0.0), 6)
+        out["nmr_surprise_event"] = int(nmr_out.get("nmr_surprise_event", 0) or 0)
+        out["nmr_binding_hint"] = int(nmr_out.get("binding_hint", 0) or 0)
+        out["nmr_binding_hint_score"] = round(float(nmr_out.get("binding_hint_score", 0.0) or 0.0), 6)
+        out["nmr_crossmodal_hint"] = int(nmr_out.get("crossmodal_hint", 0) or 0)
+        out["nmr_confidence"] = round(float(nmr_out.get("confidence", 1.0) or 1.0), 6)
+        out["nmr_replay_bonus"] = round(_bounded_nmr_replay_bonus(nmr_out), 6)
+    except Exception:
+        return {}
+    return out
 
 # =============================================================================
 # Utilities – Event->State Extraktion
@@ -275,7 +364,7 @@ def _extract_base_vector(ev: Any) -> Tuple[Optional[List[float]], Optional[List[
 # Lernen aus Events (Policy-Upsert)
 # =============================================================================
 
-def _learn_from_event(ev: Any) -> None:
+def _learn_from_event(ev: Any, nmr_out: Optional[Dict[str, Any]] = None) -> None:
     if not _HAS_SQL:
         return
     if os.getenv("OROMA_REPLAY_LEARN", "0").strip().lower() not in ("1", "true", "yes"):
@@ -307,10 +396,19 @@ def _learn_from_event(ev: Any) -> None:
         else:
             reward = 0.0
 
+        nmr_bonus = _bounded_nmr_replay_bonus(nmr_out)
+        reward += nmr_bonus
+
         outcome = "pos" if reward > 0 else ("neg" if reward < 0 else "draw")
         centroid_txt = json.dumps(centroid, separators=(",", ":")) if centroid else None
 
         sql_manager.policy_upsert(ns, sh, action, outcome=outcome, reward=reward, centroid=centroid_txt)  # type: ignore
+
+        if hasattr(sql_manager, "insert_metric") and nmr_bonus > 0.0:
+            try:
+                sql_manager.insert_metric("replay_nmr_bonus", float(nmr_bonus))  # type: ignore[attr-defined]
+            except Exception as e:
+                log_guard.log_suppressed(logger, key="replay_manager.pass.7", msg="Suppressed exception (was: pass)", exc=e, level=logging.WARNING)
     except Exception as e:
         LOG.debug("LearnHook Fehler: %s", e)
 
@@ -475,7 +573,8 @@ def _ensure_snapchain(chain_id: Any):
 # =============================================================================
 
 def _inject(kind: str, chain_id: Any, step: int, total: int, speed: float,
-            status: Optional[str] = None, info: Optional[str] = None) -> None:
+            status: Optional[str] = None, info: Optional[str] = None,
+            nmr_out: Optional[Dict[str, Any]] = None) -> None:
     """Hilfsfunktion: sicheres Injizieren eines Replay-Events in den AgentLoop."""
     if not _HAS_AGENT or not hasattr(agent_loop, "inject_event"):
         return
@@ -494,6 +593,8 @@ def _inject(kind: str, chain_id: Any, step: int, total: int, speed: float,
             ev["status"] = status
         if info is not None:
             ev["info"] = info
+        if nmr_out:
+            ev.update(_nmr_event_meta(nmr_out))
         agent_loop.inject_event(ev)  # type: ignore[attr-defined]
     except Exception as e:
         LOG.debug("inject_event fehlgeschlagen (%s): %s", kind, e)
@@ -535,7 +636,9 @@ def _worker(chain_id: Any, speed: float):
             _state["log_id"] = None
 
     # --- Event: Start
-    _inject("replay_start", chain_id, 0, total, speed)
+    start_nmr_out = _get_nmr_output()
+    _state["last_nmr"] = start_nmr_out
+    _inject("replay_start", chain_id, 0, total, speed, nmr_out=start_nmr_out)
 
     try:
         try:
@@ -556,15 +659,25 @@ def _worker(chain_id: Any, speed: float):
             _state["elapsed_time"] = time.time() - (_state["started_at"] or time.time())
             _state["progress_pct"] = round(100.0 * _state["step"] / max(1, total), 2)
 
+            nmr_out = _get_nmr_output()
+            _state["last_nmr"] = nmr_out
+
             # leichte Telemetrie
             if _HAS_SQL and hasattr(sql_manager, "insert_metric"):
                 try:
                     sql_manager.insert_metric("replay_step", float(idx + 1))  # type: ignore[attr-defined]
+                    if nmr_out:
+                        if int(nmr_out.get("nmr_surprise_event", 0) or 0) == 1:
+                            sql_manager.insert_metric("replay_nmr_surprise_step", 1.0)  # type: ignore[attr-defined]
+                        if int(nmr_out.get("binding_hint", 0) or 0) == 1:
+                            sql_manager.insert_metric("replay_nmr_binding_hint_step", 1.0)  # type: ignore[attr-defined]
+                        if int(nmr_out.get("crossmodal_hint", 0) or 0) == 1:
+                            sql_manager.insert_metric("replay_nmr_crossmodal_hint_step", 1.0)  # type: ignore[attr-defined]
                 except Exception as e:
                     log_guard.log_suppressed(logger, key="replay_manager.pass.2", msg="Suppressed exception (was: pass)", exc=e, level=logging.WARNING)
 
             # lokales Lernen (per ENV schaltbar)
-            _learn_from_event(ev)
+            _learn_from_event(ev, nmr_out=nmr_out)
 
             # DB: Step-Update (wenn möglich)
             if _HAS_SQL and _state.get("log_id") and hasattr(sql_manager, "update_replay_log"):
@@ -574,7 +687,7 @@ def _worker(chain_id: Any, speed: float):
                     log_guard.log_suppressed(logger, key="replay_manager.pass.3", msg="Suppressed exception (was: pass)", exc=e, level=logging.WARNING)
 
             # Event: Step
-            _inject("replay_step", chain_id, int(_state["step"]), total, speed)
+            _inject("replay_step", chain_id, int(_state["step"]), total, speed, nmr_out=nmr_out)
 
             time.sleep(max(min_sleep, 1.0 / max(0.1, speed)))
 
@@ -611,8 +724,9 @@ def _worker(chain_id: Any, speed: float):
                 log_guard.log_suppressed(logger, key="replay_manager.pass.4", msg="Suppressed exception (was: pass)", exc=e, level=logging.WARNING)
 
         # Event: Ende
+        end_nmr_out = _get_nmr_output() or dict(_state.get("last_nmr") or {})
         _inject("replay_end", chain_id, int(_state.get("step", 0)), total, float(_state.get("speed", speed)),
-                status=final_status, info=_state.get("error"))
+                status=final_status, info=_state.get("error"), nmr_out=end_nmr_out)
 
         _state.update({"running": False, "paused": False, "chain_id": None, "log_id": None})
 

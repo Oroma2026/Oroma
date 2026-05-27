@@ -1,0 +1,25 @@
+# ==============================================================================
+# Datei:     /etc/systemd/system/oroma-nmr-binding-probe.timer
+# Projekt:   ORÓMA – NMR Binding-Probe Beobachtungs-Timer
+# Version:   v1.0
+# Stand:     2026-05-27
+# ==============================================================================
+#
+# Zweck
+# -----
+# Startet die messende NMR-Binding-Probe alle paar Stunden. Die Probe ist bewusst
+# nicht materialisierend und dient nur dem Verlauf: Werden dieselben Kandidaten
+# über mehrere Läufe wiedergefunden?
+# ============================================================================== 
+
+[Unit]
+Description=ORÓMA NMR Binding Probe Timer (measure-only)
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:15:00
+Persistent=true
+RandomizedDelaySec=20min
+Unit=oroma-nmr-binding-probe.service
+
+[Install]
+WantedBy=timers.target

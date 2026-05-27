@@ -128,6 +128,19 @@ import numpy as np
 from core.device_hub import get_hub
 from core.sql_manager import insert_audio_token, insert_metric
 
+# NMR-Lite Audio-Bridge ist optional.
+#
+# WICHTIG:
+# - Der Hook darf auch ohne core.nmr_lite vollständig funktionsfähig bleiben.
+# - Deshalb defensiver best-effort Import statt harter Pflicht-Abhängigkeit.
+# - Die Bridge wird nach der Feature-Berechnung aufgerufen, noch vor optionalen
+#   Persistenz-/VAD-Gates, damit NMR echte RMS/Pitch-Werte auch dann sieht,
+#   wenn kein Audio-Token in die DB geschrieben wird.
+try:
+    from core.nmr_lite import update_audio_signal as _nmr_update_audio_signal
+except Exception:  # pragma: no cover - defensive optional integration
+    _nmr_update_audio_signal = None
+
 
 def _env_bool(name: str, default: bool = False) -> bool:
     v = str(os.environ.get(name, "")).strip().lower()
@@ -263,6 +276,25 @@ def make_audio_snaptoken_hook() -> Callable[[float, int], None]:
                 return
 
             rms, zcr, centroid_hz, band_e = _safe_rfft_features(pcm, sr=sr)
+
+            # -------------------------------------------------------------
+            # ORÓMA NMR-Lite Audio-Bridge (best effort, kein Hard-Fail)
+            # -------------------------------------------------------------
+            # Die Bridge bekommt die leichtgewichtigen Audio-Signale direkt
+            # aus dem laufenden Hook:
+            #   - rms
+            #   - centroid_hz als pitch/proxy
+            #
+            # BEWUSST VOR speech_only / DB-Persistenz:
+            # Damit NMR-Lite auch dann echte Audio-Werte sieht, wenn dieses
+            # Segment später wegen VAD/RMS-Gates nicht als Token gespeichert
+            # wird. Dadurch bleibt der Fast Path signalnah und DB-unabhängig.
+            if _nmr_update_audio_signal is not None:
+                try:
+                    _nmr_update_audio_signal(rms=rms, pitch=centroid_hz, ts=now)
+                except Exception:
+                    # Der Audio-Hook darf durch NMR nie ausfallen.
+                    pass
 
             # Noise-Floor: wenn wir noch keinen haben -> initialisieren,
             # danach EMA-updaten (nur wenn leise)

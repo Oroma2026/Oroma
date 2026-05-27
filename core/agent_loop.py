@@ -4,8 +4,8 @@
 # Pfad:      /opt/ai/oroma/core/agent_loop.py
 # Projekt:   ORÓMA (Offline-First · Headless · SQLite-First)
 # Modul:     AgentLoop – Haupt-Tick-Schleife + Hook-Pipeline + Event-Bus
-# Version:   v3.7.3
-# Stand:     2026-01-10
+# Version:   v3.7.3+nmr-lite-observability-v1
+# Stand:     2026-05-25
 # Autor:     ORÓMA · KI-JWG-X1
 # Lizenz:    MIT
 # =============================================================================
@@ -48,6 +48,28 @@
 #   - hooks_av_snaptoken: Kamera SnapToken Sampling (vision/token)
 #   - vision_scene_infer_hook: Vision Szene Inferenz (Tags/Labels)
 #   - hooks_audio_snaptoken: Audio SnapToken Sampling (audio/token)
+#   - nmr_lite: Prediction-Error/EMA/Hint-Tick für Audio↔Replay-Binding
+#
+# PATCH-NOTIZ 2026-05-25 — NMR-Lite Live-Fix
+# ───────────────────────────────────────────
+# Der NMR-Lite-Core stellt tick(now_ts: Optional[float] = None) bereit.
+# Der AgentLoop darf deshalb NICHT dt/tick als zwei Positionsargumente übergeben.
+# Dieser Hotfix ruft den Core mit einem expliziten now_ts-Zeitstempel auf und
+# nutzt Signaturprüfung statt TypeError-Fallback, damit echte Runtime-Fehler im
+# NMR-Core nicht versehentlich als Signaturproblem maskiert werden.
+#
+# PATCH-NOTIZ 2026-05-25 — NMR-Lite Observability / Persist-Breadcrumbs
+# ───────────────────────────────────────────────────────────────────────────
+# Live-Validierung zeigte: NMR-Lite war importierbar, ENV-aktiv und als Hook
+# registriert; außerdem funktionierten tick()+maybe_persist() in einem direkten
+# Prozess-Test. Im echten oroma.service erschienen dennoch keine neuen nmr:*
+# Metrics. Damit man nicht weiter blind zwischen Hook-Runner, ENV-Gate und
+# Persist-Fenster unterscheiden muss, führt dieser Patch einen sichtbaren
+# Diagnosezustand unter status()["nmr_lite"] ein. Dort stehen u. a. Aufrufzähler,
+# erfolgreiche Ticks, Persist-True/False-Zähler, letzter Persist-Zeitpunkt, letzte
+# Output-Werte und der letzte konkrete Fehler. Zusätzlich werden erster Tick und
+# erste Persistenz sichtbar geloggt. Das ändert keine NMR-Fachlogik, sondern macht
+# nur den Live-Pfad prüfbar.
 #
 # EVENT-BUS (inject_event)
 # ───────────────────────
@@ -115,6 +137,7 @@ import os
 import threading
 import time
 import logging
+import inspect
 from core.log_guard import log_suppressed
 import json
 from typing import Optional, Dict, Any, Callable, List
@@ -224,6 +247,20 @@ except Exception:
     _AUDIO_SNAPTOKEN = None
     _AUDIO_SNAPTOKEN_LAST_WARN_TICK = -10**9
 
+# NMR-Lite (optional; erster echter AgentLoop-Tick-Anschluss)
+try:
+    from core.nmr_lite import (
+        tick as _nmr_lite_tick,
+        maybe_persist as _nmr_lite_maybe_persist,
+        debug_state as _nmr_lite_debug_state,
+    )
+    _HAS_NMR_LITE = True
+except Exception:
+    _nmr_lite_tick = None  # type: ignore
+    _nmr_lite_maybe_persist = None  # type: ignore
+    _nmr_lite_debug_state = None  # type: ignore
+    _HAS_NMR_LITE = False
+
 # ----------------------------- Interner Zustand ------------------------------
 
 _state_lock = threading.Lock()
@@ -241,6 +278,29 @@ _status: Dict[str, Any] = {
     "in_hook_since": 0,
     "last_hook": None,
     "last_hook_ms": 0.0,
+
+    # NMR-Lite Live-Observability:
+    # Dieser Block wird ausschließlich vom AgentLoop-Hook gepflegt und ist
+    # bewusst im /control/api/status sichtbar. So lässt sich unterscheiden:
+    #   - Hook registriert, aber nie aufgerufen
+    #   - Hook aufgerufen, aber ENV-gated übersprungen
+    #   - tick() erfolgreich, aber maybe_persist() noch im Fenster/False
+    #   - Persistenz erfolgreich oder mit konkretem Fehler fehlgeschlagen
+    "nmr_lite": {
+        "available": bool(_HAS_NMR_LITE),
+        "calls_total": 0,
+        "skipped_disabled": 0,
+        "ticks_ok": 0,
+        "ticks_failed": 0,
+        "persist_true": 0,
+        "persist_false": 0,
+        "last_tick_ts": 0.0,
+        "last_persist_attempt_ts": 0.0,
+        "last_persist_ok_ts": 0.0,
+        "last_error": None,
+        "last_output": None,
+        "debug_state": None,
+    },
 }
 
 _hooks: List[Callable[[float, int], None]] = []
@@ -377,6 +437,134 @@ def _social_resonance_hook(dt: float, tick: int) -> None:
             )
     except Exception as e:
         log_suppressed(LOG, key="agent_loop.pass.4", msg="Suppressed exception (was: pass)", exc=e, level=logging.WARNING, interval_s=600)
+
+def _nmr_lite_status_update(**updates: Any) -> None:
+    """Aktualisiert den sichtbaren NMR-Lite-Diagnoseblock thread-sicher.
+
+    Der Status ist absichtlich rein diagnostisch: keine Fachlogik, keine DB-
+    Writes, kein Einfluss auf Tick/Persistenz. Dadurch bleibt der AgentLoop auch
+    dann stabil, wenn einzelne Diagnosewerte nicht serialisierbar oder leer sind.
+    """
+    with _state_lock:
+        cur = dict(_status.get("nmr_lite") or {})
+        cur.update(updates)
+        _status["nmr_lite"] = cur
+
+
+def _nmr_lite_status_inc(key: str, n: int = 1) -> int:
+    """Erhöht einen NMR-Lite-Diagnosezähler und liefert den neuen Wert zurück."""
+    with _state_lock:
+        cur = dict(_status.get("nmr_lite") or {})
+        val = int(cur.get(key, 0) or 0) + int(n)
+        cur[key] = val
+        _status["nmr_lite"] = cur
+        return val
+
+
+def _nmr_lite_hook(dt: float, tick: int) -> None:
+    """
+    Optionaler NMR-Lite-Hook (AgentLoop).
+
+    Rolle:
+      - ruft core.nmr_lite.tick(now_ts=...) im regulären AgentLoop-Takt auf
+      - hält NMR-Lite bewusst im bestehenden Hook-Modell (best effort, ENV-gated)
+      - ruft die gedrosselte Persistenz maybe_persist(now_ts=...) auf
+      - schreibt sichtbare Diagnosewerte nach status()["nmr_lite"]
+      - darf den Loop bei Fehlern NICHT destabilisieren
+
+    Aktivierung:
+      - Modul muss importierbar sein (core.nmr_lite)
+      - OROMA_NMR_ENABLE=1|true|yes
+      - optional zusätzlich OROMA_NMR_AGENTLOOP=1|true|yes (Default: on)
+
+    Wichtige Design-Regel:
+      NMR-Lite läuft hier nur als leichter Signal-/Priorisierungs-Pfad.
+      Persistenz bleibt im NMR-Modul selbst ENV-/Window-gated. Dieser Hook
+      macht nur sichtbar, ob tick() und maybe_persist() im echten Service-
+      Prozess tatsächlich erreicht werden.
+    """
+    _nmr_lite_status_inc("calls_total")
+    _nmr_lite_status_update(available=bool(_HAS_NMR_LITE))
+
+    if not _HAS_NMR_LITE or _nmr_lite_tick is None:
+        _nmr_lite_status_inc("skipped_disabled")
+        _nmr_lite_status_update(last_error="NMR-Lite module unavailable or tick callable missing")
+        return
+    if os.getenv("OROMA_NMR_ENABLE", "0").strip().lower() not in ("1", "true", "yes"):
+        _nmr_lite_status_inc("skipped_disabled")
+        _nmr_lite_status_update(last_error="OROMA_NMR_ENABLE is not active")
+        return
+    if os.getenv("OROMA_NMR_AGENTLOOP", "1").strip().lower() in ("0", "false", "no"):
+        _nmr_lite_status_inc("skipped_disabled")
+        _nmr_lite_status_update(last_error="OROMA_NMR_AGENTLOOP disables hook execution")
+        return
+
+    try:
+        # core.nmr_lite.tick() erwartet im aktuellen NMR-Lite-Core genau
+        # ein optionales Zeitargument (now_ts). dt/tick bleiben AgentLoop-
+        # lokale Taktinformationen und werden hier bewusst NICHT als zwei
+        # Positionsargumente weitergereicht.
+        accepts_now_ts = True
+        try:
+            sig = inspect.signature(_nmr_lite_tick)
+            accepts_now_ts = "now_ts" in sig.parameters
+        except Exception:
+            # Wenn Signaturprüfung scheitert, bevorzugen wir den aktuellen
+            # produktiven Pfad mit now_ts; echte Fehler werden unten sichtbar.
+            accepts_now_ts = True
+
+        now_ts = time.time()
+        if accepts_now_ts:
+            out = _nmr_lite_tick(now_ts=now_ts)
+        else:
+            out = _nmr_lite_tick()
+
+        tick_ok_count = _nmr_lite_status_inc("ticks_ok")
+        _nmr_lite_status_update(
+            last_tick_ts=float(now_ts),
+            last_error=None,
+            last_output=out if isinstance(out, dict) else None,
+        )
+        if tick_ok_count == 1:
+            LOG.info("NMR-Lite erster AgentLoop-Tick OK (tick=%s).", tick)
+
+        # NMR-Lite erzeugt den Live-Output im Speicher mit tick(), schreibt
+        # die Beobachtungsmetriken aber bewusst nur gedrosselt über
+        # maybe_persist(). Ohne diesen Aufruf ist der Hook zwar registriert
+        # und tickt technisch, aber nmr:pe / nmr:pe_ema / binding_hint /
+        # crossmodal_hint erscheinen nie in der metrics-Tabelle. Die
+        # Persistenz bleibt vollständig ENV-gated und window-limitiert im
+        # Modul core.nmr_lite selbst (OROMA_NMR_PERSIST,
+        # OROMA_NMR_PERSIST_WINDOW_SEC, OROMA_NMR_METRIC_PREFIX).
+        persist_ok = False
+        if _nmr_lite_maybe_persist is not None:
+            _nmr_lite_status_update(last_persist_attempt_ts=float(now_ts))
+            persist_ok = bool(_nmr_lite_maybe_persist(now_ts=now_ts))
+            if persist_ok:
+                persist_true_count = _nmr_lite_status_inc("persist_true")
+                _nmr_lite_status_update(last_persist_ok_ts=float(now_ts))
+                if persist_true_count == 1:
+                    LOG.info("NMR-Lite erste AgentLoop-Persistenz OK (tick=%s).", tick)
+            else:
+                _nmr_lite_status_inc("persist_false")
+        else:
+            _nmr_lite_status_inc("persist_false")
+            _nmr_lite_status_update(last_error="maybe_persist callable missing")
+
+        # Debug-State ist klein genug und extrem hilfreich, um live zu sehen,
+        # ob _NMR_PERSIST aktiv ist, welches Persist-Fenster gilt und ob
+        # Vision/Audio im NMR-Core als degraded markiert sind. Fehler dabei
+        # dürfen niemals den AgentLoop blockieren.
+        try:
+            if _nmr_lite_debug_state is not None:
+                _nmr_lite_status_update(debug_state=_nmr_lite_debug_state())
+        except Exception as e:
+            _nmr_lite_status_update(last_error=f"debug_state failed: {type(e).__name__}: {e}")
+
+    except Exception as e:
+        _nmr_lite_status_inc("ticks_failed")
+        _nmr_lite_status_update(last_error=f"{type(e).__name__}: {e}")
+        log_suppressed(LOG, key="agent_loop.nmr.tick", msg="NMR-Lite tick failed", exc=e, level=logging.WARNING, interval_s=300)
 
 def audio_snaptoken_hook(dt: float, tick: int) -> None:
     """
@@ -718,6 +906,15 @@ def start(dt: float = 0.25) -> bool:
     # --- Leichte v3.7 Hooks (immer versuchen)
     register_hook(_nudge_thread_hook)
     register_hook(_social_resonance_hook)
+
+    # --- NMR-Lite (optional; erster AgentLoop-Tick-Anschluss)
+    try:
+        if _HAS_NMR_LITE and os.getenv("OROMA_NMR_ENABLE", "0").strip().lower() in ("1", "true", "yes"):
+            if os.getenv("OROMA_NMR_AGENTLOOP", "1").strip().lower() not in ("0", "false", "no"):
+                register_hook(_nmr_lite_hook)
+                LOG.info("NMR-Lite-Hook registriert (OROMA_NMR_ENABLE=on).")
+    except Exception as e:
+        LOG.warning("NMR-Lite-Hook konnte nicht registriert werden: %s", e)
 
     # --- Default-Event-Listener aktivieren (für Replays etc.)
     register_event_listener(_default_event_listener)

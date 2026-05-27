@@ -4,9 +4,9 @@
 # Pfad:      /opt/ai/oroma/core/hooks_av_snaptoken.py
 # Projekt:   ORÓMA (Headless · AgentLoop Hooks · Orchestrator-safe)
 # Modul:     av_snaptoken_hook – periodische Vision-SnapTokens (cam_token) aus OromaWrapper.embed() + DB-Persist (FastDB optional)
-# Version:   v3.7.3
-# Stand:     2026-01-10
-# Autor:     ORÓMA · KI-JWG-X1
+# Version:   v3.7.3+nmr-vision-bridge-v1
+# Stand:     2026-05-26
+# Autor:     ORÓMA · KI-JWG-X1 (Jörg) + OpenAI GPT-5.5 Thinking
 # Lizenz:    MIT
 # =============================================================================
 #
@@ -92,6 +92,29 @@
 #   - cam:token:saved / cam:token:accepted
 #   - cam:token:db_locked (nur im FastDB Lock-Fall)
 #
+# NMR-LITE VISION-BRIDGE (v1)
+# ──────────────────────────
+# Wenn core.nmr_lite verfügbar und OROMA_NMR_VISION_BRIDGE nicht deaktiviert ist,
+# meldet dieser Hook pro erzeugtem Vision-Embedding zusätzlich einen kompakten
+# 12-dimensionalen Fingerprint an NMR-Lite:
+#
+#   core.nmr_lite.update_vision_signal(fp12=..., scene_change=..., ts=...)
+#
+# Dadurch sieht NMR-Lite denselben headless Kamera-/Token-Pfad, der bereits
+# cam:token:* Metriken und vision/token SnapChains erzeugt. Die Bridge schreibt
+# selbst keine Datenbankzeilen; Persistenz bleibt bei nmr_lite.maybe_persist()
+# im AgentLoop. Damit wird der bestehende DBWriter-kompatible NMR-Pfad genutzt
+# und der AV-Hook bleibt reaktiv.
+#
+# ENV:
+#   OROMA_NMR_VISION_BRIDGE=1   # default on, wenn NMR-Lite importierbar ist
+#
+# Signalwahl:
+#   - fp12: erste 12 numerische Werte aus embedding/features, auf 0..1 geklemmt
+#   - scene_change: bevorzugt explizites scene_change/vision_scene_change; sonst
+#                   motion/motion_area als billiger struktureller Change-Proxy
+#   - repeat: bewusst None, bis es eine robuste Repeat-/Familiarity-Quelle gibt
+#
 # EPISODIC INTEGRATION (BEST EFFORT)
 # ─────────────────────────────────
 # Nach erfolgreichem Insert versucht der Hook:
@@ -143,6 +166,8 @@
 # - Keine harten Abhängigkeiten auf Kamera-GUI; embed(frame=None) muss headless bleiben.
 # - Insert-Schema ist an bestehende snapchains-Spalten gekoppelt; bei Schema-Drift
 #   wird rate-limited gewarnt, nicht gespammt.
+# - NMR-Lite Vision-Bridge darf den AV-Hook niemals blockieren; Fehler werden
+#   rate-limited sichtbar geloggt und nicht weitergereicht.
 #
 # =============================================================================
 # END HEADER
@@ -175,6 +200,16 @@ except Exception:
     db_writer_client = None  # type: ignore
     _HAS_DBW = False
 
+# Optional: NMR-Lite Vision-Bridge (keine harte Abhängigkeit)
+try:
+    from core.nmr_lite import update_vision_signal as _nmr_update_vision_signal
+    from core.nmr_lite import increment_snap_counter as _nmr_increment_snap_counter
+    _HAS_NMR_LITE = True
+except Exception:
+    _nmr_update_vision_signal = None  # type: ignore
+    _nmr_increment_snap_counter = None  # type: ignore
+    _HAS_NMR_LITE = False
+
 
 logger = logging.getLogger("oroma.hooks.av_snaptoken")
 logger.setLevel(getattr(logging, os.getenv("OROMA_HOOKS_LOG", "INFO").upper(), logging.INFO))
@@ -198,6 +233,7 @@ _FASTDB = _env_bool("OROMA_AV_FASTDB", False)
 _FASTDB_TIMEOUT_SEC = float(os.getenv('OROMA_AV_DB_TIMEOUT_SEC', '1.50'))
 _FASTDB_BUSY_MS = int(os.getenv('OROMA_AV_DB_BUSY_TIMEOUT_MS', '2000'))
 _WARN_EVERY_TICKS = max(1, int(os.getenv("OROMA_AV_FASTDB_WARN_EVERY_TICKS", "200")))
+_NMR_VISION_BRIDGE = _env_bool("OROMA_NMR_VISION_BRIDGE", True)
 
 
 _last_day = None
@@ -288,6 +324,115 @@ def _warn_once(tick: int, fmt: str, *args: Any) -> None:
         except Exception:
             logger.warning(str(fmt))
         _last_warn_tick = tick
+
+
+
+def _coerce_float_list(value: Any) -> list[float]:
+    """Return a robust numeric list for embedding/features values.
+
+    Some wrappers return a plain list/tuple, others may return numpy arrays. A
+    dict-shaped feature payload is intentionally ignored here because its key
+    order is not a stable compact fingerprint.
+    """
+    if value is None or isinstance(value, dict):
+        return []
+    try:
+        if hasattr(value, "tolist"):
+            value = value.tolist()
+    except Exception:
+        pass
+    try:
+        return [float(x) for x in list(value)]
+    except Exception:
+        return []
+
+
+def _clip01(value: Any, default: float = 0.0) -> float:
+    try:
+        v = float(value)
+        if v < 0.0:
+            return 0.0
+        if v > 1.0:
+            return 1.0
+        return v
+    except Exception:
+        return float(default)
+
+
+def _first_float(*values: Any) -> Optional[float]:
+    for value in values:
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except Exception:
+            continue
+    return None
+
+
+def _nmr_bridge_vision_best_effort(
+    *,
+    vec: Any,
+    out: Dict[str, Any],
+    motion: Optional[float],
+    q: Optional[float],
+    tick: int,
+    ts: int,
+) -> None:
+    """Feed the compact camera-token signal into NMR-Lite without blocking.
+
+    The bridge is deliberately placed in the existing AV SnapToken hook because
+    this hook already proves that a headless camera embedding exists. It does
+    not perform DB writes; it only updates NMR-Lite's in-memory vision bridge.
+    """
+    if not _NMR_VISION_BRIDGE or not _HAS_NMR_LITE or _nmr_update_vision_signal is None:
+        return
+
+    fp = _coerce_float_list(vec)
+    if not fp:
+        return
+
+    # NMR-Lite expects an already compact fp12. Values are clipped rather than
+    # normalized across the vector, preserving the existing ORÓMA wrapper scale.
+    fp12 = [_clip01(x) for x in fp[:12]]
+
+    scene_change = _first_float(
+        out.get("scene_change"),
+        out.get("vision_scene_change"),
+        out.get("motion_change"),
+        motion,
+    )
+    if scene_change is not None:
+        scene_change = _clip01(scene_change)
+
+    try:
+        _nmr_update_vision_signal(fp12=fp12, scene_change=scene_change, repeat=None, ts=float(ts))
+    except Exception as e:
+        log_suppressed(
+            logger,
+            key="core_hooks_av_snaptoken.nmr_vision_bridge",
+            msg="NMR-Lite Vision-Bridge Fehler",
+            exc=e,
+            level=logging.WARNING,
+            interval_s=300,
+        )
+
+
+def _nmr_increment_snap_counter_best_effort(tick: int) -> None:
+    """Inform NMR-Lite about accepted vision tokens without coupling to DB state."""
+    if not _NMR_VISION_BRIDGE or not _HAS_NMR_LITE or _nmr_increment_snap_counter is None:
+        return
+    try:
+        _nmr_increment_snap_counter(1)
+    except Exception as e:
+        log_suppressed(
+            logger,
+            key="core_hooks_av_snaptoken.nmr_snap_counter",
+            msg="NMR-Lite Snap-Counter Bridge Fehler",
+            exc=e,
+            level=logging.WARNING,
+            interval_s=300,
+        )
 
 
 
@@ -533,6 +678,19 @@ def av_snaptoken_hook(dt: float, tick: int) -> None:
     except Exception as e:
         log_suppressed(logger, key="core_hooks_av_snaptoken.pass.6b", msg="Suppressed exception (was: pass)", exc=e, level=logging.WARNING, interval_s=600)
 
+    # NMR-Lite Vision-Bridge: vorhandenen Kamera-Fingerprint früh in-memory
+    # melden, unabhängig davon ob der spätere SnapToken-DB-Insert gelingt.
+    # Dadurch kann NMR-Lite PE/EMA aus dem visuellen Kanal berechnen, ohne den
+    # AV-Hook an zusätzliche DB-Schreibpfade zu koppeln.
+    _nmr_bridge_vision_best_effort(
+        vec=vec,
+        out=out,
+        motion=(None if motion is None else float(motion)),
+        q=float(q),
+        tick=tick,
+        ts=int(time.time()),
+    )
+
     # Debug/Telemetry: geschätzte/gelieferte Qualität (best effort)
     _metric_best_effort("cam:token:q", float(q), tick)
 
@@ -578,6 +736,7 @@ def av_snaptoken_hook(dt: float, tick: int) -> None:
 
     if sid is not None:
         _count_day += 1
+        _nmr_increment_snap_counter_best_effort(tick)
         _metric_best_effort("cam:token:saved", 1.0, tick)
         _metric_best_effort("cam:token:accepted", 1.0, tick)
     else:

@@ -1,0 +1,96 @@
+# ==============================================================================
+# Datei:     /etc/systemd/system/oroma-nmr-binding-probe.service
+# Projekt:   ORÓMA – NMR Phase 2.0a Binding-Probe (measure-only, headless)
+# Version:   v1.0
+# Stand:     2026-05-27
+# Autor:     ORÓMA · Jörg Werner + OpenAI GPT-5.5 Thinking
+# ==============================================================================
+#
+# Zweck
+# -----
+# Führt `tools/nmr_binding_probe.py` periodisch als reine Mess-Probe aus.
+# Die Probe sucht wiederkehrende, zeitlich nahe und durch NMR-Lite verstärkte
+# Binding-Kandidaten in vorhandenen SnapChains. Sie materialisiert bewusst nichts:
+#
+#   - KEINE object_nodes-Writes
+#   - KEINE object_relations-Writes
+#   - KEINE Schema-Änderungen
+#   - nur State-/History-Dateien und Diagnose-Metriken via DBWriter
+#
+# Architekturregel
+# ----------------
+# Binding wird nicht ausgelöst. Binding wird angesammelt.
+# Diese Unit dient daher der Beobachtung über mehrere Läufe: dieselben Kandidaten
+# sollen über Tage wiederkehren, bevor später eine Dream-only-Materialisierung
+# überhaupt diskutiert wird.
+#
+# Pfade
+# -----
+# - Tool:    /opt/ai/oroma/tools/nmr_binding_probe.py
+# - State:   /opt/ai/oroma/data/state/nmr_binding_probe_state.json
+# - History: /opt/ai/oroma/data/state/nmr_binding_probe_history.jsonl
+# - Logs:    /opt/ai/oroma/logs/nmr_binding_probe.out.log
+#            /opt/ai/oroma/logs/nmr_binding_probe.err.log
+#
+# Headless
+# --------
+# Keine GUI/Qt/Wayland/X11-Abhängigkeiten. Nur SQLite-Reads, DBWriter-Metriken
+# und atomische State-/History-Dateien.
+# ============================================================================== 
+
+[Unit]
+Description=ORÓMA NMR Binding Probe (measure-only, headless)
+After=oroma-db-writer.service oroma.service
+Wants=oroma-db-writer.service
+ConditionPathExists=/opt/ai/oroma/tools/nmr_binding_probe.py
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai/oroma
+SyslogIdentifier=oroma-nmr-binding-probe
+TimeoutStartSec=600
+
+User=oroma
+Group=oroma
+UMask=002
+
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=UTF-8
+Environment=TZ=Europe/Berlin
+Environment=PYTHONPATH=/opt/ai/oroma
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=OROMA_BASE=/opt/ai/oroma
+Environment=OROMA_DBW_ENABLE=1
+Environment=OROMA_DBW_SOCKET=/opt/ai/oroma/data/state/db_writer.sock
+Environment=OROMA_NMR_BINDING_PROBE_HISTORY_ENABLE=1
+Environment=OROMA_NMR_BINDING_PROBE_HISTORY_MAX_LINES=1000
+Environment=OROMA_NMR_BINDING_PROBE_WINDOW_SEC=21600
+Environment=OROMA_NMR_BINDING_PROBE_MAX_SNAPCHAINS=2000
+Environment=OROMA_NMR_BINDING_PROBE_PAIR_WINDOW_SEC=20
+Environment=OROMA_NMR_BINDING_PROBE_TOPK=25
+
+ExecStartPre=/usr/bin/env bash -lc 'mkdir -p /opt/ai/oroma/logs /opt/ai/oroma/data/state'
+ExecStartPre=/usr/bin/env bash -lc 'touch /opt/ai/oroma/logs/nmr_binding_probe.out.log /opt/ai/oroma/logs/nmr_binding_probe.err.log'
+
+ExecStart=/usr/bin/python3 tools/nmr_binding_probe.py --once --verbose
+
+StandardOutput=append:/opt/ai/oroma/logs/nmr_binding_probe.out.log
+StandardError=append:/opt/ai/oroma/logs/nmr_binding_probe.err.log
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+ReadWritePaths=/opt/ai/oroma/logs /opt/ai/oroma/data
+
+[Install]
+WantedBy=multi-user.target

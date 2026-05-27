@@ -4,8 +4,8 @@
 # Pfad:      /opt/ai/oroma/ui/control_ui.py
 # Projekt:   ORÓMA (Flask UI · Headless Ops)
 # Modul:     Control UI – AgentLoop Start/Stop + Phase/Circadian Status + Systemd Service Control + optional Reboot
-# Version:   v3.7.3
-# Stand:     2026-01-10
+# Version:   v3.7.3+nmr-lite-status-v1
+# Stand:     2026-05-26
 # Autor:     ORÓMA · KI-JWG-X1
 # Lizenz:    MIT
 # =============================================================================
@@ -15,6 +15,7 @@
 # Dieses Modul liefert die „Ops/Control“-Webseite, um ORÓMA im Live-Betrieb
 # zu überwachen und gezielt zu steuern – ohne SSH und ohne Desktop:
 #   - AgentLoop: Start/Stop + Status (dt/tick/heartbeat/in_hook)
+#   - NMR-Lite: optionaler Live-Statusblock aus agent_loop.status()["nmr_lite"]
 #   - Phase/Circadian: robuste Phase-Ermittlung (DAY/DREAM/unknown)
 #   - Services: erlaubte systemd Units abfragen und (re)starten/stoppen
 #   - Optional: System-Reboot via API (hart abgesichert)
@@ -35,7 +36,7 @@
 #   GET  /control/                      -> control.html
 #
 # API: Status
-#   GET  /control/api/status            -> { ok, running, dt, tick, phase, circadian{...}, ... }
+#   GET  /control/api/status            -> { ok, running, dt, tick, phase, circadian{...}, nmr_lite{...}, ... }
 #
 # API: AgentLoop
 #   POST /control/api/start
@@ -252,6 +253,7 @@ def api_status():
         tick = None
         last_heartbeat = None
         hooks = None
+        nmr_lite = None
 
         # Debug/Breadcrumbs: defensiv initialisieren (falls agent_loop fehlt/kaputt)
         in_hook = None
@@ -271,6 +273,7 @@ def api_status():
             in_hook_since = st.get("in_hook_since")
             last_hook = st.get("last_hook")
             last_hook_ms = st.get("last_hook_ms")
+            nmr_lite = st.get("nmr_lite")
 
             # Optional: Hook-Liste (sehr hilfreich bei Debugging)
             if hasattr(agent_loop, "get_registered_hooks"):
@@ -294,6 +297,7 @@ def api_status():
             "last_hook_ms": last_hook_ms,
 
             "hooks": hooks or [],
+            "nmr_lite": nmr_lite or {},
             "phase": phase or "unknown",
             "circadian": circ or {},
         })
