@@ -2,8 +2,8 @@
 # Datei:    /etc/systemd/system/oroma-ptz-motor-reward-collector.service
 # Projekt:  ORÓMA (Offline-Realtime-Organic-Memory-AI)
 # Modul:    PTZ Motor Reward Collector – persistenter Utility-Slow-Loop
-# Version:  v3.8.0+ptz-motor-reward-collector-systemd-v1.0
-# Stand:    2026-05-20
+# Version:  v3.8.0+ptz-motor-reward-collector-systemd-v1.1-dbwriter-timeout
+# Stand:    2026-06-13
 # Autor:    ORÓMA · ChatGPT Patch-Gate
 # Lizenz:   MIT
 # =============================================================================
@@ -61,6 +61,8 @@ Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=OROMA_LOG_DIR=/opt/ai/oroma/logs
 Environment=OROMA_DBW_ENABLE=1
 Environment=OROMA_PTZ_MOTOR_COLLECTOR_ENABLE=1
+Environment=OROMA_DBW_REWARD_TIMEOUT_MS=10000
+Environment=OROMA_DBW_REWARD_PRIORITY=low
 
 ExecStartPre=+/usr/bin/env bash -lc 'mkdir -p /opt/ai/oroma/logs /opt/ai/oroma/data/state && touch /opt/ai/oroma/logs/ptz_motor_reward_collector.out.log /opt/ai/oroma/logs/ptz_motor_reward_collector.err.log && chown oroma:oroma /opt/ai/oroma/logs/ptz_motor_reward_collector.out.log /opt/ai/oroma/logs/ptz_motor_reward_collector.err.log && chown oroma:oroma /opt/ai/oroma/data/state'
 ExecStart=/usr/bin/python3 /opt/ai/oroma/tools/ptz_motor_reward_collector.py

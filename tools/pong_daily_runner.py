@@ -4,8 +4,8 @@
 # Pfad:    /opt/ai/oroma/tools/pong_daily_runner.py
 # Projekt: ORÓMA (Offline-First · Headless · SQLite-First)
 # Modul:   Pong Daily Runner – 1×/Tag Policy+Explore Batches → episodes + episodic_metrics
-# Version: v3.7.3
-# Stand:   2026-02-20
+# Version: v3.7.4
+# Stand:   2026-06-27
 # Autor:   Jörg + GPT-5.2 Thinking
 # Lizenz:  MIT
 # =============================================================================
@@ -43,6 +43,15 @@
 # • Keine UI/pygame Abhängigkeiten
 # • Keine offenen DB-Conns: sql_manager.get_conn() via Context
 # • Keine stillen Fehler: DB-Fehler werden stderr geloggt + ok=false
+#
+# Änderung v3.7.4 (2026-06-27)
+# ------------------------------
+# • UniversalPolicy-kompatibles Lernsignal: learn_items enthalten neben reward
+#   jetzt auch outcome. Der Wert ist identisch zu reward (+1/-1/0), weil
+#   core.universal_policy.Policy.learn_many outcome als primäres Ergebnisfeld
+#   auswertet. Ohne outcome wurden Pong-Lernitems als 0.0/neutral behandelt.
+# • Der deterministische Daily-Seed wird vom Orchestrator explizit gesetzt.
+#   Dieser Runner akzeptiert --seed weiterhin für reproduzierbare Einzeltests.
 # =============================================================================
 
 from __future__ import annotations
@@ -298,6 +307,7 @@ def run_one_game(rng: random.Random,
                         "state_hash": sh,
                         "action": a,
                         "reward": r,
+                        "outcome": r,
                         "pos": pos,
                         "neg": neg,
                         "draw": draw,

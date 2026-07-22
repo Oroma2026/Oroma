@@ -1,0 +1,241 @@
+============================================================
+ORÓMA SNAKE 48H DAUERTEST
+============================================================
+Auswertung:       2026-07-22T10:41:12+02:00
+Testbeginn:       2026-07-19 13:01:21 CEST
+Start-Epoch:      1784458881
+Hostname:         oromaki
+Kernel:           Linux oromaki 6.12.75+rpt-rpi-2712 #1 SMP PREEMPT Debian 1:6.12.75-1+rpt1 (2026-03-11) aarch64 GNU/Linux
+
+============================================================
+1. SERVICES
+============================================================
+  UNIT LOAD ACTIVE SUB DESCRIPTION
+
+0 loaded units listed.
+
+● oroma.service - ORÓMA v3.8 – Engine + Flask-UI + Circadian/DreamWorker (headless)
+     Loaded: loaded (/etc/systemd/system/oroma.service; enabled; preset: enabled)
+    Drop-In: /etc/systemd/system/oroma.service.d
+             └─10-env.conf, 12-groups-audio.conf, 20-vision.conf, 25-vision-rotate.conf, 30-asr-whispercpp.conf, 30-control.conf, 30-ptz.conf, 35-audio.conf, 40-camera.conf, 45-nmr-lite.conf, 90-orchestrator-master.conf
+     Active: active (running) since Tue 2026-07-21 23:59:45 CEST; 10h ago
+ Invocation: 0268c877f98a4c5d8bbf46233ac723e2
+    Process: 2902702 ExecStartPre=/usr/bin/env bash -lc mkdir -p /opt/ai/oroma/logs /opt/ai/oroma/log /opt/ai/oroma/data/state "${OROMA_SNAPCHAINS}" "${OROMA_SNAP_DIR}" /opt/ai/oroma/exports /opt/ai/oroma/uploads /opt/ai/oroma/archives (code=exited, status=0/SUCCESS)
+    Process: 2902712 ExecStartPre=/usr/bin/env bash -lc chown -R oroma:oroma /opt/ai/oroma/logs /opt/ai/oroma/log /opt/ai/oroma/data /opt/ai/oroma/exports /opt/ai/oroma/uploads /opt/ai/oroma/archives || true (code=exited, status=0/SUCCESS)
+   Main PID: 2902723 (python3)
+      Tasks: 20 (limit: 19370)
+        CPU: 7h 40min 27.866s
+     CGroup: /system.slice/oroma.service
+             └─2902723 /usr/bin/python3 -u /opt/ai/oroma/run_oroma.py
+
+Jul 21 23:59:44 oromaki systemd[1]: Starting oroma.service - ORÓMA v3.8 – Engine + Flask-UI + Circadian/DreamWorker (headless)...
+Jul 21 23:59:45 oromaki systemd[1]: Started oroma.service - ORÓMA v3.8 – Engine + Flask-UI + Circadian/DreamWorker (headless).
+
+● oroma-orchestrator.service - ORÓMA – Job Orchestrator (MASTER, Mode B, serial workers)
+     Loaded: loaded (/etc/systemd/system/oroma-orchestrator.service; enabled; preset: enabled)
+    Drop-In: /etc/systemd/system/oroma-orchestrator.service.d
+             └─10-restart-policy.conf, 30-asr-whispercpp.conf, 40-ptz-attention.conf
+     Active: active (running) since Tue 2026-07-21 23:59:45 CEST; 10h ago
+ Invocation: 215287d241494500bb2c6175dbd82f85
+    Process: 2902724 ExecStartPre=/usr/bin/env bash -lc mkdir -p /opt/ai/oroma/logs /opt/ai/oroma/exports /opt/ai/oroma/uploads /opt/ai/oroma/archives (code=exited, status=0/SUCCESS)
+    Process: 2902747 ExecStartPre=/usr/bin/env bash -lc touch /opt/ai/oroma/logs/orchestrator.out.log /opt/ai/oroma/logs/orchestrator.err.log (code=exited, status=0/SUCCESS)
+   Main PID: 2902771 (python3)
+      Tasks: 1 (limit: 19370)
+        CPU: 3h 52min 58.409s
+     CGroup: /system.slice/oroma-orchestrator.service
+             └─2902771 /usr/bin/python3 /opt/ai/oroma/tools/oroma_orchestrator.py
+
+Jul 21 23:59:45 oromaki systemd[1]: Starting oroma-orchestrator.service - ORÓMA – Job Orchestrator (MASTER, Mode B, serial workers)...
+Jul 21 23:59:45 oromaki systemd[1]: Started oroma-orchestrator.service - ORÓMA – Job Orchestrator (MASTER, Mode B, serial workers).
+
+● oroma-db-writer.service - ORÓMA DB Writer (Global Single-Writer Daemon)
+     Loaded: loaded (/etc/systemd/system/oroma-db-writer.service; enabled; preset: enabled)
+     Active: active (running) since Tue 2026-07-07 20:40:14 CEST; 2 weeks 0 days ago
+ Invocation: 9a44829affc34203a48d44d8229b17da
+   Main PID: 929 (python3)
+      Tasks: 4 (limit: 19370)
+        CPU: 34min 54.129s
+     CGroup: /system.slice/oroma-db-writer.service
+             └─929 /usr/bin/python3 -m core.db_writer
+
+Jul 22 10:39:48 oromaki python3[929]: [2026-07-22 10:39:48,739] [INFO] db_writer: queue=0
+Jul 22 10:39:58 oromaki python3[929]: [2026-07-22 10:39:58,752] [INFO] db_writer: queue=0
+Jul 22 10:40:09 oromaki python3[929]: [2026-07-22 10:40:09,165] [INFO] db_writer: queue=0
+Jul 22 10:40:19 oromaki python3[929]: [2026-07-22 10:40:19,472] [INFO] db_writer: slow op=executemany 2327ms tag=energy_manager.decay.node db=stats
+Jul 22 10:40:20 oromaki python3[929]: [2026-07-22 10:40:20,257] [INFO] db_writer: queue=0
+Jul 22 10:40:30 oromaki python3[929]: [2026-07-22 10:40:30,684] [INFO] db_writer: queue=0
+Jul 22 10:40:40 oromaki python3[929]: [2026-07-22 10:40:40,764] [INFO] db_writer: queue=0
+Jul 22 10:40:50 oromaki python3[929]: [2026-07-22 10:40:50,807] [INFO] db_writer: queue=0
+Jul 22 10:41:01 oromaki python3[929]: [2026-07-22 10:41:01,026] [INFO] db_writer: queue=0
+Jul 22 10:41:11 oromaki python3[929]: [2026-07-22 10:41:11,054] [INFO] db_writer: queue=0
+
+============================================================
+2. SERVICE-RESTARTS UND FEHLER SEIT TESTBEGINN
+============================================================
+Jul 19 14:23:04 oromaki python3[929]: [2026-07-19 14:23:04,816] [INFO] db_writer: slow op=exec 483ms tag=ptz.zoom_policy_apply.stats_points.upsert db=stats
+Jul 19 15:01:11 oromaki python3[929]: [2026-07-19 15:01:11,234] [WARNING] db_writer: op failed op=exec tag=binding.v.probe db=stats err=UNIQUE constraint failed: stats_points.src_table, stats_points.src_uid, stats_points.series
+Jul 19 16:31:47 oromaki python3[929]: [2026-07-19 16:31:47,734] [INFO] db_writer: slow op=exec 414ms tag=ptz.zoom_policy_apply.stats_points.upsert db=stats
+Jul 19 21:43:34 oromaki python3[929]: [2026-07-19 21:43:34,586] [INFO] db_writer: slow op=exec 273ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 20 00:21:41 oromaki python3[929]: [2026-07-20 00:21:41,528] [INFO] db_writer: slow op=exec 707ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 20 00:53:55 oromaki python3[929]: [2026-07-20 00:53:55,345] [INFO] db_writer: slow op=exec 1147ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 20 02:19:27 oromaki python3[929]: [2026-07-20 02:19:27,644] [INFO] db_writer: slow op=exec 2976ms tag=ptz.zoom_policy_apply.stats_points.upsert db=stats
+Jul 20 03:11:35 oromaki python3[929]: [2026-07-20 03:11:35,063] [INFO] db_writer: slow op=exec 851ms tag=ptz.zoom_policy_apply.stats_points.upsert db=stats
+Jul 20 04:22:51 oromaki python3[929]: [2026-07-20 04:22:51,220] [INFO] db_writer: slow op=exec 1020ms tag=ptz.zoom_context_probe.stats_points.upsert db=stats
+Jul 20 06:43:41 oromaki python3[929]: [2026-07-20 06:43:41,842] [WARNING] db_writer: op failed op=exec tag=synapses.probe db=stats err=UNIQUE constraint failed: stats_points.src_table, stats_points.src_uid, stats_points.series
+Jul 20 06:54:24 oromaki python3[929]: [2026-07-20 06:54:24,886] [INFO] db_writer: slow op=exec 353ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 20 07:38:05 oromaki python3[929]: [2026-07-20 07:38:05,367] [INFO] db_writer: slow op=exec 765ms tag=ptz.zoom_policy_apply.stats_points.upsert db=stats
+Jul 20 07:59:15 oromaki python3[929]: [2026-07-20 07:59:15,479] [INFO] db_writer: slow op=exec 958ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 20 08:29:56 oromaki python3[929]: [2026-07-20 08:29:56,218] [INFO] db_writer: slow op=exec 1027ms tag=ptz.zoom_policy_apply.stats_points.upsert db=stats
+Jul 20 09:16:18 oromaki python3[929]: [2026-07-20 09:16:18,728] [WARNING] db_writer: op failed op=exec tag=binding.v.probe db=stats err=UNIQUE constraint failed: stats_points.src_table, stats_points.src_uid, stats_points.series
+Jul 20 09:34:15 oromaki python3[929]: [2026-07-20 09:34:15,280] [INFO] db_writer: slow op=exec 408ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 20 10:15:53 oromaki python3[929]: [2026-07-20 10:15:53,556] [WARNING] db_writer: op failed op=exec tag=synapses.probe db=stats err=UNIQUE constraint failed: stats_points.src_table, stats_points.src_uid, stats_points.series
+Jul 20 10:25:45 oromaki python3[929]: [2026-07-20 10:25:45,228] [INFO] db_writer: slow op=exec 315ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 20 10:58:04 oromaki python3[929]: [2026-07-20 10:58:04,789] [INFO] db_writer: slow op=exec 530ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 20 11:30:40 oromaki python3[929]: [2026-07-20 11:30:40,584] [INFO] db_writer: slow op=exec 612ms tag=ptz.zoom_policy_apply.stats_points.upsert db=stats
+Jul 20 13:16:30 oromaki python3[929]: [2026-07-20 13:16:30,283] [WARNING] db_writer: op failed op=exec tag=binding.v.probe db=stats err=UNIQUE constraint failed: stats_points.src_table, stats_points.src_uid, stats_points.series
+Jul 20 15:12:34 oromaki python3[929]: [2026-07-20 15:12:34,963] [INFO] db_writer: slow op=exec 542ms tag=ptz.zoom_policy_apply.stats_points.upsert db=stats
+Jul 20 15:34:21 oromaki python3[929]: [2026-07-20 15:34:21,417] [INFO] db_writer: slow op=exec 4076ms tag=ptz.zoom_policy_apply.stats_points.upsert db=stats
+Jul 20 17:34:57 oromaki python3[929]: [2026-07-20 17:34:57,752] [INFO] db_writer: slow op=exec 600ms tag=ptz.zoom_context_probe.stats_points.upsert db=stats
+Jul 20 18:53:04 oromaki python3[929]: [2026-07-20 18:53:04,812] [INFO] db_writer: slow op=exec 447ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 20 20:39:34 oromaki python3[929]: [2026-07-20 20:39:34,964] [INFO] db_writer: slow op=exec 1260ms tag=ptz.zoom_context_probe.stats_points.upsert db=stats
+Jul 20 21:42:24 oromaki python3[929]: [2026-07-20 21:42:24,784] [INFO] db_writer: slow op=exec 643ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 20 22:35:26 oromaki python3[929]: [2026-07-20 22:35:26,751] [INFO] db_writer: slow op=exec 1075ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 21 00:37:37 oromaki python3[929]: [2026-07-21 00:37:37,125] [INFO] db_writer: slow op=exec 1230ms tag=ptz.zoom_policy_apply.stats_points.upsert db=stats
+Jul 21 03:47:14 oromaki python3[929]: [2026-07-21 03:47:14,812] [INFO] db_writer: slow op=exec 895ms tag=ptz.zoom_context_probe.stats_points.upsert db=stats
+Jul 21 05:17:55 oromaki python3[929]: [2026-07-21 05:17:55,543] [INFO] db_writer: slow op=exec 989ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 21 11:54:55 oromaki python3[929]: [2026-07-21 11:54:55,419] [INFO] db_writer: slow op=exec 843ms tag=ptz.zoom_policy_apply.stats_points.upsert db=stats
+Jul 21 13:46:45 oromaki python3[929]: [2026-07-21 13:46:45,927] [INFO] db_writer: slow op=exec 411ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 21 17:03:25 oromaki python3[929]: [2026-07-21 17:03:25,844] [INFO] db_writer: slow op=exec 741ms tag=ptz.zoom_context_probe.stats_points.upsert db=stats
+Jul 21 18:03:05 oromaki python3[929]: [2026-07-21 18:03:05,925] [INFO] db_writer: slow op=exec 978ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 21 19:04:54 oromaki python3[929]: [2026-07-21 19:04:54,865] [INFO] db_writer: slow op=exec 390ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 21 19:56:35 oromaki python3[929]: [2026-07-21 19:56:35,258] [INFO] db_writer: slow op=exec 723ms tag=ptz.zoom_policy_apply.stats_points.upsert db=stats
+Jul 21 22:04:15 oromaki python3[929]: [2026-07-21 22:04:15,181] [INFO] db_writer: slow op=exec 355ms tag=ptz.zoom_policy_apply.stats_points.upsert db=stats
+Jul 21 23:04:42 oromaki python3[929]: [2026-07-21 23:04:42,821] [WARNING] db_writer: op failed op=exec tag=binding.v.probe db=stats err=UNIQUE constraint failed: stats_points.src_table, stats_points.src_uid, stats_points.series
+Jul 21 23:54:23 oromaki python3[929]: [2026-07-21 23:54:23,354] [INFO] db_writer: slow op=exec 287ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 21 23:54:23 oromaki python3[929]: [2026-07-21 23:54:23,910] [INFO] db_writer: slow op=exec 554ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 21 23:54:24 oromaki python3[929]: [2026-07-21 23:54:24,497] [INFO] db_writer: slow op=exec 575ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 21 23:59:02 oromaki systemd[1]: Stopped oroma-orchestrator.service - ORÓMA – Job Orchestrator (MASTER, Mode B, serial workers).
+Jul 21 23:59:44 oromaki systemd[1]: oroma.service: Main process exited, code=killed, status=9/KILL
+Jul 21 23:59:44 oromaki systemd[1]: oroma.service: Failed with result 'timeout'.
+Jul 21 23:59:44 oromaki systemd[1]: Stopped oroma.service - ORÓMA v3.8 – Engine + Flask-UI + Circadian/DreamWorker (headless).
+Jul 21 23:59:45 oromaki systemd[1]: Started oroma.service - ORÓMA v3.8 – Engine + Flask-UI + Circadian/DreamWorker (headless).
+Jul 21 23:59:45 oromaki systemd[1]: Started oroma-orchestrator.service - ORÓMA – Job Orchestrator (MASTER, Mode B, serial workers).
+Jul 22 00:43:06 oromaki python3[929]: [2026-07-22 00:43:06,188] [INFO] db_writer: slow op=exec 292ms tag=ptz.zoom_policy_apply.stats_points.upsert db=stats
+Jul 22 00:43:06 oromaki python3[929]: [2026-07-22 00:43:06,799] [INFO] db_writer: slow op=exec 608ms tag=ptz.zoom_policy_apply.stats_points.upsert db=stats
+Jul 22 00:43:07 oromaki python3[929]: [2026-07-22 00:43:07,117] [INFO] db_writer: slow op=exec 311ms tag=ptz.zoom_policy_apply.stats_points.upsert db=stats
+Jul 22 00:43:14 oromaki python3[929]: [2026-07-22 00:43:14,062] [INFO] db_writer: slow op=exec 6943ms tag=ptz.zoom_policy_apply.stats_points.upsert db=stats
+Jul 22 01:37:11 oromaki python3[929]: [2026-07-22 01:37:11,311] [INFO] db_writer: slow op=exec 333ms tag=ptz.zoom_policy_apply.stats_points.upsert db=stats
+Jul 22 02:43:34 oromaki python3[929]: [2026-07-22 02:43:34,919] [INFO] db_writer: slow op=exec 556ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 22 03:04:37 oromaki python3[929]: [2026-07-22 03:04:37,334] [INFO] db_writer: slow op=exec 1136ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 22 03:04:38 oromaki python3[929]: [2026-07-22 03:04:38,631] [INFO] db_writer: slow op=exec 287ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 22 03:04:40 oromaki python3[929]: [2026-07-22 03:04:40,003] [INFO] db_writer: slow op=exec 286ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 22 03:35:52 oromaki python3[929]: [2026-07-22 03:35:52,447] [INFO] db_writer: slow op=exec 895ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 22 04:28:12 oromaki python3[929]: [2026-07-22 04:28:12,308] [INFO] db_writer: slow op=exec 1241ms tag=ptz.zoom_policy_preview.stats_points.upsert db=stats
+Jul 22 05:19:07 oromaki python3[929]: [2026-07-22 05:19:07,236] [INFO] db_writer: slow op=exec 2011ms tag=ptz.zoom_policy_apply.stats_points.upsert db=stats
+Jul 22 10:22:55 oromaki python3[929]: [2026-07-22 10:22:55,287] [INFO] db_writer: slow op=exec 658ms tag=ptz.zoom_context_probe.stats_points.upsert db=stats
+
+============================================================
+3. SNAKE-POLICY AKTUELL
+============================================================
+namespace     rules  samples   positive  negative  draws   q_avg      q_min  q_max  newest_rule_ts  newest_rule_local  
+------------  -----  --------  --------  --------  ------  ---------  -----  -----  --------------  -------------------
+game:snake    45544  13486728  145741    12756157  584830  -0.534767  -1.0   1.0    1784685007      2026-07-22 03:50:07
+game:snake3d  6577   48246     47534     708       4       0.876675   -1.0   1.0    1784695392      2026-07-22 06:43:12
+
+============================================================
+4. PROMOTIONEN SEIT TESTBEGINN
+============================================================
+status            count  first_id  last_id  first_local          last_local         
+----------------  -----  --------  -------  -------------------  -------------------
+observation_only  9      5448      6433     2026-07-19 18:54:08  2026-07-22 03:51:08
+policy_written    2      5445      5446     2026-07-19 18:54:08  2026-07-19 18:54:08
+promotion_review  9      5449      6431     2026-07-19 18:54:08  2026-07-22 03:51:08
+
+============================================================
+5. TARGETED ACQUISITION LIFECYCLE SEIT TESTBEGINN
+============================================================
+status             count  direct_outcomes  attempts_executed  first_promotion  last_promotion  first_local          last_local         
+-----------------  -----  ---------------  -----------------  ---------------  --------------  -------------------  -------------------
+evidence_acquired  1      1                1                  1771             1771            2026-07-22 00:02:11  2026-07-22 00:02:11
+
+============================================================
+6. OUTCOME QUEUE SEIT TESTBEGINN
+============================================================
+status          outcome  policy_write_allowed  count  first_id  last_id  first_local          last_local         
+--------------  -------  --------------------  -----  --------  -------  -------------------  -------------------
+outcome_ready   pos      0                     1      605       605      2026-07-21 04:29:46  2026-07-21 04:29:46
+policy_written  neg      1                     2      303       304      2026-07-19 18:56:26  2026-07-19 19:03:05
+policy_written  pos      1                     1      786       786      2026-07-22 00:07:57  2026-07-22 00:07:57
+
+============================================================
+7. POLICY MINI-WRITE LEDGER SEIT TESTBEGINN
+============================================================
+status   policy_written  blocked_reason                               count  n_inc  pos_inc  neg_inc  draw_inc  first_ledger_id  last_ledger_id
+-------  --------------  -------------------------------------------  -----  -----  -------  -------  --------  ---------------  --------------
+written  1               -                                            3      3      1        2        0         4494             17136         
+blocked  0               outcome_queue_row_stale,promotion_row_stale  7908   0      0        0        0         2914             17108         
+blocked  0               promotion_row_stale                          1      0      0        0        0         12518            12518         
+
+============================================================
+8. PIPELINE-GESAMTSUMMEN SEIT TESTBEGINN
+============================================================
+promotions  acquisitions  acquisitions_with_outcome  outcome_rows  policy_writes  blocked_writes
+----------  ------------  -------------------------  ------------  -------------  --------------
+20          1             1                          4             3              7909          
+
+============================================================
+9. LETZTE 30 PIPELINE-ERGEBNISSE
+============================================================
+ledger_id  promotion_id  namespace   state_hash                                                      action  outcome  status   policy_written  blocked_reason                               n_inc  pos_inc  neg_inc  draw_inc  created_local      
+---------  ------------  ----------  --------------------------------------------------------------  ------  -------  -------  --------------  -------------------------------------------  -----  -------  -------  --------  -------------------
+17136      1771          game:snake  snake:pro_v2:d=100:ff=-1:fr=1:dist=2:len=5:space=gt96:hun=32    2       pos      written  1               -                                            1      1        0        0         2026-07-22 00:07:57
+17108      2602          game:snake  snake:pro_v2:d=100:ff=-1:fr=-1:dist=2:len=5:space=gt96:hun=8    1       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-22 00:02:11
+17107      2601          game:snake  snake:pro_v2:d=000:ff=0:fr=-1:dist=2:len=5:space=gt96:hun=0     1       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-22 00:02:11
+17106      519           game:snake  snake:pro_v2:d=001:ff=0:fr=-1:dist=4:len=18:space=gt96:hun=32   1       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-22 00:02:11
+17105      517           game:snake  snake:pro_v2:d=001:ff=-1:fr=0:dist=4:len=18:space=gt96:hun=32   1       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-22 00:02:11
+17104      513           game:snake  snake:pro_v2:d=011:ff=1:fr=-1:dist=24:len=8:space=gt96:hun=4    1       neg      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-22 00:02:11
+17103      1778          game:snake  snake:pro_v2:d=000:ff=0:fr=1:dist=11:len=3:space=gt96:hun=4     0       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-22 00:02:11
+17102      1777          game:snake  snake:pro_v2:d=100:ff=-1:fr=1:dist=11:len=5:space=gt96:hun=0    2       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-22 00:02:11
+17101      1775          game:snake  snake:pro_v2:d=100:ff=0:fr=1:dist=11:len=18:space=gt96:hun=32   2       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-22 00:02:11
+17100      1773          game:snake  snake:pro_v2:d=001:ff=-1:fr=-1:dist=11:len=8:space=gt96:hun=32  0       neg      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-22 00:02:11
+17099      1772          game:snake  snake:pro_v2:d=000:ff=1:fr=-1:dist=16:len=12:space=gt96:hun=8   0       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-22 00:02:11
+17098      514           game:snake  snake:pro_v2:d=000:ff=-1:fr=-1:dist=16:len=8:space=gt96:hun=0   0       neg      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-22 00:02:11
+17097      1774          game:snake  snake:pro_v2:d=001:ff=1:fr=1:dist=7:len=18:space=gt96:hun=32    0       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-22 00:02:11
+17096      1771          game:snake  snake:pro_v2:d=100:ff=-1:fr=1:dist=2:len=5:space=gt96:hun=32    2       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-22 00:02:11
+17095      1779          game:snake  snake:pro_v2:d=100:ff=-1:fr=-1:dist=7:len=8:space=gt96:hun=4    1       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-22 00:02:11
+17094      1771          game:snake  snake:pro_v2:d=100:ff=-1:fr=1:dist=2:len=5:space=gt96:hun=32    2       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-22 00:02:11
+17087      2602          game:snake  snake:pro_v2:d=100:ff=-1:fr=-1:dist=2:len=5:space=gt96:hun=8    1       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-21 23:54:41
+17086      2601          game:snake  snake:pro_v2:d=000:ff=0:fr=-1:dist=2:len=5:space=gt96:hun=0     1       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-21 23:54:41
+17085      519           game:snake  snake:pro_v2:d=001:ff=0:fr=-1:dist=4:len=18:space=gt96:hun=32   1       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-21 23:54:41
+17084      517           game:snake  snake:pro_v2:d=001:ff=-1:fr=0:dist=4:len=18:space=gt96:hun=32   1       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-21 23:54:41
+17083      513           game:snake  snake:pro_v2:d=011:ff=1:fr=-1:dist=24:len=8:space=gt96:hun=4    1       neg      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-21 23:54:41
+17082      1778          game:snake  snake:pro_v2:d=000:ff=0:fr=1:dist=11:len=3:space=gt96:hun=4     0       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-21 23:54:41
+17081      1777          game:snake  snake:pro_v2:d=100:ff=-1:fr=1:dist=11:len=5:space=gt96:hun=0    2       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-21 23:54:41
+17080      1775          game:snake  snake:pro_v2:d=100:ff=0:fr=1:dist=11:len=18:space=gt96:hun=32   2       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-21 23:54:41
+17079      1773          game:snake  snake:pro_v2:d=001:ff=-1:fr=-1:dist=11:len=8:space=gt96:hun=32  0       neg      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-21 23:54:41
+17078      1772          game:snake  snake:pro_v2:d=000:ff=1:fr=-1:dist=16:len=12:space=gt96:hun=8   0       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-21 23:54:41
+17077      514           game:snake  snake:pro_v2:d=000:ff=-1:fr=-1:dist=16:len=8:space=gt96:hun=0   0       neg      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-21 23:54:41
+17076      1774          game:snake  snake:pro_v2:d=001:ff=1:fr=1:dist=7:len=18:space=gt96:hun=32    0       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-21 23:54:41
+17075      1771          game:snake  snake:pro_v2:d=100:ff=-1:fr=1:dist=2:len=5:space=gt96:hun=32    2       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-21 23:54:41
+17074      1779          game:snake  snake:pro_v2:d=100:ff=-1:fr=-1:dist=7:len=8:space=gt96:hun=4    1       pos      blocked  0               outcome_queue_row_stale,promotion_row_stale  0      0        0        0         2026-07-21 23:54:41
+
+============================================================
+10. DATENBANK-INTEGRITÄT
+============================================================
+ok
+
+============================================================
+11. SYSTEMRESSOURCEN
+============================================================
+ 13:40:59 up 14 days, 17:00,  2 users,  load average: 3.95, 3.71, 3.89
+               total        used        free      shared  buff/cache   available
+Mem:            15Gi       1.4Gi       139Mi       656Ki        14Gi        14Gi
+Swap:          2.0Gi       476Mi       1.5Gi
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/mmcblk0p2  117G   96G   17G  86% /
+
+============================================================
+ENDE DER 48H-AUSWERTUNG
+============================================================
+
+Fertiger Bericht: /tmp/oroma_snake_48h_check_20260722_104112.log

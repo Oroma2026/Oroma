@@ -54,8 +54,6 @@ ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="0b0e", ATTR{idProduct}=="ae6a"
 # Daher hier nur die sichere Einstellung power/control=on oben – und zusätzlich
 # ein optionaler RUN-Hook, der robust per shell schreibt (wenn Attribute existieren).
 
-ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="328f", ATTR{idProduct}=="00c0", \
-  RUN+="/bin/sh -c 'for p in /sys$devpath/power/autosuspend /sys$devpath/power/autosuspend_delay_ms; do [ -e "$p" ] && echo -1 > "$p" 2>/dev/null || true; done'"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="328f", ATTR{idProduct}=="00c0", RUN+="/bin/sh -c 'test -e /sys$devpath/power/autosuspend && echo -1 > /sys$devpath/power/autosuspend 2>/dev/null || true; test -e /sys$devpath/power/autosuspend_delay_ms && echo -1 > /sys$devpath/power/autosuspend_delay_ms 2>/dev/null || true'"
 
-ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="0b0e", ATTR{idProduct}=="ae6a", \
-  RUN+="/bin/sh -c 'for p in /sys$devpath/power/autosuspend /sys$devpath/power/autosuspend_delay_ms; do [ -e "$p" ] && echo -1 > "$p" 2>/dev/null || true; done'"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="0b0e", ATTR{idProduct}=="ae6a", RUN+="/bin/sh -c 'test -e /sys$devpath/power/autosuspend && echo -1 > /sys$devpath/power/autosuspend 2>/dev/null || true; test -e /sys$devpath/power/autosuspend_delay_ms && echo -1 > /sys$devpath/power/autosuspend_delay_ms 2>/dev/null || true'"

@@ -5,8 +5,8 @@
 # Projekt:     ORÓMA
 # Komponente:  Autonomie / Offline-Learning
 # Modul:       Gap-Miner (proaktives Mining von knowledge_gaps aus policy_rules + rules)
-# Version:     v1.1
-# Stand:       2026-04-27
+# Version:     v1.3.1-large-db-safe-slices
+# Stand:       2026-07-07
 # Autor:       Jörg Werner (public) / ORÓMA Project (internal)
 # Lizenz:      MIT
 # =============================================================================
@@ -36,8 +36,34 @@
 #    - löscht/ändert nichts in policy_rules/rules
 #
 # 3) Lock-robust (SQLite + Orchestrator)
-#    - nutzt core.sql_manager (busy_timeout + _run_with_lock_retry)
+#    - liest weiter ueber core.sql_manager
+#    - schreibt im Orchestrator/Strict-Mode bevorzugt gebuendelt ueber DBWriter
+#    - keine hunderten Einzel-Transaktionen pro Lauf mehr
 #    - respektiert ENV: OROMA_DB_BUSY_TIMEOUT_MS, OROMA_DB_LOCK_RETRY_SEC
+#
+# PATCH-HINWEIS 2026-07-07 / Gap-Miner Large-DB Safe Slices v3
+# ---------------------------------------------------------------------
+# In den Live-Logs war gap_miner.py die groesste Baustelle: wiederholte
+# Orchestrator-Timeouts nach 300s. Die Ursache ist nicht ein UI-/Qt-Problem,
+# sondern produktiver Last-/Lock-Druck: zu grosse Scan-Flaechen plus viele
+# einzelne knowledge_gaps-Inserts koennen den seriellen Orchestrator blockieren.
+#
+# Diese Version macht den Gap-Miner deshalb laufzeit- und write-bewusst:
+#   - Rotation bleibt erhalten: pro Lauf nur Namespace+Gap-Art.
+#   - Inserts werden erst gesammelt und dann in einem DBWriter-executemany
+#     geschrieben, sofern OROMA_DBW_ENABLE=1 aktiv ist.
+#   - Im Strict-Local-Writes-Modus wird ohne DBWriter NICHT lokal geschrieben,
+#     sondern sichtbar geblockt.
+#   - Es gibt ein hartes Insert-Budget pro Lauf
+#     (OROMA_GAP_MINER_MAX_INSERTS_PER_RUN).
+#   - logic_conflict vermeidet die alte Window-Function ueber policy_rules und
+#     nutzt einen bounded Python-Top1-Pfad.
+#   - Summary gibt write_path, write_block_reason, budget_hit und DBWriter-
+#     Rowcount sichtbar aus.
+#
+# Ziel: Headless, produktiv, fail-open und Orchestrator-freundlich. Der Miner
+# darf Luecken melden, aber nie die gesamte Lernpipeline durch Timeout/Locks
+# blockieren.
 #
 # GAP-TYPEN
 # ---------
@@ -111,8 +137,34 @@ import sys
 import time
 from typing import Any, Dict, List, Tuple, Optional
 import logging
+import sqlite3
 from pathlib import Path
 from core.log_guard import log_suppressed
+
+_LOG = logging.getLogger("oroma.gap_miner")
+
+
+def _guard_log(key: str, msg: str, exc: Optional[BaseException] = None, level: int = logging.WARNING, interval_s: int = 300) -> None:
+    """Rate-limited Gap-Miner logging mit korrekter core.log_guard-Signatur.
+
+    Der Gap-Miner laeuft im seriellen Orchestrator. Loggingfehler duerfen niemals
+    einen eigentlich kontrollierten Budget-/Interrupt-Pfad in einen Prozess-Crash
+    verwandeln. Deshalb gibt es diese lokale Huelle um log_suppressed().
+    """
+    try:
+        log_suppressed(_LOG, key=str(key), msg=str(msg), exc=exc, level=level, interval_s=int(interval_s))
+    except Exception:
+        try:
+            _LOG.log(level, "%s: %r", msg, exc)
+        except Exception:
+            pass
+
+try:
+    from core import db_writer_client  # type: ignore
+    _DBW_CLIENT_AVAILABLE = True
+except Exception:
+    db_writer_client = None  # type: ignore
+    _DBW_CLIENT_AVAILABLE = False
 
 
 # ---- Bootstrap (PYTHONPATH) ----
@@ -140,6 +192,79 @@ def _env_bool(name: str, default: bool) -> bool:
     if v == "":
         return bool(default)
     return v in ("1", "true", "yes", "y", "on")
+
+
+def _dbw_enabled() -> bool:
+    """True, wenn der Single-Writer fuer Gap-Inserts aktiv genutzt werden darf."""
+    try:
+        return bool(_DBW_CLIENT_AVAILABLE and db_writer_client is not None and db_writer_client.enabled())
+    except Exception:
+        return False
+
+
+def _strict_local_writes() -> bool:
+    """ORÓMA-Strict-Modus: keine lokalen Writes an der DB vorbei."""
+    return _env_bool("OROMA_DBW_STRICT_LOCAL_WRITES", False)
+
+
+def _time_budget_hit(start_ts: float, max_runtime_s: int, reserve_s: float = 0.0) -> bool:
+    """Weiches Laufzeitbudget fuer Orchestrator-Jobs.
+
+    reserve_s erlaubt, vor teuren Inserts/Scans abzubrechen, damit der Prozess
+    noch sauber Summary + State schreiben kann und nicht in den systemd/ORCH-
+    Timeout laeuft.
+    """
+    try:
+        budget = float(max(0, int(max_runtime_s)))
+    except Exception:
+        budget = 0.0
+    if budget <= 0:
+        return False
+    # Reserve darf bei sehr kleinen Testbudgets nicht den kompletten Lauf
+    # sofort als budget_hit markieren. Mindestens 1s reale Laufzeit bleibt.
+    reserve = min(float(max(0.0, reserve_s)), max(0.0, budget - 1.0))
+    return (time.time() - float(start_ts)) >= max(0.0, budget - reserve)
+
+
+def _install_sql_progress_budget(conn: Any, start_ts: float, max_runtime_s: int, reserve_s: float = 3.0) -> bool:
+    """Installiert einen SQLite-Progress-Handler gegen einzelne Hänger-Abfragen.
+
+    Hintergrund:
+      Das Python-Laufzeitbudget greift nur zwischen Abfragen. Wenn eine einzelne
+      SQLite-Abfrage durch GROUP BY/ORDER BY/full scans minutenlang läuft, kann der
+      Orchestrator trotzdem in den Timeout laufen. SQLite ruft den Progress-Handler
+      regelmäßig während der VM-Ausführung auf; Rückgabe 1 bricht die Query mit
+      ``sqlite3.OperationalError: interrupted`` ab.
+
+    Der Handler ist nur für die aktuelle Connection aktiv und wird in ``finally``
+    wieder entfernt. Keine Writes, keine Schemaänderung.
+    """
+    try:
+        if int(max_runtime_s or 0) <= 0 or not hasattr(conn, "set_progress_handler"):
+            return False
+        deadline = float(start_ts) + max(1.0, float(max_runtime_s) - float(max(0.0, reserve_s)))
+        step = _env_int("OROMA_GAP_MINER_SQL_PROGRESS_STEPS", 20000)
+
+        def _progress() -> int:
+            return 1 if time.time() >= deadline else 0
+
+        conn.set_progress_handler(_progress, max(1000, int(step)))
+        return True
+    except Exception as e:
+        _guard_log('tools/gap_miner.py:sql_progress_install', 'SQLite progress-budget install failed', exc=e, level=logging.DEBUG)
+        return False
+
+
+def _clear_sql_progress_budget(conn: Any) -> None:
+    try:
+        if hasattr(conn, "set_progress_handler"):
+            conn.set_progress_handler(None, 0)
+    except Exception as e:
+        _guard_log('tools/gap_miner.py:sql_progress_clear', 'SQLite progress-budget clear failed', exc=e, level=logging.DEBUG)
+
+
+def _is_sql_budget_interrupt(exc: BaseException) -> bool:
+    return isinstance(exc, sqlite3.OperationalError) and "interrupted" in str(exc).lower()
 
 
 def _now_ts() -> int:
@@ -175,7 +300,7 @@ def _save_state(path: str, data: Dict[str, Any]) -> None:
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
         tmp.replace(p)
     except Exception as e:
-        log_suppressed('tools/gap_miner.py:state_save', exc=e, level=logging.WARNING)
+        _guard_log('tools/gap_miner.py:state_save', 'Gap-Miner state save failed', exc=e, level=logging.WARNING)
 
 
 def _normalize_rotation_state(state: Dict[str, Any], namespaces: List[str], kinds: List[str]) -> Dict[str, Any]:
@@ -391,6 +516,141 @@ def _fetch_low_evidence(conn, ns_like: str, thr_n: int, row_limit: int) -> List[
     return out
 
 
+def _fetch_low_evidence_window(
+    conn,
+    ns_like: str,
+    thr_n: int,
+    row_limit: int,
+    start_id: int,
+    row_scan_limit: int,
+) -> Tuple[List[Dict[str, Any]], int, int, bool]:
+    """Low-Evidence Scan als ID-Fenster fuer sehr grosse Live-DBs.
+
+    Auf der realen ORÓMA-DB (~67 GB) ist ein globales
+    ``WHERE n < ? ORDER BY n, ABS(q), last_ts`` ohne passenden Index nicht
+    orchestrator-tauglich. Diese Variante liest nur ein kleines rowid/id-Fenster
+    in Primärschlüsselreihenfolge, bewertet die Treffer in Python und speichert
+    den Cursor im Gap-Miner-State. Damit wird ueber viele Tages-/Nachtläufe die
+    ganze Tabelle abgearbeitet, aber kein einzelner Lauf blockiert.
+    """
+    if int(row_limit or 0) <= 0 or int(row_scan_limit or 0) <= 0:
+        return [], int(start_id or 0), 0, False
+    cur = conn.cursor()
+
+    def _sample(after_id: int, limit_rows: int) -> List[Any]:
+        cur.execute(
+            """
+            SELECT id, namespace, state_hash, action, n, q, COALESCE(last_ts,0) AS last_ts
+            FROM policy_rules
+            WHERE id > ?
+              AND namespace LIKE ?
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (int(max(0, after_id)), str(ns_like), int(max(1, limit_rows))),
+        )
+        return cur.fetchall() or []
+
+    rows = _sample(int(max(0, start_id)), int(row_scan_limit))
+    wrapped = False
+    if not rows and int(start_id or 0) > 0:
+        wrapped = True
+        rows = _sample(0, int(row_scan_limit))
+    if not rows:
+        return [], 0 if wrapped else int(start_id or 0), 0, wrapped
+
+    next_id = int(max((int((r["id"] if hasattr(r, "keys") else r[0]) or 0) for r in rows), default=int(start_id or 0)))
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        n_val = int((r["n"] if hasattr(r, "keys") else r[4]) or 0)
+        if n_val >= int(thr_n):
+            continue
+        if hasattr(r, "keys"):
+            out.append(dict(r))
+        else:
+            out.append({
+                "id": r[0],
+                "namespace": r[1],
+                "state_hash": r[2],
+                "action": r[3],
+                "n": r[4],
+                "q": r[5],
+                "last_ts": r[6] if len(r) > 6 else 0,
+            })
+        if len(out) >= int(row_limit):
+            break
+    out.sort(key=lambda x: (int(x.get("n") or 0), abs(float(x.get("q") or 0.0)), -int(x.get("last_ts") or 0)))
+    return out[: int(row_limit)], next_id, int(len(rows)), wrapped
+
+
+def _fetch_best_policy_states_window(
+    conn,
+    ns_like: str,
+    limit_states: int,
+    start_id: int,
+    row_scan_limit: int,
+    min_n: int,
+    min_abs_q: float,
+) -> Tuple[List[Dict[str, Any]], int, int, bool]:
+    """Logic-Conflict Kandidaten als ID-Fenster statt globalem Sort.
+
+    Die alte bounded Variante nutzte immer noch
+    ``ORDER BY COALESCE(last_ts,0) DESC, n DESC`` auf policy_rules. Auf der
+    67-GB-Live-DB ist das ohne passenden Index faktisch ein Vollscan/SORT. Diese
+    Funktion liest ein kleines id-Fenster, filtert n/q direkt und bestimmt Top-1
+    pro State in Python. Der Cursor erlaubt naechsten Läufen Fortsetzung.
+    """
+    if int(limit_states or 0) <= 0 or int(row_scan_limit or 0) <= 0:
+        return [], int(start_id or 0), 0, False
+    cur = conn.cursor()
+
+    def _sample(after_id: int, limit_rows: int) -> List[Any]:
+        cur.execute(
+            """
+            SELECT id, namespace, state_hash, action, q, n, COALESCE(last_ts,0) AS last_ts
+            FROM policy_rules
+            WHERE id > ?
+              AND namespace LIKE ?
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (int(max(0, after_id)), str(ns_like), int(max(1, limit_rows))),
+        )
+        return cur.fetchall() or []
+
+    rows = _sample(int(max(0, start_id)), int(row_scan_limit))
+    wrapped = False
+    if not rows and int(start_id or 0) > 0:
+        wrapped = True
+        rows = _sample(0, int(row_scan_limit))
+    if not rows:
+        return [], 0 if wrapped else int(start_id or 0), 0, wrapped
+
+    next_id = int(max((int((r["id"] if hasattr(r, "keys") else r[0]) or 0) for r in rows), default=int(start_id or 0)))
+    best_by_state: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for r in rows:
+        if hasattr(r, "keys"):
+            ns = str(r["namespace"] or "")
+            sh = str(r["state_hash"] or "")
+            cand = {"namespace": ns, "state_hash": sh, "a_pol": str(r["action"] or ""), "q_pol": float(r["q"] or 0.0), "n_pol": int(r["n"] or 0), "last_ts": int(r["last_ts"] or 0)}
+        else:
+            ns = str(r[1] or "")
+            sh = str(r[2] or "")
+            cand = {"namespace": ns, "state_hash": sh, "a_pol": str(r[3] or ""), "q_pol": float(r[4] or 0.0), "n_pol": int(r[5] or 0), "last_ts": int(r[6] or 0)}
+        if not ns or not sh or not cand["a_pol"]:
+            continue
+        if int(cand["n_pol"]) < int(min_n):
+            continue
+        if abs(float(cand["q_pol"])) < float(min_abs_q):
+            continue
+        key = (ns, sh)
+        prev = best_by_state.get(key)
+        if prev is None or (abs(float(cand["q_pol"])), int(cand["n_pol"]), int(cand.get("last_ts") or 0)) > (abs(float(prev["q_pol"])), int(prev["n_pol"]), int(prev.get("last_ts") or 0)):
+            best_by_state[key] = cand
+
+    out = sorted(best_by_state.values(), key=lambda x: (abs(float(x.get("q_pol") or 0.0)), int(x.get("n_pol") or 0), int(x.get("last_ts") or 0)), reverse=True)
+    return out[: int(limit_states)], next_id, int(len(rows)), wrapped
+
 
 def _chunked(iterable, n: int):
     """Yield lists of up to n items."""
@@ -479,6 +739,115 @@ def _fetch_policy_rows_for_states(conn, states: List[Tuple[str, str]], min_n: in
                         }
                     )
     return out
+
+
+def _fetch_high_uncertainty_window(
+    conn,
+    ns_like: str,
+    eps: float,
+    min_n: int,
+    limit_states: int,
+    start_id: int,
+    row_scan_limit: int,
+) -> Tuple[List[Dict[str, Any]], int, int, bool]:
+    """Budget-freundlicher High-Uncertainty-Scan über ein policy_rules-ID-Fenster.
+
+    Diese Variante ersetzt den teuren ``GROUP BY namespace,state_hash ORDER BY
+    MAX(last_ts)``-Kandidatenpfad für Orchestrator-/Nachtbetrieb. Sie liest ein
+    kleines, persistierbares ID-Fenster, lädt für die darin gefundenen States die
+    zugehörigen Action-Zeilen per Index ``(namespace,state_hash,action)`` nach und
+    berechnet Top-2/q-gap in Python.
+
+    Dadurch kann der Miner über viele Läufe oder einen Nacht-Sweep die komplette
+    Tabelle ablaufen, ohne dass ein einzelner Lauf die Orchestrator-Zeit blockiert.
+    """
+    if limit_states <= 0 or row_scan_limit <= 0:
+        return [], int(start_id or 0), 0, False
+
+    cur = conn.cursor()
+
+    def _sample(after_id: int, limit_rows: int) -> List[Any]:
+        cur.execute(
+            """
+            SELECT id, namespace, state_hash
+            FROM policy_rules
+            WHERE id > ?
+              AND namespace LIKE ?
+              AND n >= ?
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (int(max(0, after_id)), str(ns_like), int(max(0, min_n)), int(max(1, limit_rows))),
+        )
+        return cur.fetchall() or []
+
+    rows = _sample(int(max(0, start_id)), int(row_scan_limit))
+    wrapped = False
+    if not rows and int(start_id or 0) > 0:
+        wrapped = True
+        rows = _sample(0, int(row_scan_limit))
+
+    if not rows:
+        return [], 0 if wrapped else int(start_id or 0), 0, wrapped
+
+    next_id = int(max((int((r["id"] if hasattr(r, "keys") else r[0]) or 0) for r in rows), default=int(start_id or 0)))
+    seen_states: set[Tuple[str, str]] = set()
+    states: List[Tuple[str, str]] = []
+    max_states = max(int(limit_states) * _env_int("OROMA_GAP_MINER_HU_STATE_MULT", 6), int(limit_states), 50)
+    for r in rows:
+        ns = str((r["namespace"] if hasattr(r, "keys") else r[1]) or "")
+        sh = str((r["state_hash"] if hasattr(r, "keys") else r[2]) or "")
+        if not ns or not sh:
+            continue
+        key = (ns, sh)
+        if key in seen_states:
+            continue
+        seen_states.add(key)
+        states.append(key)
+        if len(states) >= int(max_states):
+            break
+
+    policy_rows = _fetch_policy_rows_for_states(conn, states, min_n=int(min_n))
+    if not policy_rows:
+        return [], next_id, int(len(rows)), wrapped
+
+    by_key: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    for r in policy_rows:
+        ns = str(r.get("namespace") or "")
+        sh = str(r.get("state_hash") or "")
+        if ns and sh:
+            by_key.setdefault((ns, sh), []).append(r)
+
+    eps = float(max(1e-9, float(eps)))
+    out: List[Dict[str, Any]] = []
+    for (ns, sh), lst in by_key.items():
+        lst_sorted = sorted(lst, key=lambda x: (float(x.get("q") or 0.0), int(x.get("n") or 0)), reverse=True)
+        if len(lst_sorted) < 2:
+            continue
+        r1, r2 = lst_sorted[0], lst_sorted[1]
+        q1 = float(r1.get("q") or 0.0)
+        q2 = float(r2.get("q") or 0.0)
+        qgap = abs(q1 - q2)
+        if qgap >= eps:
+            continue
+        n1 = int(r1.get("n") or 0)
+        n2 = int(r2.get("n") or 0)
+        if min(n1, n2) < int(min_n):
+            continue
+        out.append({
+            "namespace": ns,
+            "state_hash": sh,
+            "a1": str(r1.get("action") or ""),
+            "q1": q1,
+            "n1": n1,
+            "a2": str(r2.get("action") or ""),
+            "q2": q2,
+            "n2": n2,
+            "qgap": qgap,
+        })
+
+    out_sorted = sorted(out, key=lambda x: (float(x.get("qgap") or 0.0), int(x.get("n1") or 0) + int(x.get("n2") or 0)))
+    return out_sorted[: int(limit_states)], next_id, int(len(rows)), wrapped
 
 
 def _fetch_high_uncertainty(conn, ns_like: str, eps: float, min_n: int, limit_states: int) -> List[Dict[str, Any]]:
@@ -575,40 +944,118 @@ def _group_low_evidence(rows: List[Dict[str, Any]], max_actions_per_state: int =
 def _fetch_best_policy_states(conn, ns_like: str, limit_states: int) -> List[Dict[str, Any]]:
     """
     Liefert pro State den besten Policy-Kandidaten (q desc, n desc).
+
+    Performance-Hinweis:
+      Die fruehere Variante nutzte ROW_NUMBER() OVER(PARTITION BY ...)
+      ueber policy_rules. Auf groesseren Live-DBs erzeugt das Temp-Sorts und
+      kann den Orchestrator-Timeout treffen. Diese bounded Variante holt nur
+      eine konservativ begrenzte Kandidatenmenge und berechnet Top-1 in Python.
     """
+    if int(limit_states or 0) <= 0:
+        return []
+    cand_mult = _env_int("OROMA_GAP_MINER_CONFLICT_CAND_MULT", 40)
+    cand_cap = _env_int("OROMA_GAP_MINER_CONFLICT_CAND_CAP", 12000)
+    fetch_limit = int(max(100, min(int(cand_cap), int(limit_states) * int(max(1, cand_mult)))))
     cur = conn.cursor()
     cur.execute(
         """
-        WITH ranked AS (
-            SELECT
-                namespace,
-                state_hash,
-                action AS a_pol,
-                q      AS q_pol,
-                n      AS n_pol,
-                ROW_NUMBER() OVER(
-                    PARTITION BY namespace, state_hash
-                    ORDER BY q DESC, n DESC
-                ) AS rn
-            FROM policy_rules
-            WHERE namespace LIKE ?
-        )
-        SELECT namespace, state_hash, a_pol, q_pol, n_pol
-        FROM ranked
-        WHERE rn=1
-        ORDER BY n_pol DESC, ABS(q_pol) DESC
+        SELECT namespace, state_hash, action, q, n, COALESCE(last_ts,0) AS last_ts
+        FROM policy_rules
+        WHERE namespace LIKE ?
+          AND n >= 1
+        ORDER BY COALESCE(last_ts,0) DESC, n DESC
         LIMIT ?
         """,
-        (str(ns_like), int(max(0, limit_states))),
+        (str(ns_like), int(max(0, fetch_limit))),
     )
     rows = cur.fetchall() or []
-    out: List[Dict[str, Any]] = []
+    best_by_state: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for r in rows:
         if hasattr(r, "keys"):
-            out.append(dict(r))
+            ns = str(r["namespace"] or "")
+            sh = str(r["state_hash"] or "")
+            cand = {
+                "namespace": ns,
+                "state_hash": sh,
+                "a_pol": str(r["action"] or ""),
+                "q_pol": float(r["q"] or 0.0),
+                "n_pol": int(r["n"] or 0),
+            }
         else:
-            out.append({"namespace": r[0], "state_hash": r[1], "a_pol": r[2], "q_pol": r[3], "n_pol": r[4]})
-    return out
+            ns = str(r[0] or "")
+            sh = str(r[1] or "")
+            cand = {"namespace": ns, "state_hash": sh, "a_pol": str(r[2] or ""), "q_pol": float(r[3] or 0.0), "n_pol": int(r[4] or 0)}
+        if not ns or not sh:
+            continue
+        key = (ns, sh)
+        prev = best_by_state.get(key)
+        if prev is None or (float(cand["q_pol"]), int(cand["n_pol"])) > (float(prev["q_pol"]), int(prev["n_pol"])):
+            best_by_state[key] = cand
+    out = sorted(best_by_state.values(), key=lambda x: (int(x.get("n_pol") or 0), abs(float(x.get("q_pol") or 0.0))), reverse=True)
+    return out[: int(limit_states)]
+
+
+def _make_gap_record(kind: str, desc: str, confidence: float, meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalisiertes Pending-Insert fuer knowledge_gaps."""
+    return {
+        "ts": _now_ts(),
+        "kind": str(kind or "").strip(),
+        "desc": str(desc or "").strip(),
+        "confidence": float(confidence or 0.0),
+        "meta": _json(meta or {}),
+    }
+
+
+def _insert_gap_records(records: List[Dict[str, Any]], require_dbwriter: bool) -> Dict[str, Any]:
+    """Schreibt Gap-Records gebuendelt und Orchestrator-freundlich.
+
+    Im produktiven Strict-Modus ist DBWriter Pflicht. Dadurch entstehen keine
+    hunderten Einzeltransaktionen ueber gaps.add_gap(), die bei SQLite-Lock je
+    nach Retry-Konfiguration den Orchestrator-Timeout ausloesen koennen.
+    """
+    clean = [r for r in records if str(r.get("kind") or "") and str(r.get("desc") or "")]
+    if not clean:
+        return {"write_path": "none", "rowcount": 0, "write_block_reason": "no_records"}
+
+    params = [
+        (int(r.get("ts") or _now_ts()), str(r.get("kind") or ""), str(r.get("desc") or ""), float(r.get("confidence") or 0.0), str(r.get("meta") or "{}"))
+        for r in clean
+    ]
+
+    if _dbw_enabled():
+        timeout_ms = _env_int("OROMA_GAP_MINER_DBW_TIMEOUT_MS", 5000)
+        rowcount = db_writer_client.executemany(  # type: ignore[union-attr]
+            "INSERT INTO knowledge_gaps(ts, kind, desc, confidence, meta) VALUES(?,?,?,?,?)",
+            params,
+            tag="gap_miner.batch_insert",
+            priority="low",
+            timeout_ms=int(timeout_ms),
+            db="oroma",
+        )
+        return {"write_path": "dbwriter_executemany", "rowcount": int(rowcount or 0), "write_block_reason": ""}
+
+    if require_dbwriter or _strict_local_writes():
+        return {"write_path": "blocked", "rowcount": 0, "write_block_reason": "dbwriter_required"}
+
+    # Lokaler Fallback bleibt nur fuer nicht-strikte manuelle Entwicklungslaeufe.
+    conn = sql_manager.get_conn()
+    try:
+        try:
+            conn.execute(f"PRAGMA busy_timeout={_env_int('OROMA_DB_BUSY_TIMEOUT_MS', 5000)}")
+        except Exception:
+            pass
+        cur = conn.cursor()
+        cur.executemany(
+            "INSERT INTO knowledge_gaps(ts, kind, desc, confidence, meta) VALUES(?,?,?,?,?)",
+            params,
+        )
+        conn.commit()
+        return {"write_path": "local_transaction_non_strict", "rowcount": int(cur.rowcount or 0), "write_block_reason": ""}
+    finally:
+        try:
+            conn.close()
+        except Exception as e:
+            _guard_log('tools/gap_miner.py:insert_gap_records.close', 'local fallback connection close failed', exc=e, level=logging.WARNING)
 
 
 def mine_once(
@@ -643,34 +1090,72 @@ def mine_once(
 
     gaps.ensure_schema()
 
-    inserted: List[int] = []
+    pending_gap_records: List[Dict[str, Any]] = []
+    inserted_count: int = 0
+    write_path: str = "none"
+    write_block_reason: str = ""
+    write_error: str = ""
+    budget_hit: bool = False
+    insert_budget_hit: bool = False
+    max_inserts_per_run = _env_int("OROMA_GAP_MINER_MAX_INSERTS_PER_RUN", max(1, min(50, int(limit_per_kind))))
+    require_dbwriter = _env_bool("OROMA_GAP_MINER_REQUIRE_DBWRITER", True)
     skipped: int = 0
     scanned: Dict[str, int] = {
         "low_evidence_rows": 0,
         "high_uncertainty_states": 0,
         "logic_conflict_states": 0,
         "logic_conflict_with_arch": 0,
+        "high_uncertainty_policy_rows_scanned": 0,
+        "high_uncertainty_cursor_start_id": 0,
+        "high_uncertainty_cursor_next_id": 0,
+        "high_uncertainty_cursor_wrapped": 0,
+        "low_evidence_policy_rows_scanned": 0,
+        "low_evidence_cursor_start_id": 0,
+        "low_evidence_cursor_next_id": 0,
+        "low_evidence_cursor_wrapped": 0,
+        "logic_conflict_policy_rows_scanned": 0,
+        "logic_conflict_cursor_start_id": 0,
+        "logic_conflict_cursor_next_id": 0,
+        "logic_conflict_cursor_wrapped": 0,
     }
 
     conn = sql_manager.get_conn()
+    progress_budget_installed = _install_sql_progress_budget(conn, t0, int(max_runtime_s), reserve_s=4.0)
     try:
         now = _now_ts()
         since_ts = int(now - max(0, int(cooldown_s)))
         recent_gap_keys = _load_recent_gap_keys(conn, namespaces, since_ts)
 
         for ns_like in namespaces:
-            if max_runtime_s > 0 and (time.time() - t0) >= float(max_runtime_s):
+            if _time_budget_hit(t0, max_runtime_s, reserve_s=5.0):
+                budget_hit = True
                 break
 
             # --- A) low_evidence ---
             le_rows: List[Dict[str, Any]] = []
             if selected_kind in (None, "low_evidence"):
-                le_rows = _fetch_low_evidence(
+                le_cursor_map = rotation_state_after.setdefault("low_evidence_cursor_by_namespace", {})
+                if not isinstance(le_cursor_map, dict):
+                    le_cursor_map = {}
+                    rotation_state_after["low_evidence_cursor_by_namespace"] = le_cursor_map
+                le_cursor_start = int(le_cursor_map.get(str(ns_like), 0) or 0)
+                le_row_scan_limit = _env_int(
+                    "OROMA_GAP_MINER_LE_ROW_SCAN_LIMIT",
+                    max(200, int(limit_per_kind) * _env_int("OROMA_GAP_MINER_LE_ROW_SCAN_MULT", 20)),
+                )
+                scanned["low_evidence_cursor_start_id"] = int(le_cursor_start)
+                le_rows, le_cursor_next, le_rows_scanned, le_wrapped = _fetch_low_evidence_window(
                     conn,
                     ns_like=ns_like,
                     thr_n=int(low_evidence_n),
                     row_limit=int(limit_per_kind) * 6,
+                    start_id=int(le_cursor_start),
+                    row_scan_limit=int(le_row_scan_limit),
                 )
+                le_cursor_map[str(ns_like)] = int(le_cursor_next)
+                scanned["low_evidence_policy_rows_scanned"] += int(le_rows_scanned)
+                scanned["low_evidence_cursor_next_id"] = int(le_cursor_next)
+                scanned["low_evidence_cursor_wrapped"] = 1 if le_wrapped else 0
             scanned["low_evidence_rows"] += int(len(le_rows))
             le_grouped = _group_low_evidence(le_rows, max_actions_per_state=3)
 
@@ -718,23 +1203,44 @@ def mine_once(
                 }
 
                 if not dry_run:
-                    gid = gaps.add_gap("low_evidence", desc, conf, meta)
-                    inserted.append(int(gid))
+                    pending_gap_records.append(_make_gap_record("low_evidence", desc, conf, meta))
                     recent_gap_keys.add(('low_evidence', ns, sh))
+                    if len(pending_gap_records) >= int(max_inserts_per_run):
+                        insert_budget_hit = True
+                        break
 
-            if max_runtime_s > 0 and (time.time() - t0) >= float(max_runtime_s):
+            if insert_budget_hit:
+                break
+            if budget_hit or _time_budget_hit(t0, max_runtime_s, reserve_s=5.0):
+                budget_hit = True
                 break
 
             # --- B) high_uncertainty ---
             hu_rows: List[Dict[str, Any]] = []
             if selected_kind in (None, "high_uncertainty"):
-                hu_rows = _fetch_high_uncertainty(
+                hu_cursor_map = rotation_state_after.setdefault("high_uncertainty_cursor_by_namespace", {})
+                if not isinstance(hu_cursor_map, dict):
+                    hu_cursor_map = {}
+                    rotation_state_after["high_uncertainty_cursor_by_namespace"] = hu_cursor_map
+                hu_cursor_start = int(hu_cursor_map.get(str(ns_like), 0) or 0)
+                hu_row_scan_limit = _env_int(
+                    "OROMA_GAP_MINER_HU_ROW_SCAN_LIMIT",
+                    max(200, int(limit_per_kind) * _env_int("OROMA_GAP_MINER_HU_ROW_SCAN_MULT", 20)),
+                )
+                scanned["high_uncertainty_cursor_start_id"] = int(hu_cursor_start)
+                hu_rows, hu_cursor_next, hu_rows_scanned, hu_wrapped = _fetch_high_uncertainty_window(
                     conn,
                     ns_like=ns_like,
                     eps=float(uncertainty_eps),
                     min_n=int(min_n_uncertainty),
                     limit_states=int(limit_per_kind),
+                    start_id=int(hu_cursor_start),
+                    row_scan_limit=int(hu_row_scan_limit),
                 )
+                hu_cursor_map[str(ns_like)] = int(hu_cursor_next)
+                scanned["high_uncertainty_policy_rows_scanned"] += int(hu_rows_scanned)
+                scanned["high_uncertainty_cursor_next_id"] = int(hu_cursor_next)
+                scanned["high_uncertainty_cursor_wrapped"] = 1 if hu_wrapped else 0
             scanned["high_uncertainty_states"] += int(len(hu_rows))
 
             for r in hu_rows:
@@ -780,16 +1286,43 @@ def mine_once(
                 }
 
                 if not dry_run:
-                    gid = gaps.add_gap("high_uncertainty", desc, conf, meta)
-                    inserted.append(int(gid))
+                    pending_gap_records.append(_make_gap_record("high_uncertainty", desc, conf, meta))
                     recent_gap_keys.add(('high_uncertainty', ns, sh))
+                    if len(pending_gap_records) >= int(max_inserts_per_run):
+                        insert_budget_hit = True
+                        break
 
-            if max_runtime_s > 0 and (time.time() - t0) >= float(max_runtime_s):
+            if insert_budget_hit:
+                break
+            if budget_hit or _time_budget_hit(t0, max_runtime_s, reserve_s=5.0):
+                budget_hit = True
                 break
 
             # --- C) logic_conflict (Archiv vs. aktuelle Policy) ---
             if enable_logic_conflict and selected_kind in (None, "logic_conflict"):
-                best_states = _fetch_best_policy_states(conn, ns_like=ns_like, limit_states=int(conflict_limit))
+                lc_cursor_map = rotation_state_after.setdefault("logic_conflict_cursor_by_namespace", {})
+                if not isinstance(lc_cursor_map, dict):
+                    lc_cursor_map = {}
+                    rotation_state_after["logic_conflict_cursor_by_namespace"] = lc_cursor_map
+                lc_cursor_start = int(lc_cursor_map.get(str(ns_like), 0) or 0)
+                lc_row_scan_limit = _env_int(
+                    "OROMA_GAP_MINER_LC_ROW_SCAN_LIMIT",
+                    max(300, int(conflict_limit) * _env_int("OROMA_GAP_MINER_LC_ROW_SCAN_MULT", 30)),
+                )
+                scanned["logic_conflict_cursor_start_id"] = int(lc_cursor_start)
+                best_states, lc_cursor_next, lc_rows_scanned, lc_wrapped = _fetch_best_policy_states_window(
+                    conn,
+                    ns_like=ns_like,
+                    limit_states=int(conflict_limit),
+                    start_id=int(lc_cursor_start),
+                    row_scan_limit=int(lc_row_scan_limit),
+                    min_n=int(conflict_min_n),
+                    min_abs_q=float(conflict_min_abs_q),
+                )
+                lc_cursor_map[str(ns_like)] = int(lc_cursor_next)
+                scanned["logic_conflict_policy_rows_scanned"] += int(lc_rows_scanned)
+                scanned["logic_conflict_cursor_next_id"] = int(lc_cursor_next)
+                scanned["logic_conflict_cursor_wrapped"] = 1 if lc_wrapped else 0
                 scanned["logic_conflict_states"] += int(len(best_states))
                 arch_maps_by_ns: Dict[str, Dict[str, Dict[str, Any]]] = {}
                 states_by_ns: Dict[str, List[str]] = {}
@@ -872,16 +1405,46 @@ def mine_once(
                     }
 
                     if not dry_run:
-                        gid = gaps.add_gap("logic_conflict", desc, conf, meta)
-                        inserted.append(int(gid))
+                        pending_gap_records.append(_make_gap_record("logic_conflict", desc, conf, meta))
                         recent_gap_keys.add(('logic_conflict', ns, sh))
+                        if len(pending_gap_records) >= int(max_inserts_per_run):
+                            insert_budget_hit = True
+                            break
 
+                if insert_budget_hit or budget_hit:
+                    break
+
+    except sqlite3.OperationalError as e:
+        if _is_sql_budget_interrupt(e):
+            budget_hit = True
+            write_block_reason = "sql_runtime_budget_interrupted"
+            _guard_log('tools/gap_miner.py:sql_budget_interrupted', 'SQLite query interrupted by Gap-Miner runtime budget; returning partial summary', exc=e, level=logging.INFO, interval_s=300)
+        else:
+            raise
     finally:
+        _clear_sql_progress_budget(conn)
         try:
             conn.close()
         except Exception as e:
-            log_suppressed('tools/gap_miner.py:634', exc=e, level=logging.WARNING)
+            _guard_log('tools/gap_miner.py:conn.close', 'connection close failed', exc=e, level=logging.WARNING)
             pass
+
+    if (not dry_run) and pending_gap_records:
+        if _time_budget_hit(t0, max_runtime_s, reserve_s=2.0):
+            budget_hit = True
+            write_path = "skipped_due_runtime_budget"
+            write_block_reason = "runtime_budget_before_write"
+        else:
+            try:
+                wr = _insert_gap_records(pending_gap_records, require_dbwriter=bool(require_dbwriter))
+                write_path = str(wr.get("write_path") or "")
+                write_block_reason = str(wr.get("write_block_reason") or "")
+                inserted_count = int(wr.get("rowcount") or 0)
+            except Exception as e:
+                write_error = repr(e)
+                write_path = "error"
+                write_block_reason = "write_exception"
+                _guard_log('tools/gap_miner.py:batch_insert', 'Gap-Miner batch insert failed', exc=e, level=logging.WARNING)
 
     if mode == "rotate":
         rotation_state_after["last_completed_ts"] = _now_ts()
@@ -899,7 +1462,17 @@ def mine_once(
         "dry_run": bool(dry_run),
         "cooldown_s": int(cooldown_s),
         "max_runtime_s": int(max_runtime_s),
+        "large_db_safe_slices": True,
+        "sql_progress_budget_installed": bool(progress_budget_installed),
         "limit_per_kind": int(limit_per_kind),
+        "max_inserts_per_run": int(max_inserts_per_run),
+        "budget_hit": bool(budget_hit),
+        "insert_budget_hit": bool(insert_budget_hit),
+        "write_path": str(write_path),
+        "write_block_reason": str(write_block_reason),
+        "write_error": str(write_error),
+        "dbwriter_enabled": bool(_dbw_enabled()),
+        "dbwriter_required": bool(require_dbwriter),
         "thresholds": {
             "low_evidence_n": int(low_evidence_n),
             "uncertainty_eps": float(uncertainty_eps),
@@ -914,7 +1487,70 @@ def mine_once(
         },
         "scanned": scanned,
         "skipped": int(skipped),
-        "inserted": {"count": int(len(inserted)), "ids": inserted[-50:]},
+        "inserted": {"count": int(inserted_count), "ids": []},
+        "pending_records": int(len(pending_gap_records)),
+        "duration_s": round(time.time() - t0, 3),
+    }
+
+
+def run_sweep(args: argparse.Namespace, namespaces: List[str]) -> Dict[str, Any]:
+    """Fuehrt mehrere kleine Rotations-Slices in einem Nacht-/Sweep-Fenster aus.
+
+    Warum nicht ein grosser Vollscan?
+      Auf dem Raspberry Pi darf kein einzelnes SELECT minutenlang den seriellen
+      Orchestrator blockieren. Sweep nutzt deshalb denselben bounded rotate-Pfad
+      mehrfach, speichert Cursor/Rotation nach jedem Slice und kann in der
+      nächsten Nacht nahtlos fortsetzen.
+    """
+    t0 = time.time()
+    max_runtime_s = int(args.max_runtime_s)
+    sweep_passes = max(1, int(getattr(args, "sweep_passes", 1) or 1))
+    slice_runtime_s = _env_int("OROMA_GAP_MINER_SWEEP_SLICE_RUNTIME_S", min(120, max(20, int(max_runtime_s))))
+    summaries: List[Dict[str, Any]] = []
+    totals = {"inserted": 0, "pending_records": 0, "skipped": 0}
+    budget_hit = False
+
+    for i in range(sweep_passes):
+        if _time_budget_hit(t0, max_runtime_s, reserve_s=8.0):
+            budget_hit = True
+            break
+        remaining = max(10, int(max_runtime_s - (time.time() - t0) - 5)) if max_runtime_s > 0 else int(slice_runtime_s)
+        slice_budget = int(min(max(10, int(slice_runtime_s)), int(remaining))) if max_runtime_s > 0 else int(slice_runtime_s)
+        one = mine_once(
+            namespaces=list(namespaces),
+            limit_per_kind=int(args.limit_per_kind),
+            cooldown_s=int(args.cooldown_s),
+            low_evidence_n=int(args.low_evidence_n),
+            uncertainty_eps=float(args.uncertainty_eps),
+            dry_run=bool(args.dry_run),
+            min_n_uncertainty=int(args.min_n_uncertainty),
+            enable_logic_conflict=bool(args.enable_logic_conflict) or _env_bool("OROMA_GAP_MINER_ENABLE_LOGIC_CONFLICT", True),
+            conflict_limit=int(args.conflict_limit),
+            conflict_min_n=int(args.conflict_min_n),
+            conflict_min_abs_q=float(args.conflict_min_abs_q),
+            conflict_min_arch_w=float(args.conflict_min_arch_w),
+            mode="rotate",
+            state_path=str(args.state_path or _state_path()),
+            max_runtime_s=int(slice_budget),
+        )
+        summaries.append(one)
+        totals["inserted"] += int((one.get("inserted") or {}).get("count") or 0)
+        totals["pending_records"] += int(one.get("pending_records") or 0)
+        totals["skipped"] += int(one.get("skipped") or 0)
+        if bool(one.get("budget_hit")) and slice_budget >= remaining:
+            budget_hit = True
+            break
+
+    return {
+        "ok": True,
+        "mode": "sweep",
+        "sweep_passes_requested": int(sweep_passes),
+        "sweep_passes_done": int(len(summaries)),
+        "sweep_slice_runtime_s": int(slice_runtime_s),
+        "max_runtime_s": int(max_runtime_s),
+        "budget_hit": bool(budget_hit or _time_budget_hit(t0, max_runtime_s, reserve_s=0.0)),
+        "totals": totals,
+        "summaries": summaries[-12:],
         "duration_s": round(time.time() - t0, 3),
     }
 
@@ -991,9 +1627,9 @@ def main() -> int:
     )
     ap.add_argument(
         "--mode",
-        choices=("rotate", "full"),
+        choices=("rotate", "full", "sweep"),
         default=str(os.environ.get("OROMA_GAP_MINER_MODE", "rotate") or "rotate"),
-        help="rotate=pro Lauf genau ein Namespace + ein Gap-Typ; full=klassischer Vollscan (Default: ENV OROMA_GAP_MINER_MODE=rotate)",
+        help="rotate=ein Namespace+Gap-Typ; full=alle aktivierten Slices einmal; sweep=Nachtmodus mit mehreren bounded rotate-Slices (Default: ENV OROMA_GAP_MINER_MODE=rotate)",
     )
     ap.add_argument(
         "--max-runtime-s",
@@ -1006,6 +1642,12 @@ def main() -> int:
         default=_state_path(),
         help="Pfad fuer den Rotationszustand (Default: ENV OROMA_GAP_MINER_STATE_PATH oder /opt/ai/oroma/data/state/gap_miner_state.json)",
     )
+    ap.add_argument(
+        "--sweep-passes",
+        type=int,
+        default=_env_int("OROMA_GAP_MINER_SWEEP_PASSES", 12),
+        help="Nur fuer --mode sweep: maximale Anzahl bounded rotate-Slices im Nachtfenster (Default: ENV OROMA_GAP_MINER_SWEEP_PASSES=12)",
+    )
 
     args = ap.parse_args()
 
@@ -1013,23 +1655,26 @@ def main() -> int:
 
     enable_logic_conflict = bool(args.enable_logic_conflict) or _env_bool("OROMA_GAP_MINER_ENABLE_LOGIC_CONFLICT", True)
 
-    summary = mine_once(
-        namespaces=namespaces,
-        limit_per_kind=int(args.limit_per_kind),
-        cooldown_s=int(args.cooldown_s),
-        low_evidence_n=int(args.low_evidence_n),
-        uncertainty_eps=float(args.uncertainty_eps),
-        dry_run=bool(args.dry_run),
-        min_n_uncertainty=int(args.min_n_uncertainty),
-        enable_logic_conflict=bool(enable_logic_conflict),
-        conflict_limit=int(args.conflict_limit),
-        conflict_min_n=int(args.conflict_min_n),
-        conflict_min_abs_q=float(args.conflict_min_abs_q),
-        conflict_min_arch_w=float(args.conflict_min_arch_w),
-        mode=str(args.mode or "rotate"),
-        state_path=str(args.state_path or _state_path()),
-        max_runtime_s=int(args.max_runtime_s),
-    )
+    if str(args.mode or "rotate") == "sweep":
+        summary = run_sweep(args, namespaces)
+    else:
+        summary = mine_once(
+            namespaces=namespaces,
+            limit_per_kind=int(args.limit_per_kind),
+            cooldown_s=int(args.cooldown_s),
+            low_evidence_n=int(args.low_evidence_n),
+            uncertainty_eps=float(args.uncertainty_eps),
+            dry_run=bool(args.dry_run),
+            min_n_uncertainty=int(args.min_n_uncertainty),
+            enable_logic_conflict=bool(enable_logic_conflict),
+            conflict_limit=int(args.conflict_limit),
+            conflict_min_n=int(args.conflict_min_n),
+            conflict_min_abs_q=float(args.conflict_min_abs_q),
+            conflict_min_arch_w=float(args.conflict_min_arch_w),
+            mode=str(args.mode or "rotate"),
+            state_path=str(args.state_path or _state_path()),
+            max_runtime_s=int(args.max_runtime_s),
+        )
 
     sys.stdout.write(_json(summary) + "\n")
     return 0

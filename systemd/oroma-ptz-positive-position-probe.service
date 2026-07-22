@@ -1,0 +1,103 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-ptz-positive-position-probe.service
+# Projekt:  ORÓMA (Offline-Realtime-Organic-Memory-AI)
+# Modul:    PTZ Positive Position Probe – Stage-A Evidence / Measure-only
+# Version:  v3.7.3+ptz-positive-position-probe-systemd-v1.0
+# Stand:    2026-06-13
+# Autor:    ORÓMA · ChatGPT Patch-Gate
+# Lizenz:   MIT
+# =============================================================================
+#
+# ZWECK
+# ─────
+# Diese Unit führt `tools/ptz_positive_position_probe.py` als kurzlebigen
+# systemd-Oneshot aus. Die Probe liest ausschließlich vorhandene PTZ-State-
+# Dateien und schreibt daraus Stage-A-Evidence-Metriken nach `stats.db` über
+# den DBWriter-kompatiblen Single-Writer-Pfad.
+#
+# ARCHITEKTUR-INVARIANTEN
+# ───────────────────────
+# - Keine PTZ-Motorbefehle.
+# - Keine Policy-Aktivierung.
+# - Keine Writes in `oroma.db`.
+# - Keine object_nodes/object_relations-Materialisierung.
+# - Keine Identitätsbildung; Marker bleiben reine Positions-/Salience-Evidenz.
+# - Keine lokalen SQLite-Schreib-Fallbacks. `--write-stats` benötigt DBWriter.
+#
+# WARUM EINE SEPARATE UNIT?
+# ────────────────────────
+# Der PTZ Motor Worker ist ein schneller Hot-Loop. Diese Evidence-Probe ist ein
+# langsamer Messpfad. Sie soll periodisch eine Verlaufsspur erzeugen, damit
+# später Dream/Binding/Replay entscheiden können, ob wiederkehrende Marker
+# stabil genug für weitere Stage-B-Kandidaten sind.
+#
+# LOGS
+# ────
+#   /opt/ai/oroma/logs/ptz_positive_position_probe.out.log
+#   /opt/ai/oroma/logs/ptz_positive_position_probe.err.log
+#
+# AKTIVIERUNG
+# ───────────
+#   sudo cp systemd/oroma-ptz-positive-position-probe.service /etc/systemd/system/
+#   sudo cp systemd/oroma-ptz-positive-position-probe.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now oroma-ptz-positive-position-probe.timer
+#
+# =============================================================================
+
+[Unit]
+Description=ORÓMA – PTZ Positive Position Probe (Stage-A Evidence)
+Documentation=file:/opt/ai/oroma/docs/PTZ_MOTOR_WORKER.md
+After=oroma-db-writer.service oroma-ptz-motor-worker.service
+Wants=oroma-db-writer.service
+ConditionPathExists=/opt/ai/oroma/.use_orchestrator
+ConditionPathExists=/opt/ai/oroma/tools/ptz_positive_position_probe.py
+
+[Service]
+Type=oneshot
+User=oroma
+Group=oroma
+UMask=002
+WorkingDirectory=/opt/ai/oroma
+SyslogIdentifier=oroma-ptz-positive-position-probe
+TimeoutStartSec=120
+
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=UTF-8
+Environment=TZ=Europe/Berlin
+Environment=PYTHONPATH=/opt/ai/oroma
+Environment=OROMA_BASE=/opt/ai/oroma
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=OROMA_LOG_DIR=/opt/ai/oroma/logs
+Environment=OROMA_DBW_ENABLE=1
+Environment=OROMA_DBW_SOCKET=/opt/ai/oroma/data/state/db_writer.sock
+Environment=OROMA_PTZ_POS_PROBE_DBW_TIMEOUT_MS=10000
+
+ExecStartPre=+/usr/bin/env bash -lc 'mkdir -p /opt/ai/oroma/logs /opt/ai/oroma/data/state && touch /opt/ai/oroma/logs/ptz_positive_position_probe.out.log /opt/ai/oroma/logs/ptz_positive_position_probe.err.log && chown oroma:oroma /opt/ai/oroma/logs/ptz_positive_position_probe.out.log /opt/ai/oroma/logs/ptz_positive_position_probe.err.log && chown oroma:oroma /opt/ai/oroma/data/state'
+ExecStart=/usr/bin/python3 /opt/ai/oroma/tools/ptz_positive_position_probe.py --once --write-stats --verbose
+
+StandardOutput=append:/opt/ai/oroma/logs/ptz_positive_position_probe.out.log
+StandardError=append:/opt/ai/oroma/logs/ptz_positive_position_probe.err.log
+
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ReadWritePaths=/opt/ai/oroma/logs /opt/ai/oroma/data
+
+[Install]
+WantedBy=multi-user.target

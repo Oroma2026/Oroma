@@ -1,10 +1,25 @@
 <!--
 ===============================================================================
 Datei:   /opt/ai/oroma/ui/templates/games.html
-Projekt: ORÓMA v3.7 – Headless UI (Nur-Übersicht)
-Stand:   2025-10-28
-Autor:   ORÓMA · KI-JWG-X1
-Zweck:   Schlichte Liste der verfügbaren / nicht verfügbaren Spiele.
+Projekt: ORÓMA v3.8 – Headless Game Observability
+Stand:   2026-07-22
+Autor:   ORÓMA · KI-JWG-X1 + GPT-5.5 Thinking
+Zweck:   Schlichte Liste der verfügbaren / nicht verfügbaren Spiele plus
+         Daily-Summary-Tabelle aus episodes/episodic_metrics sowie eine
+         strikt read-only Vertical-Learning-Übersicht.
+
+Änderung 2026-07-22:
+  • Neue Vertical-Learning-Tabelle für SnapChains, Policy, Promotions,
+    Acquisitions, Outcomes, Mini-Writes, Blockierungen und Evidence-Links.
+  • Werte sind als aktueller DB-Bestand/Retention-Fenster gekennzeichnet.
+  • NMR bleibt architektonisch und visuell getrennt.
+
+Änderung 2026-06-27:
+  • Eine kompakte KPI-Spalte ergänzt die bestehende Tabelle, ohne das Dashboard
+    umzubauen. Dadurch bleiben Standardspiele lesbar, während ChessPro,
+    Tetris und PTZ ihre eigentlichen Spiel-/Lernsignale anzeigen können.
+  • ChessPro erscheint wie ein normales Spiel in der Übersicht; die Details
+    liegen auf /games/chesspro/ und werden serverseitig aus der DB gelesen.
 ===============================================================================
 -->
 {% extends "base.html" %}
@@ -60,6 +75,128 @@ Zweck:   Schlichte Liste der verfügbaren / nicht verfügbaren Spiele.
     <div class="alert alert-success">Alle bekannten Spiele sind registriert. 🎉</div>
   {% endif %}
 </main>
+
+
+  <h3 class="mt-4">🧭 Vertical Learning</h3>
+  <p class="text-muted small">
+    Read-only Sicht auf den produktiven Lernpfad. Die Werte stammen aus dem aktuell in der Datenbank
+    vorhandenen, hart begrenzten neuesten Zeilenfenster je Tabelle; die Quoten sind Fenster-Bestandsquoten und keine kausalen Kohortenraten.
+    NMR-Metriken bleiben bewusst getrennt.
+  </p>
+
+  <div class="card bg-dark border-secondary mb-3">
+    <div class="card-body">
+      <div class="d-flex flex-wrap align-items-center gap-2" style="gap:.5rem;">
+        <button id="btnVerticalLoad" class="btn btn-sm btn-outline-primary">↻ Aktualisieren</button>
+        <span id="verticalStatus" class="text-muted small">noch nicht geladen</span>
+      </div>
+      <div class="table-responsive mt-3">
+        <table class="table table-dark table-striped table-sm" id="tblVertical">
+          <thead>
+            <tr>
+              <th>Domäne</th>
+              <th>Namespaces</th>
+              <th class="text-end">SnapChains</th>
+              <th class="text-end">Policy-Regeln</th>
+              <th class="text-end">Samples</th>
+              <th class="text-end">Promotions</th>
+              <th class="text-end">Reviews</th>
+              <th class="text-end">Acquisitions</th>
+              <th class="text-end">Evidence</th>
+              <th class="text-end">Outcomes</th>
+              <th class="text-end">Ready</th>
+              <th class="text-end">Writes</th>
+              <th class="text-end">Blocked</th>
+              <th class="text-end">Links</th>
+              <th class="text-end">P→A</th>
+              <th class="text-end">A→O</th>
+              <th class="text-end">O→W</th>
+              <th class="text-end">Alter</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td colspan="18" class="text-muted">(noch nicht geladen)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="text-muted small mt-2">
+        <code>Blocked</code> zeigt Ledger-Zeilen im begrenzten neuesten DB-Fenster und ist keine Anzahl eindeutig
+        verlorener Lernereignisse. <code>Links</code> weist persistierte Policy-Evidence-Lineage nach.
+      </div>
+    </div>
+  </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const button = document.getElementById('btnVerticalLoad');
+  const status = document.getElementById('verticalStatus');
+  const table = document.getElementById('tblVertical');
+
+  const escVertical = (value) => String(value ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  const intVertical = (value) => Number.isFinite(Number(value)) ? Number(value).toLocaleString('de-DE') : '–';
+  const pctVertical = (value) => (value === null || value === undefined) ? '–' : `${Number(value).toFixed(2)} %`;
+  const ageVertical = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '–';
+    if (n < 60) return `${Math.round(n)} s`;
+    if (n < 3600) return `${Math.round(n / 60)} min`;
+    if (n < 86400) return `${(n / 3600).toFixed(1)} h`;
+    return `${(n / 86400).toFixed(1)} d`;
+  };
+
+  async function loadVerticalLearning() {
+    if (!status || !table) return;
+    status.textContent = 'lädt…';
+    try {
+      const response = await fetch('/games/api/vertical_learning', {cache: 'no-store'});
+      const data = await response.json();
+      if (!response.ok || !data || !data.ok) {
+        throw new Error((data && data.err) || `HTTP ${response.status}`);
+      }
+      const rows = Array.isArray(data.rows) ? data.rows : [];
+      const body = table.querySelector('tbody');
+      body.innerHTML = '';
+      if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="18" class="text-muted">(keine Vertical-Learning-Daten)</td></tr>';
+      } else {
+        for (const item of rows) {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td><b>${escVertical(item.family)}</b></td>
+            <td><code>${escVertical((item.namespaces || []).join(', '))}</code></td>
+            <td class="text-end">${intVertical(item.snapchains)}</td>
+            <td class="text-end">${intVertical(item.policy_rules)}</td>
+            <td class="text-end">${intVertical(item.policy_samples)}</td>
+            <td class="text-end">${intVertical(item.promotions)}</td>
+            <td class="text-end">${intVertical(item.promotion_reviews)}</td>
+            <td class="text-end">${intVertical(item.acquisitions)}</td>
+            <td class="text-end">${intVertical(item.acquisitions_evidence_acquired)}</td>
+            <td class="text-end">${intVertical(item.outcomes)}</td>
+            <td class="text-end">${intVertical(item.outcomes_ready)}</td>
+            <td class="text-end">${intVertical(item.mini_writes)}</td>
+            <td class="text-end">${intVertical(item.blocked_writes)}</td>
+            <td class="text-end">${intVertical(item.evidence_links)}</td>
+            <td class="text-end">${pctVertical(item.promotion_to_acquisition_pct)}</td>
+            <td class="text-end">${pctVertical(item.acquisition_to_outcome_pct)}</td>
+            <td class="text-end">${pctVertical(item.outcome_to_write_pct)}</td>
+            <td class="text-end">${ageVertical(item.age_sec)}</td>
+          `;
+          body.appendChild(tr);
+        }
+      }
+      const missing = Object.entries(data.tables || {}).filter(([, ok]) => !ok).map(([name]) => name);
+      const tail = Number(data.tail_limit_per_table || 0);
+      const partial = data.partial ? ' · teilweise' : '';
+      status.textContent = `OK · ${rows.length} Domänen · read-only · Fenster ≤ ${tail.toLocaleString('de-DE')} Zeilen/Tabelle${partial}${missing.length ? ` · fehlend: ${missing.join(', ')}` : ''}`;
+    } catch (error) {
+      status.textContent = `Fehler: ${error}`;
+    }
+  }
+
+  button?.addEventListener('click', loadVerticalLearning);
+  loadVerticalLearning();
+});
+</script>
 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
@@ -129,7 +266,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!tb) return;
       tb.innerHTML = '';
       if (!rows.length) {
-        tb.innerHTML = '<tr><td colspan="20" class="text-muted">(keine Daten)</td></tr>';
+        tb.innerHTML = '<tr><td colspan="21" class="text-muted">(keine Daten)</td></tr>';
         return;
       }
 
@@ -149,6 +286,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <td class="text-end">${fmtNum(it.avg_reward, 6)}</td>
           <td class="text-end">${esc(fmtScore(it))}</td>
           <td class="text-end">${fmtNum(it.highscore, 3)}</td>
+          <td>${esc(it.kpi || '')}</td>
           <td class="text-end">${fmtNum(it.wins, 0)}</td>
           <td class="text-end">${fmtNum(it.losses, 0)}</td>
           <td class="text-end">${fmtNum(it.draws, 0)}</td>
@@ -198,6 +336,8 @@ document.addEventListener('DOMContentLoaded', () => {
           <option value="" selected>(alle)</option>
           <option value="normal">normal</option>
           <option value="hard_p3">hard_p3</option>
+          <option value="white">white</option>
+          <option value="black">black</option>
         </select>
         <button id="btnLoad" class="btn btn-sm btn-outline-primary">↻ Laden</button>
         <span id="sumStatus" class="text-muted small"></span>
@@ -220,6 +360,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <th class="text-end">reward Ø</th>
           <th class="text-end">score Ø</th>
           <th class="text-end">highscore</th>
+              <th>KPI</th>
               <th class="text-end">wins</th>
               <th class="text-end">losses</th>
               <th class="text-end">draws</th>
@@ -230,13 +371,13 @@ document.addEventListener('DOMContentLoaded', () => {
             </tr>
           </thead>
           <tbody>
-        <tr><td colspan="20" class="text-muted">(noch nicht geladen)</td></tr>
+        <tr><td colspan="21" class="text-muted">(noch nicht geladen)</td></tr>
           </tbody>
         </table>
       </div>
 
       <div class="text-muted small">
-        Hinweis: nicht jedes Spiel liefert wins/draws/pairs_left. Leere Felder bedeuten: keine passenden Metrics vorhanden.
+        Hinweis: nicht jedes Spiel liefert alle Spalten. <code>wins_source</code> bleibt in der API erhalten; die sichtbare KPI-Spalte zeigt nur spielrelevante Kennzahlen.
       </div>
     </div>
   </div>

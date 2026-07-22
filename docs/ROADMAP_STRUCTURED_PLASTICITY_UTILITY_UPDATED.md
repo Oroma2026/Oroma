@@ -3,10 +3,10 @@
 **Projekt:** ORÓMA – Offline-Realtime-Organic-Memory-AI  
 **Kurzbeschreibung:** An offline-first adaptive edge intelligence architecture  
 **Dokumenttyp:** Roadmap / technische Umsetzungsplanung  
-**Stand:** 2026-05-17  
-**Baseline-ZIP:** `/mnt/data/oroma_20260517_184723_with_db.zip`  
+**Stand:** 2026-05-29  
+**Baseline-ZIP:** `/mnt/data/oroma_20260529_081410_with_db.zip`  
 **Arbeitskopie zur Prüfung:** `/mnt/data/oroma_md_update/`  
-**Status:** Planung, noch kein Code-Patch  
+**Status:** Roadmap nach PTZ Phase 5a – Policy-Bias-Rückfluss implementiert und initial live getestet  
 
 ---
 
@@ -654,9 +654,13 @@ Anzeigen:
 
 ## Phase 5 – PTZ-Policy als weicher Bias
 
+### Status
+
+PTZ Phase 5a ist umgesetzt: `tools/ptz_motor_worker.py` kann `policy_rules.namespace='ptz_motor'` optional als weichen Bias in PTZ-Entscheidungen einfließen lassen.
+
 ### Ziel
 
-Erst nachdem genügend Daten gesammelt wurden, darf `policy_rules.namespace='ptz_motor'` optional als weicher Bias in PTZ-Entscheidungen einfließen.
+Nachdem genügend Daten gesammelt wurden, darf `policy_rules.namespace='ptz_motor'` optional als weicher Bias in PTZ-Entscheidungen einfließen.
 
 ### Nicht-Ziel
 
@@ -693,7 +697,21 @@ cmd_fail_penalty nicht auffällig
 - PTZ bleibt sicher und ruhig.
 - Kein Zucken durch Policy.
 - Policy kann komplett per ENV deaktiviert werden.
-- UI/Logs zeigen, ob Policy-Bias aktiv war.
+- UI/Logs/State zeigen, ob Policy-Bias aktiv war.
+- Erster Starttest mit Bias deaktiviert: `py_compile` OK, Worker `active (running)`, `fail=0`.
+
+### PTZ Phase 5a Live-Status 2026-05-29
+
+```text
+OROMA_PTZ_MOTOR_POLICY_BIAS_ENABLE=0 im ersten Starttest
+policy_ns=ptz_motor
+policy_w=0.080
+policy_min_n=5
+policy_min_q=0.050
+policy_refresh=60.0s
+```
+
+Der Codepfad ist startstabil. Der aktive Rückfluss wird erst mit `OROMA_PTZ_MOTOR_POLICY_BIAS_ENABLE=1` bewertet.
 
 ---
 
@@ -804,7 +822,7 @@ Patch 5:
   Monitoring/SQL/UI-Diagnose
 
 Patch 6:
-  optional PTZ-Policy-Bias
+  PTZ Phase 5a Policy-Bias in tools/ptz_motor_worker.py – umgesetzt, initial py_compile/start getestet
 
 Patch 7:
   Vision/Audio/Crossmodal-Collector
@@ -904,3 +922,40 @@ utility.py bleibt domänenfrei.
 Alle konkreten Bedeutungen entstehen in Collectors und DreamWorker.
 ```
 
+
+
+---
+
+## 12. Nachtrag 2026-05-29 – PTZ Phase 5a umgesetzt
+
+Die Roadmap-Stufe „PTZ-Policy als weicher Bias“ wurde als konservativer Phase-5a-Patch umgesetzt.
+
+### Ergebnis
+
+```text
+Reward Collector erzeugt ptz_motor/* Rewards.
+DreamWorker verdichtet diese nach policy_rules namespace='ptz_motor'.
+PTZ Motor Worker kann diese Regeln read-only als weichen Bias laden.
+Safety-/Reflexlogik bleibt führend.
+Bias ist per ENV abschaltbar.
+```
+
+### Erster Live-Test
+
+```text
+python3 -m py_compile tools/ptz_motor_worker.py  → OK
+oroma-ptz-motor-worker.service                  → active (running)
+fail                                            → 0
+policy_bias                                     → 0 im ersten Test
+```
+
+### Nächster Roadmap-Schritt
+
+Nicht sofort weiter eskalieren. Zuerst:
+
+```text
+1. Bias aktivieren mit sehr kleinem Gewicht.
+2. 24h beobachten.
+3. wasted_motion_penalty, center_gain, target_stability und cmd_fail_penalty vergleichen.
+4. Erst bei stabilem Verhalten UI-/Dashboard-Sichtbarkeit ergänzen.
+```

@@ -3,9 +3,9 @@
 # =============================================================================
 # Pfad:    /opt/ai/oroma/tools/oroma_orchestrator.py
 # Projekt: ORÓMA – Zentraler Job-Orchestrator (Modus B: serielle Worker-Steuerung)
-# Version: v1.1.1
-# Stand:   2026-05-06
-# Autor:   ORÓMA · KI-JWG-X1 + GPT-5.2 Thinking
+# Version: v1.1.6-vertical-proof-isolation
+# Stand:   2026-06-28
+# Autor:   ORÓMA · KI-JWG-X1 + GPT-5.5 Thinking
 # =============================================================================
 #
 # Zweck
@@ -66,6 +66,21 @@
 #   OROMA_ORCH_ENABLE_TRAIN_SNAKE=1|0
 #   OROMA_ORCH_ENABLE_DREAM=1|0
 #   OROMA_ORCH_DREAM_REQUIRE_PHASE=1|0  (Default: 1; Dream nur wenn phase.json == DREAM)
+#
+#   Dream→Policy Auto-Mini-Write (Default-EIN-ENV-Gate, DBWriter-only):
+#   OROMA_ORCH_ENABLE_DREAM_AUTO_MINI_WRITE=1|0        (Default: 1; bewusst default-ein, aber abschaltbar)
+#   OROMA_ORCH_INT_DREAM_AUTO_MINI_WRITE=3600          (Default: 1h)
+#   OROMA_ORCH_TIMEOUT_DREAM_AUTO_MINI_WRITE=120
+#   OROMA_ORCH_DREAM_AUTO_MINI_WRITE_NAMESPACE=game:snake3d
+#   OROMA_ORCH_DREAM_AUTO_MINI_WRITE_STATE_SCHEMA_PREFIX=snake3d:pro_v1
+#   OROMA_ORCH_DREAM_AUTO_MINI_WRITE_LIMIT=20
+#   OROMA_ORCH_DREAM_AUTO_MINI_WRITE_MAX=1
+#   OROMA_ORCH_DREAM_AUTO_MINI_WRITE_DAILY_CAP=2
+#   OROMA_ORCH_DREAM_AUTO_MINI_WRITE_COOLDOWN_S=3600
+#   OROMA_ORCH_DREAM_AUTO_MINI_WRITE_MIN_DIRECT_EVIDENCE=3
+#   OROMA_ORCH_DREAM_AUTO_MINI_WRITE_MIN_ABS_DELTA=0.0001
+#   OROMA_ORCH_DREAM_AUTO_MINI_WRITE_CONFIRM=AUTO_DIRECT_STEP_CREDIT_ONLY
+#
 #   OROMA_ORCH_ENABLE_KPI=1|0
 #   OROMA_ORCH_ENABLE_POLICY=1|0
 #   OROMA_ORCH_ENABLE_EXPORTGATE=1|0
@@ -76,14 +91,22 @@
 #   OROMA_ORCH_ENABLE_TTT_DAILY_RUN=1|0
 #   OROMA_ORCH_ENABLE_C4_DAILY_RUN=1|0
 #   OROMA_ORCH_ENABLE_SNAKE_DAILY_RUN=1|0
+#   OROMA_ORCH_ENABLE_SNAKE3D_DAILY_RUN=1|0      (Default: 1; Policy+Explore Daily)
 #   OROMA_ORCH_ENABLE_PONG_DAILY_RUN=1|0
-#   OROMA_ORCH_ENABLE_CHESS_DAILY_RUN=1|0
-#   OROMA_ORCH_ENABLE_CHESS_POLICY_TRAIN=1|0
-#   OROMA_ORCH_ENABLE_CHESS_POLICY_EXPORT=1|0
+#     Hinweis v1.1.3: Pong erhält pro Daily-Lauf einen dynamischen --seed
+#     (now_ts & 0xFFFFFFFF), damit Tagesläufe nicht dauerhaft identisch sind.
+#   OROMA_ORCH_ENABLE_CHESS_DAILY_RUN=1|0          (Default ab 2026-06-27: 0; Legacy Chess1)
+#   OROMA_ORCH_ENABLE_CHESS2_DAILY_RUN=1|0         (Default ab 2026-06-27: 0; Legacy 100+100 Batch)
+#   OROMA_ORCH_ENABLE_CHESS_PRO_DAILY_RUN=1|0      (Default: 1; neuer professioneller ChessPro-Zielpfad)
+#   OROMA_ORCH_ENABLE_CHESS2_SIDE_DAILY_RUN=1|0    (Default ab ChessPro: 0; Legacy-Vorstufe)
+#   OROMA_ORCH_ENABLE_CHESS_POLICY_TRAIN=1|0       (Default ab 2026-06-27: 0; Legacy Chess1)
+#   OROMA_ORCH_ENABLE_CHESS_POLICY_EXPORT=1|0      (Default ab 2026-06-27: 0; Legacy Chess1)
 #   OROMA_ORCH_ENABLE_FLAPPY_DAILY_RUN=1|0
 #   OROMA_ORCH_ENABLE_MEMORY_DAILY_RUN=1|0
-#   OROMA_ORCH_ENABLE_MEMORYMAZE_DAILY_RUN=1|0
-#   OROMA_ORCH_ENABLE_PTZ_ARENA_DAILY_RUN=1|0
+#   OROMA_ORCH_ENABLE_MEMORYMAZE_DAILY_RUN=1|0      (Legacy MemoryMaze2033; Default: 0; Runner nicht mehr produktiv referenziert)
+#   OROMA_ORCH_ENABLE_PTZ_ARENA_DAILY_RUN=1|0    (Default: 0; echte Hardware, nur manuell/ENV)
+#   OROMA_ORCH_ENABLE_PTZ_TARGET_DAILY_RUN=1|0   (Default: 0; echte Hardware, nur manuell/ENV)
+#   OROMA_ORCH_ENABLE_PTZ_COVERAGE_DAILY_RUN=1|0 (Default: 0; echte Hardware, nur manuell/ENV)
 #
 #   Synapses Bridge Materializer Stage B Mini (konservativ, DBWriter-only):
 #   OROMA_ORCH_ENABLE_SYNAPSES_BRIDGE_MATERIALIZER=1|0  (Default: 1)
@@ -105,6 +128,18 @@
 #   OROMA_ORCH_INT_TRAIN_SNAKE=300
 #   OROMA_ORCH_INT_DREAM=1800
 #   OROMA_ORCH_INT_GAP_MINER=600   (Default 10min; proaktives Gap-Mining)
+#   OROMA_ORCH_TIMEOUT_GAP_MINER=90
+#   OROMA_ORCH_GAP_MINER_MAX_RUNTIME_S=45
+#   OROMA_ORCH_GAP_MINER_LIMIT_PER_KIND=50
+#   OROMA_ORCH_GAP_MINER_MAX_INSERTS_PER_RUN=50
+#   OROMA_ORCH_GAP_MINER_LE_ROW_SCAN_LIMIT=600
+#   OROMA_ORCH_GAP_MINER_HU_ROW_SCAN_LIMIT=600
+#   OROMA_ORCH_GAP_MINER_LC_ROW_SCAN_LIMIT=150
+#   OROMA_ORCH_GAP_MINER_NIGHT_SWEEP_PASSES=60
+#   OROMA_ORCH_GAP_MINER_NIGHT_MAX_RUNTIME_S=3000
+#   OROMA_ORCH_GAP_MINER_NIGHT_LE_ROW_SCAN_LIMIT=3000
+#   OROMA_ORCH_GAP_MINER_NIGHT_HU_ROW_SCAN_LIMIT=3000
+#   OROMA_ORCH_GAP_MINER_NIGHT_LC_ROW_SCAN_LIMIT=3000
 
 #   Timeouts (Sekunden):
 #   OROMA_ORCH_TIMEOUT_STATS=60
@@ -127,9 +162,19 @@
 #   OROMA_ORCH_C4_DAILY_AT=03:30    (HH:MM in Europe/Berlin)
 #   OROMA_ORCH_SNAKE_DAILY_AT=03:35 (HH:MM in Europe/Berlin)
 #   OROMA_ORCH_PONG_DAILY_AT=03:40  (HH:MM in Europe/Berlin)
-#   OROMA_ORCH_CHESS_DAILY_AT=03:45 (HH:MM in Europe/Berlin)
-#   OROMA_ORCH_CHESS_POLICY_TRAIN_AT=03:47 (HH:MM in Europe/Berlin)
-#   OROMA_ORCH_CHESS_POLICY_EXPORT_AT=03:49 (HH:MM in Europe/Berlin)
+#   OROMA_ORCH_CHESS_DAILY_AT=03:45 (HH:MM in Europe/Berlin; Legacy Chess1, Default disabled)
+#   OROMA_ORCH_CHESS_PRO_WHITE_AT=03:55 (HH:MM in Europe/Berlin; 1. Partie, ORÓMA-Fokus Weiß)
+#   OROMA_ORCH_CHESS_PRO_BLACK_AT=04:55 (HH:MM in Europe/Berlin; 2. Partie, ORÓMA-Fokus Schwarz, +1h)
+#   OROMA_ORCH_CHESS_PRO_DEPTH=4
+#   OROMA_ORCH_CHESS_PRO_MAX_PLIES=180
+#   OROMA_ORCH_CHESS_PRO_TIME_BUDGET_MS=12000
+#   OROMA_ORCH_CHESS_PRO_GAME_BUDGET_SEC=1680  (28min harte Obergrenze pro Partie)
+#   OROMA_ORCH_CHESS_PRO_EPS=0.01
+#   OROMA_ORCH_CHESS2_SIDE_WHITE_AT=03:55 (HH:MM in Europe/Berlin; Legacy-Vorstufe)
+#   OROMA_ORCH_CHESS2_SIDE_BLACK_AT=04:55 (HH:MM in Europe/Berlin; Legacy-Vorstufe)
+#   OROMA_ORCH_CHESS2_SIDE_GAMES=1 (pro Side-Lauf; Default total 2 Partien/Tag, falls Legacy aktiviert)
+#   OROMA_ORCH_CHESS_POLICY_TRAIN_AT=03:47 (HH:MM in Europe/Berlin; Legacy Chess1, Default disabled)
+#   OROMA_ORCH_CHESS_POLICY_EXPORT_AT=03:49 (HH:MM in Europe/Berlin; Legacy Chess1, Default disabled)
 #   OROMA_ORCH_FLAPPY_DAILY_AT=03:50 (HH:MM in Europe/Berlin)
 #   OROMA_ORCH_CTF_DAILY_AT=04:00   (HH:MM in Europe/Berlin)
 #
@@ -141,6 +186,63 @@
 #
 #   • Dieser Modus (B) ist bewusst der erste Schritt. Ein späterer Modus (A)
 #     "Single DB Writer Daemon" (IPC/Queue) kann darauf aufbauen.
+#
+# PATCH-HINWEIS 2026-07-07 / Dream→Policy Auto-Mini-Write Orchestrator-Gate v1
+# ─────────────────────────────────────────────────────────────────────────────
+#   Der Orchestrator kann nun die bereits validierte DreamWorker-Phase
+#   adapter_auto_mini_write_gated seriell einplanen. Der Anschluss ist bewusst
+#   als Default-EIN-ENV-Gate umgesetzt: Im Orchestrator ist der Job per Default
+#   aktiv, bleibt aber ueber OROMA_ORCH_ENABLE_DREAM_AUTO_MINI_WRITE=0 sofort
+#   abschaltbar. Der Subprozess bekommt harte produktive Limits (DBWriter-only,
+#   Direct-Step-Credit-only, Ledger-Pflicht, MAX=1, DAILY_CAP=2, COOLDOWN=1h)
+#   und schreibt niemals ohne die internen DreamWorker-Gates. Dadurch wird der
+#   erste Automatikbetrieb ermoeglicht, ohne die zuvor getesteten Sicherheits-
+#   barrieren aufzuweichen.
+#
+# PATCH-HINWEIS 2026-07-09 / Gap-Learning-Bridge Dry-Run v1
+# ─────────────────────────────────────────────────────────
+#   Der Orchestrator kann nun eine read-only Gap-Learning-Bridge starten.
+#   Diese Bridge liest knowledge_gaps und policy_rules, schreibt aber keine DB,
+#   keine policy_rules und keine Schemaänderung. Ergebnis ist ausschließlich
+#   data/state/gap_learning_focus.json als Learning-Focus-Kandidatenliste für
+#   spätere Explore-/Replay-/Dream-Verbraucher. Damit wird Gap→Learning erstmals
+#   nutzbar, ohne Gaps fälschlich als direkte Rewards zu behandeln.
+#
+# PATCH-HINWEIS 2026-07-09 / Gap-Focus Consumer Read-Only v1
+# ───────────────────────────────────────────────────────────
+#   Der Orchestrator kann direkt nach bzw. neben der Gap-Learning-Bridge eine
+#   reine Verbrauchersicht erzeugen: data/state/gap_focus_consumer.json. Diese
+#   Sicht routet Fokus-Kandidaten in read-only Buckets für Explore, Replay,
+#   Dream und Runner-Priorität. Sie startet keine Jobs, öffnet keine Datenbank
+#   und schreibt keine Policy. Sie ist nur die maschinenlesbare Anschlussfläche,
+#   damit spätere Verbraucher denselben Fokus sehen, aber weiterhin eigene Gates
+#   für Evidenz, Review und Writes brauchen.
+#
+# PATCH-HINWEIS 2026-07-09 / Gap-Focus Shadow Plan Read-Only v1
+# ───────────────────────────────────────────────────────────────
+#   Der Orchestrator kann nun aus data/state/gap_focus_consumer.json einen
+#   reinen Anschluss-/Shadow-Plan erzeugen: data/state/gap_focus_shadow_plan.json.
+#   Diese Stufe ist bewusst noch kein echter Verbraucher: Sie startet weder
+#   Replay noch Dream noch Runner, schreibt keine DB und keine Policy. Sie macht
+#   lediglich sichtbar, welche Kandidaten spaeter in welchen Review-/Gate-Pfad
+#   gehen duerften. Damit bleibt Gap→Learning kontrolliert und auditierbar.
+#
+# PATCH-HINWEIS 2026-07-10 / Gap Evidence Queue Review Dry-Run v1
+# ─────────────────────────────────────────────────────────────────
+#   Der Orchestrator kann nun die DBWriter-only Evidence Queue read-only
+#   auswerten und data/state/gap_evidence_review.json erzeugen. Diese Review-
+#   Sicht klassifiziert Queue-Kandidaten fuer spaetere Replay-/Dream-/Explore-
+#   Gates, bleibt aber strikt ohne DB-Write, ohne policy_rules-Write und ohne
+#   Runner-/Replay-/Dream-Start.
+#
+# PATCH-HINWEIS 2026-07-07 / Gap-Miner Orchestrator-Bounding v1
+# ───────────────────────────────────────────────────────────────
+#   Live-Logs zeigten wiederholte gap_miner.py-Timeouts nach 300s. Der
+#   Orchestrator startet den Gap-Miner deshalb nun mit expliziten produktiven
+#   Bounds und DBWriter-ENV: max_runtime_s, Limit pro Gap-Art, Insert-Budget,
+#   Strict-Local-Writes und kurzer Gap-Lock-Retry. Das Tool bleibt optional,
+#   aber wenn es aktiviert ist, darf es die serielle Orchestrator-Pipeline nicht
+#   mehr minutenlang blockieren.
 # =============================================================================
 
 from __future__ import annotations
@@ -156,6 +258,8 @@ import subprocess
 import sys
 import time
 from typing import Dict, Any, Optional, List, Tuple
+
+from core import execution_mode
 
 
 def _env_bool(name: str, default: bool = True) -> bool:
@@ -535,6 +639,13 @@ def run_due_jobs(once: bool = False) -> int:
     en_train = _env_bool("OROMA_ORCH_ENABLE_TRAIN_SNAKE", True)
     en_dream = _env_bool("OROMA_ORCH_ENABLE_DREAM", True)
     dream_require_phase = _env_bool("OROMA_ORCH_DREAM_REQUIRE_PHASE", True)
+    # Dream→Policy Auto-Mini-Write (Default-EIN-ENV-Gate):
+    #   - Default bewusst EIN, weil die Schreibphase selbst weiterhin harte
+    #     Gates besitzt (DBWriter, Confirm-Token, Ledger, Daily-Cap, Cooldown).
+    #   - Sofort abschaltbar mit OROMA_ORCH_ENABLE_DREAM_AUTO_MINI_WRITE=0.
+    #   - Separater Orchestrator-Job, damit normale Dream-Rotation und Auto-
+    #     Mini-Write seriell, sichtbar und mit eigenem Timeout laufen.
+    en_dream_auto_mini_write = _env_bool("OROMA_ORCH_ENABLE_DREAM_AUTO_MINI_WRITE", True)
     en_kpi = _env_bool("OROMA_ORCH_ENABLE_KPI", True)
     en_policy = _env_bool("OROMA_ORCH_ENABLE_POLICY", True)
     en_export = _env_bool("OROMA_ORCH_ENABLE_EXPORTGATE", True)
@@ -565,36 +676,111 @@ def run_due_jobs(once: bool = False) -> int:
     # Synapses Origin Probe: measure Herkunft/Zusammensetzung synaptic-Kanten.
     en_synapses_origin_probe = _env_bool("OROMA_ORCH_ENABLE_SYNAPSES_ORIGIN_PROBE", True)
     en_gap_miner = _env_bool("OROMA_ORCH_ENABLE_GAP_MINER", False)
+    # Gap-Miner Night Sweep: default EIN, aber nur als täglicher bounded Sweep.
+    # Tagsüber bleibt gap_miner kurz; nachts arbeitet er Cursor-basiert Rückstände ab.
+    en_gap_miner_night = _env_bool("OROMA_ORCH_ENABLE_GAP_MINER_NIGHT", True)
     en_ttt_oracle = _env_bool("OROMA_ORCH_ENABLE_TTT_ORACLE", True)
     en_ttt_daily_run = _env_bool("OROMA_ORCH_ENABLE_TTT_DAILY_RUN", True)
     en_c4_daily_run = _env_bool("OROMA_ORCH_ENABLE_C4_DAILY_RUN", True)
     en_snake_daily_run = _env_bool("OROMA_ORCH_ENABLE_SNAKE_DAILY_RUN", True)
+    # Snake3D ist nach validiertem Template-Transfer ein regulärer
+    # Policy+Explore-Daily-Runner. Die UI bleibt read-only; PTZ bleibt unberührt.
+    en_snake3d_daily_run = _env_bool("OROMA_ORCH_ENABLE_SNAKE3D_DAILY_RUN", True)
     en_pong_daily_run = _env_bool("OROMA_ORCH_ENABLE_PONG_DAILY_RUN", True)
     en_tetris_daily_run = _env_bool("OROMA_ORCH_ENABLE_TETRIS_DAILY_RUN", True)
-    en_chess_daily_run = _env_bool("OROMA_ORCH_ENABLE_CHESS_DAILY_RUN", True)
-    # Chess2 hat inzwischen einen stabilen Mobility-/Policy-Stack und soll
-    # produktiv weiter Tiefe aufbauen. Deshalb jetzt Default ON. Abschalten
-    # bleibt weiterhin jederzeit per ENV möglich.
-    en_chess2_daily_run = _env_bool("OROMA_ORCH_ENABLE_CHESS2_DAILY_RUN", True)
+    en_chess_daily_run = _env_bool("OROMA_ORCH_ENABLE_CHESS_DAILY_RUN", False)
+    # Chess2 bleibt als Mobility-/Policy-Stack erhalten, ist aber ab ChessPro
+    # nicht mehr der produktive Default-Tagespfad. Manuelle Reaktivierung bleibt
+    # per ENV möglich.
+    en_chess2_daily_run = _env_bool("OROMA_ORCH_ENABLE_CHESS2_DAILY_RUN", False)
+    # Neuer produktiver Chess-Zielpfad: ChessPro.
+    # Exakt zwei ressourcenschonende Partien pro Tag, getrennt nach
+    # ORÓMA-Fokus Weiß/Schwarz und mit 1 Stunde Abstand. Chess2-Side bleibt als
+    # Legacy-Vorstufe manuell aktivierbar, ist aber nicht mehr Default.
+    en_chess_pro_daily_run = _env_bool("OROMA_ORCH_ENABLE_CHESS_PRO_DAILY_RUN", True)
+    en_chess2_side_daily_run = _env_bool("OROMA_ORCH_ENABLE_CHESS2_SIDE_DAILY_RUN", False)
     en_chess2_canon_daily_run = _env_bool("OROMA_ORCH_ENABLE_CHESS2_CANON_DAILY_RUN", False)
     en_chess2_canon_coop_daily_run = _env_bool("OROMA_ORCH_ENABLE_CHESS2_CANON_COOP_DAILY_RUN", False)
     en_chess2_canon_coop_king_daily_run = _env_bool("OROMA_ORCH_ENABLE_CHESS2_CANON_COOP_KING_DAILY_RUN", False)
     en_chess2_canon_coop_king_territory_daily_run = _env_bool("OROMA_ORCH_ENABLE_CHESS2_CANON_COOP_KING_TERRITORY_DAILY_RUN", False)
-    en_chess_policy_train = _env_bool("OROMA_ORCH_ENABLE_CHESS_POLICY_TRAIN", True)
-    en_chess_policy_export = _env_bool("OROMA_ORCH_ENABLE_CHESS_POLICY_EXPORT", True)
+    en_chess_policy_train = _env_bool("OROMA_ORCH_ENABLE_CHESS_POLICY_TRAIN", False)
+    en_chess_policy_export = _env_bool("OROMA_ORCH_ENABLE_CHESS_POLICY_EXPORT", False)
     en_flappy_daily_run = _env_bool("OROMA_ORCH_ENABLE_FLAPPY_DAILY_RUN", True)
-    # Daily: Memory (classic pairs) – headless, schnelle Episoden, lernt via policy_rules
+    # Daily: Memory (classic pairs) – headless, schnelle Episoden, lernt via policy_rules.
     en_memory_daily_run = _env_bool("OROMA_ORCH_ENABLE_MEMORY_DAILY_RUN", True)
-    en_memorymaze_daily_run = _env_bool("OROMA_ORCH_ENABLE_MEMORYMAZE_DAILY_RUN", True)
-    # MemoryMaze Hybrid (PacMan-Maze + Memory-Blocker) – separates Spiel (nicht memory_maze2033)
+    # Daily: Sudoku – mechanic_solved Constraint-Learning-Pfad.
+    # Sudoku hat variable Puzzles, aber eine wiederverwendbare Regelmechanik;
+    # deshalb wird Explore nach ausreichend Samples reduziert, nicht hart gestoppt.
+    en_sudoku_daily_run = _env_bool("OROMA_ORCH_ENABLE_SUDOKU_DAILY_RUN", True)
+    # MemoryMaze2033 ist ein Legacy-/Referenzexperiment und wird seit
+    # memory:pro_v2 (mechanic_solved) und memorymaze_hybrid nicht mehr vom
+    # produktiven Orchestrator gestartet. Die ENV bleibt nur als dokumentierter
+    # Alt-Schalter erhalten; der automatische Runner-Block ist unten entfernt,
+    # damit tools/memorymaze_daily_runner.py nach manueller Kontrolle gelöscht
+    # werden kann, ohne den Nachtlauf zu beschädigen.
+    en_memorymaze_daily_run = _env_bool("OROMA_ORCH_ENABLE_MEMORYMAZE_DAILY_RUN", False)
+    # MemoryMaze Hybrid (PacMan-Maze + Memory-Blocker) – separates Spiel (nicht memory_maze2033).
     en_memorymaze_hybrid_daily_run = _env_bool("OROMA_ORCH_ENABLE_MEMORYMAZE_HYBRID_DAILY_RUN", True)
     en_hideseek_daily_run = _env_bool("OROMA_ORCH_ENABLE_HIDESEEK_DAILY_RUN", True)
     en_ctf_daily_run = _env_bool("OROMA_ORCH_ENABLE_CTF_DAILY_RUN", True)
-    en_ptz_arena_daily_run = _env_bool("OROMA_ORCH_ENABLE_PTZ_ARENA_DAILY_RUN", True)
-    en_ptz_target_daily_run = _env_bool("OROMA_ORCH_ENABLE_PTZ_TARGET_DAILY_RUN", True)
-    # PTZ Coverage (Staubsauger-Sweep) – neues PTZ-Spiel, Defaults bewusst klein
-    en_ptz_coverage_daily_run = _env_bool("OROMA_ORCH_ENABLE_PTZ_COVERAGE_DAILY_RUN", True)
+    # PTZ-Games bewegen echte Hardware. Sie bleiben als manuelle UIs/Runner
+    # erhalten, sind aber im produktiven Orchestrator fail-closed. Wer einen
+    # aktiven PTZ-Game-Lauf wirklich möchte, muss ihn explizit per ENV-Gate
+    # einschalten. PTZ Zoom Observe ist davon unabhängig und read-only.
+    en_ptz_arena_daily_run = _env_bool("OROMA_ORCH_ENABLE_PTZ_ARENA_DAILY_RUN", False)
+    en_ptz_target_daily_run = _env_bool("OROMA_ORCH_ENABLE_PTZ_TARGET_DAILY_RUN", False)
+    # PTZ Coverage (Staubsauger-Sweep) bewegt ebenfalls echte Hardware; daher
+    # defaultmäßig aus und nur explizit per ENV aktivierbar.
+    en_ptz_coverage_daily_run = _env_bool("OROMA_ORCH_ENABLE_PTZ_COVERAGE_DAILY_RUN", False)
     en_learning_cache = _env_bool("OROMA_ORCH_ENABLE_LEARNING_CACHE", True)
+    # Gap-Learning-Bridge Dry-Run: erzeugt nur data/state/gap_learning_focus.json.
+    # Keine DB-Writes, keine policy_rules-Writes, keine Runner-Aktivierung.
+    en_gap_learning_bridge = _env_bool("OROMA_ORCH_ENABLE_GAP_LEARNING_BRIDGE", True)
+    # Gap-Focus Consumer Read-Only: erzeugt nur data/state/gap_focus_consumer.json.
+    # Keine DB-Writes, keine policy_rules-Writes, keine Runner-/Replay-/Dream-Aktivierung.
+    en_gap_focus_consumer = _env_bool("OROMA_ORCH_ENABLE_GAP_FOCUS_CONSUMER", True)
+    # Gap-Focus Shadow Plan Read-Only: erzeugt nur data/state/gap_focus_shadow_plan.json.
+    # Keine DB-Writes, keine policy_rules-Writes, keine Runner-/Replay-/Dream-Aktivierung.
+    en_gap_focus_shadow_plan = _env_bool("OROMA_ORCH_ENABLE_GAP_FOCUS_SHADOW_PLAN", True)
+    # Gap Evidence Queue Writer: erster sicherer DBWriter-only Write der Gap-Kette.
+    # Schreibt nur deduplizierte Review-/Evidence-Requests in eigene Queue-Tabelle,
+    # niemals policy_rules und startet keine Runner-/Replay-/Dream-Jobs.
+    en_gap_evidence_queue = _env_bool("OROMA_ORCH_ENABLE_GAP_EVIDENCE_QUEUE", True)
+    # Gap Evidence Queue Review Dry-Run: liest die Queue read-only und erzeugt
+    # data/state/gap_evidence_review.json. Keine DB-/Policy-Writes, keine Starts.
+    en_gap_evidence_review = _env_bool("OROMA_ORCH_ENABLE_GAP_EVIDENCE_REVIEW", True)
+    # Gap Evidence Execution/Validation Dry-Run: prueft Review-Kandidaten
+    # read-only gegen Queue und policy_rules und erzeugt
+    # data/state/gap_evidence_validation.json. Keine DB-/Policy-Writes, keine Starts.
+    en_gap_evidence_validation = _env_bool("OROMA_ORCH_ENABLE_GAP_EVIDENCE_VALIDATION", True)
+    # Gap Policy Promotion Queue: schreibt validierte Kandidaten dedupliziert in
+    # eine eigene Promotion-/Approval-Queue. Kein policy_rules-Write, keine Starts.
+    en_gap_policy_promotion = _env_bool("OROMA_ORCH_ENABLE_GAP_POLICY_PROMOTION", True)
+    # Gap Evidence Outcome Collector: sucht vorhandene direkte Outcomes fuer
+    # Promotion-Kandidaten. Keine DB-/Policy-Writes, keine Runner-/Replay-/Dream-Starts.
+    # Reine policy_rules-Statistik wird nur als Snapshot dokumentiert und nicht als
+    # neuer Beweis fuer Policy-Mini-Writes verwendet.
+    en_gap_evidence_outcome = _env_bool("OROMA_ORCH_ENABLE_GAP_EVIDENCE_OUTCOME", True)
+    # Gap Targeted Evidence Probe: prueft wenige Promotion-Kandidaten gezielt auf
+    # historische Adapter-Hinweise oder Bedarf fuer Replay-/Dream-Evidence.
+    # Kein DB-Write, kein policy_rules-Write, keine Starts, kein Massenscan.
+    # Default nach Live-Befund aus: der Probe ist fuer Auto-Betrieb zu schwer.
+    en_gap_targeted_evidence_probe = _env_bool("OROMA_ORCH_ENABLE_GAP_TARGETED_EVIDENCE_PROBE", False)
+    # Gap Targeted Replay Evidence Probe: nutzt explizite lokale Headless-Adapter
+    # fuer wenige Kandidaten und erzeugt nur State-JSON mit Outcome-Vorschlaegen.
+    # Kein globaler ReplayManager-Start, kein Runner, kein Dream, kein Policy-Write.
+    # Default nach Live-Befund aus: der manuelle Probe ist korrekt, aber fuer
+    # Auto-Betrieb aktuell zu langsam.
+    en_gap_replay_evidence_probe = _env_bool("OROMA_ORCH_ENABLE_GAP_REPLAY_EVIDENCE_PROBE", False)
+    en_snake_autonomous_acquisition = _env_bool("OROMA_ORCH_ENABLE_SNAKE_AUTONOMOUS_ACQUISITION", False)
+    # Gap Evidence Outcome Queue Gate: uebernimmt fertige Replay-Probe-Outcomes
+    # DBWriter-only in eine eigene Outcome-Queue. Kein policy_rules-Write.
+    en_gap_evidence_outcome_queue = _env_bool("OROMA_ORCH_ENABLE_GAP_EVIDENCE_OUTCOME_QUEUE", True)
+    # Gap Policy Mini-Write Gate: finales, fail-closed Policy-Gate mit Ledger.
+    # Default bleibt policy-write-seitig aus. Selbst bei Aktivierung verlangt das
+    # Tool echte Evidence-Outcome-Daten; reine Gap-Wahrscheinlichkeiten werden
+    # nicht als Wissen in policy_rules geschrieben.
+    en_gap_policy_mini_write = _env_bool("OROMA_ORCH_ENABLE_GAP_POLICY_MINI_WRITE", True)
     en_ptz_attention = _env_bool("OROMA_ORCH_ENABLE_PTZ_ATTENTION", False)
 
     # intervals
@@ -602,6 +788,51 @@ def run_due_jobs(once: bool = False) -> int:
     int_social = _env_int("OROMA_ORCH_INT_SOCIAL", 120)
     int_energy = _env_int("OROMA_ORCH_INT_ENERGY", 300)
     int_learning_cache = _env_int("OROMA_ORCH_INT_LEARNING_CACHE", 7200)  # 2h
+    int_gap_learning_bridge = _env_int("OROMA_ORCH_INT_GAP_LEARNING_BRIDGE", 1800)  # 30min, read-only/state-only
+    gap_learning_bridge_max_runtime_s = _env_int("OROMA_ORCH_GAP_LEARNING_BRIDGE_MAX_RUNTIME_S", 30)
+    gap_learning_bridge_limit_gaps = _env_int("OROMA_ORCH_GAP_LEARNING_BRIDGE_LIMIT_GAPS", 500)
+    gap_learning_bridge_topk = _env_int("OROMA_ORCH_GAP_LEARNING_BRIDGE_TOPK", 25)
+    int_gap_focus_consumer = _env_int("OROMA_ORCH_INT_GAP_FOCUS_CONSUMER", 1800)  # 30min, state-only Consumer-View
+    gap_focus_consumer_topk = _env_int("OROMA_ORCH_GAP_FOCUS_CONSUMER_TOPK", 10)
+    gap_focus_consumer_max_age_sec = _env_int("OROMA_ORCH_GAP_FOCUS_CONSUMER_MAX_AGE_SEC", 7200)
+    int_gap_focus_shadow_plan = _env_int("OROMA_ORCH_INT_GAP_FOCUS_SHADOW_PLAN", 1800)  # 30min, read-only Shadow-Plan
+    gap_focus_shadow_plan_topk = _env_int("OROMA_ORCH_GAP_FOCUS_SHADOW_PLAN_TOPK", 10)
+    gap_focus_shadow_plan_max_age_sec = _env_int("OROMA_ORCH_GAP_FOCUS_SHADOW_PLAN_MAX_AGE_SEC", 7200)
+    int_gap_evidence_queue = _env_int("OROMA_ORCH_INT_GAP_EVIDENCE_QUEUE", 1800)  # 30min, DBWriter-only Queue-Write
+    gap_evidence_queue_topk = _env_int("OROMA_ORCH_GAP_EVIDENCE_QUEUE_TOPK", 10)
+    gap_evidence_queue_max_age_sec = _env_int("OROMA_ORCH_GAP_EVIDENCE_QUEUE_MAX_AGE_SEC", 7200)
+    int_gap_evidence_review = _env_int("OROMA_ORCH_INT_GAP_EVIDENCE_REVIEW", 1800)  # 30min, read-only Queue-Review
+    gap_evidence_review_limit = _env_int("OROMA_ORCH_GAP_EVIDENCE_REVIEW_LIMIT", 200)
+    gap_evidence_review_topk = _env_int("OROMA_ORCH_GAP_EVIDENCE_REVIEW_TOPK", 10)
+    int_gap_evidence_validation = _env_int("OROMA_ORCH_INT_GAP_EVIDENCE_VALIDATION", 1800)  # 30min, read-only Validation
+    gap_evidence_validation_limit = _env_int("OROMA_ORCH_GAP_EVIDENCE_VALIDATION_LIMIT", 200)
+    gap_evidence_validation_topk = _env_int("OROMA_ORCH_GAP_EVIDENCE_VALIDATION_TOPK", 10)
+    gap_evidence_validation_max_age_sec = _env_int("OROMA_ORCH_GAP_EVIDENCE_VALIDATION_MAX_AGE_SEC", 7200)
+    int_gap_policy_promotion = _env_int("OROMA_ORCH_INT_GAP_POLICY_PROMOTION", 1800)  # 30min, DBWriter-only Promotion-Queue
+    gap_policy_promotion_limit = _env_int("OROMA_ORCH_GAP_POLICY_PROMOTION_LIMIT", 200)
+    gap_policy_promotion_topk = _env_int("OROMA_ORCH_GAP_POLICY_PROMOTION_TOPK", 10)
+    gap_policy_promotion_max_age_sec = _env_int("OROMA_ORCH_GAP_POLICY_PROMOTION_MAX_AGE_SEC", 7200)
+    int_gap_evidence_outcome = _env_int("OROMA_ORCH_INT_GAP_EVIDENCE_OUTCOME", 1800)  # 30min, read-only Outcome Collector
+    gap_evidence_outcome_limit = _env_int("OROMA_ORCH_GAP_EVIDENCE_OUTCOME_LIMIT", 50)
+    gap_evidence_outcome_topk = _env_int("OROMA_ORCH_GAP_EVIDENCE_OUTCOME_TOPK", 10)
+    gap_evidence_outcome_lookback_sec = _env_int("OROMA_ORCH_GAP_EVIDENCE_OUTCOME_LOOKBACK_SEC", 1209600)
+    int_gap_targeted_evidence_probe = _env_int("OROMA_ORCH_INT_GAP_TARGETED_EVIDENCE_PROBE", 1800)  # 30min, bounded targeted probe
+    gap_targeted_evidence_probe_limit = _env_int("OROMA_ORCH_GAP_TARGETED_EVIDENCE_PROBE_LIMIT", 3)
+    gap_targeted_evidence_probe_topk = _env_int("OROMA_ORCH_GAP_TARGETED_EVIDENCE_PROBE_TOPK", 3)
+    gap_targeted_evidence_probe_scan_limit = _env_int("OROMA_ORCH_GAP_TARGETED_EVIDENCE_PROBE_SCAN_LIMIT", 5000)
+    int_gap_replay_evidence_probe = _env_int("OROMA_ORCH_INT_GAP_REPLAY_EVIDENCE_PROBE", 1800)  # 30min, state-only local replay adapter
+    int_snake_autonomous_acquisition = _env_int("OROMA_ORCH_INT_SNAKE_AUTONOMOUS_ACQUISITION", 300)
+    gap_replay_evidence_probe_limit = _env_int("OROMA_ORCH_GAP_REPLAY_EVIDENCE_PROBE_LIMIT", 3)
+    gap_replay_evidence_probe_topk = _env_int("OROMA_ORCH_GAP_REPLAY_EVIDENCE_PROBE_TOPK", 3)
+    gap_replay_evidence_probe_horizon = _env_int("OROMA_ORCH_GAP_REPLAY_EVIDENCE_PROBE_HORIZON_STEPS", 80)
+    int_gap_evidence_outcome_queue = _env_int("OROMA_ORCH_INT_GAP_EVIDENCE_OUTCOME_QUEUE", 1800)  # 30min, DBWriter-only Outcome-Queue
+    gap_evidence_outcome_queue_limit = _env_int("OROMA_ORCH_GAP_EVIDENCE_OUTCOME_QUEUE_LIMIT", 10)
+    gap_evidence_outcome_queue_topk = _env_int("OROMA_ORCH_GAP_EVIDENCE_OUTCOME_QUEUE_TOPK", 10)
+    gap_evidence_outcome_queue_min_confidence = _env_float("OROMA_ORCH_GAP_EVIDENCE_OUTCOME_QUEUE_MIN_CONFIDENCE", 0.50)
+    int_gap_policy_mini_write = _env_int("OROMA_ORCH_INT_GAP_POLICY_MINI_WRITE", 1800)  # 30min, fail-closed Policy-Gate status
+    gap_policy_mini_write_limit = _env_int("OROMA_ORCH_GAP_POLICY_MINI_WRITE_LIMIT", 50)
+    gap_policy_mini_write_topk = _env_int("OROMA_ORCH_GAP_POLICY_MINI_WRITE_TOPK", 10)
+    gap_policy_mini_write_max_writes = _env_int("OROMA_ORCH_GAP_POLICY_MINI_WRITE_MAX_WRITES", 1)
     # Default: 6 Stunden (Produktiv-Kompromiss)
     int_forget_sample = _env_int("OROMA_ORCH_INT_FORGETTING_SAMPLE", 21600)  # 6h
     int_crossmodal_linker = _env_int("OROMA_ORCH_INT_CROSSMODAL_LINKER", 3600)  # 1h (Binding/Crossmodal: schnelleres Feedback)
@@ -674,7 +905,30 @@ def run_due_jobs(once: bool = False) -> int:
     synapses_origin_topk = _env_int("OROMA_ORCH_SYNAPSES_ORIGIN_TOPK", 25)
     int_train = _env_int("OROMA_ORCH_INT_TRAIN_SNAKE", 300)
     int_dream = _env_int("OROMA_ORCH_INT_DREAM", 1800)
+    int_dream_auto_mini_write = _env_int("OROMA_ORCH_INT_DREAM_AUTO_MINI_WRITE", 3600)
     int_gap_miner = _env_int("OROMA_ORCH_INT_GAP_MINER", 600)
+    # Gap-Miner Tagbetrieb: sehr kurz und rotations-/cursorbasiert.
+    # Low-Evidence und High-Uncertainty dürfen kleine Fenster prüfen;
+    # Logic-Conflict ist auf grossen ORÓMA-DBs besonders teuer und bleibt
+    # tagsüber bewusst stark gedrosselt. Der Nacht-Sweep darf breiter arbeiten.
+    gap_miner_max_runtime_s = _env_int("OROMA_ORCH_GAP_MINER_MAX_RUNTIME_S", 45)
+    gap_miner_limit_per_kind = _env_int("OROMA_ORCH_GAP_MINER_LIMIT_PER_KIND", 50)
+    gap_miner_max_inserts = _env_int("OROMA_ORCH_GAP_MINER_MAX_INSERTS_PER_RUN", 50)
+    gap_miner_hu_row_scan_limit = _env_int("OROMA_ORCH_GAP_MINER_HU_ROW_SCAN_LIMIT", 600)
+    gap_miner_le_row_scan_limit = _env_int("OROMA_ORCH_GAP_MINER_LE_ROW_SCAN_LIMIT", 600)
+    gap_miner_lc_row_scan_limit = _env_int("OROMA_ORCH_GAP_MINER_LC_ROW_SCAN_LIMIT", 150)
+
+    # Gap-Miner Nachtbetrieb: mehrere kleine bounded Slices in einem langen Fenster.
+    # Ziel: Rückstände nachts abarbeiten, ohne tagsüber TIMEOUTs/DB-Locks zu erzeugen.
+    gap_miner_night_hh, gap_miner_night_mm = _env_hhmm("OROMA_ORCH_GAP_MINER_NIGHT_AT", 2, 35)
+    gap_miner_night_max_runtime_s = _env_int("OROMA_ORCH_GAP_MINER_NIGHT_MAX_RUNTIME_S", 3000)
+    gap_miner_night_limit_per_kind = _env_int("OROMA_ORCH_GAP_MINER_NIGHT_LIMIT_PER_KIND", 500)
+    gap_miner_night_max_inserts = _env_int("OROMA_ORCH_GAP_MINER_NIGHT_MAX_INSERTS_PER_RUN", 1000)
+    gap_miner_night_sweep_passes = _env_int("OROMA_ORCH_GAP_MINER_NIGHT_SWEEP_PASSES", 60)
+    gap_miner_night_hu_row_scan_limit = _env_int("OROMA_ORCH_GAP_MINER_NIGHT_HU_ROW_SCAN_LIMIT", 3000)
+    gap_miner_night_le_row_scan_limit = _env_int("OROMA_ORCH_GAP_MINER_NIGHT_LE_ROW_SCAN_LIMIT", 3000)
+    gap_miner_night_lc_row_scan_limit = _env_int("OROMA_ORCH_GAP_MINER_NIGHT_LC_ROW_SCAN_LIMIT", 3000)
+    gap_miner_night_slice_runtime_s = _env_int("OROMA_ORCH_GAP_MINER_NIGHT_SLICE_RUNTIME_S", 120)
     int_ptz_attention = _env_int("OROMA_ORCH_INT_PTZ_ATTENTION", 2)
 
     # ---------------------------------------------------------------------
@@ -707,11 +961,26 @@ def run_due_jobs(once: bool = False) -> int:
     to_ptz_attention = _env_int("OROMA_ORCH_TIMEOUT_PTZ_ATTENTION", 25)
     to_energy = _env_int("OROMA_ORCH_TIMEOUT_ENERGY", 120)
     to_learning_cache = _env_int("OROMA_ORCH_TIMEOUT_LEARNING_CACHE", 180)
+    to_gap_learning_bridge = _env_int("OROMA_ORCH_TIMEOUT_GAP_LEARNING_BRIDGE", 45)
+    to_gap_focus_consumer = _env_int("OROMA_ORCH_TIMEOUT_GAP_FOCUS_CONSUMER", 20)
+    to_gap_focus_shadow_plan = _env_int("OROMA_ORCH_TIMEOUT_GAP_FOCUS_SHADOW_PLAN", 20)
+    to_gap_evidence_queue = _env_int("OROMA_ORCH_TIMEOUT_GAP_EVIDENCE_QUEUE", 30)
+    to_gap_evidence_review = _env_int("OROMA_ORCH_TIMEOUT_GAP_EVIDENCE_REVIEW", 20)
+    to_gap_evidence_validation = _env_int("OROMA_ORCH_TIMEOUT_GAP_EVIDENCE_VALIDATION", 20)
+    to_gap_policy_promotion = _env_int("OROMA_ORCH_TIMEOUT_GAP_POLICY_PROMOTION", 30)
+    to_gap_evidence_outcome = _env_int("OROMA_ORCH_TIMEOUT_GAP_EVIDENCE_OUTCOME", 20)
+    to_gap_targeted_evidence_probe = _env_int("OROMA_ORCH_TIMEOUT_GAP_TARGETED_EVIDENCE_PROBE", 30)
+    to_gap_replay_evidence_probe = _env_int("OROMA_ORCH_TIMEOUT_GAP_REPLAY_EVIDENCE_PROBE", 30)
+    to_snake_autonomous_acquisition = _env_int("OROMA_ORCH_TIMEOUT_SNAKE_AUTONOMOUS_ACQUISITION", 240)
+    to_gap_evidence_outcome_queue = _env_int("OROMA_ORCH_TIMEOUT_GAP_EVIDENCE_OUTCOME_QUEUE", 30)
+    to_gap_policy_mini_write = _env_int("OROMA_ORCH_TIMEOUT_GAP_POLICY_MINI_WRITE", 20)
     to_forget_sample = _env_int("OROMA_ORCH_TIMEOUT_FORGETTING_SAMPLE", 60)
     to_crossmodal_linker = _env_int("OROMA_ORCH_TIMEOUT_CROSSMODAL_LINKER", 180)
     to_train_snake = _env_int("OROMA_ORCH_TIMEOUT_TRAIN_SNAKE", 900)
     to_dream = _env_int("OROMA_ORCH_TIMEOUT_DREAM", 900)
-    to_gap_miner = _env_int("OROMA_ORCH_TIMEOUT_GAP_MINER", 300)
+    to_dream_auto_mini_write = _env_int("OROMA_ORCH_TIMEOUT_DREAM_AUTO_MINI_WRITE", 120)
+    to_gap_miner = _env_int("OROMA_ORCH_TIMEOUT_GAP_MINER", 90)
+    to_gap_miner_night = _env_int("OROMA_ORCH_TIMEOUT_GAP_MINER_NIGHT", 3600)
     to_kpi = _env_int("OROMA_ORCH_TIMEOUT_KPI", 900)
     to_policy_train = _env_int("OROMA_ORCH_TIMEOUT_POLICY_TRAIN", 900)
     to_policy_export = _env_int("OROMA_ORCH_TIMEOUT_POLICY_EXPORT", 240)
@@ -719,10 +988,13 @@ def run_due_jobs(once: bool = False) -> int:
     to_ttt_daily_run = _env_int("OROMA_ORCH_TIMEOUT_TTT_DAILY_RUN", 1800)
     to_c4_daily_run = _env_int("OROMA_ORCH_TIMEOUT_C4_DAILY_RUN", 1800)
     to_snake_daily_run = _env_int("OROMA_ORCH_TIMEOUT_SNAKE_DAILY_RUN", 1800)
+    to_snake3d_daily_run = _env_int("OROMA_ORCH_TIMEOUT_SNAKE3D_DAILY_RUN", 900)
     to_pong_daily_run = _env_int("OROMA_ORCH_TIMEOUT_PONG_DAILY_RUN", 1800)
     to_tetris_daily_run = _env_int("OROMA_ORCH_TIMEOUT_TETRIS_DAILY_RUN", 1800)
     to_chess_daily_run = _env_int("OROMA_ORCH_TIMEOUT_CHESS_DAILY_RUN", 2400)
     to_chess2_daily_run = _env_int("OROMA_ORCH_TIMEOUT_CHESS2_DAILY_RUN", 3000)
+    to_chess_pro_daily_run = _env_int("OROMA_ORCH_TIMEOUT_CHESS_PRO_DAILY_RUN", 2100)
+    to_chess2_side_daily_run = _env_int("OROMA_ORCH_TIMEOUT_CHESS2_SIDE_DAILY_RUN", to_chess2_daily_run)
     to_chess2_canon_daily_run = _env_int("OROMA_ORCH_TIMEOUT_CHESS2_CANON_DAILY_RUN", 3000)
     to_chess2_canon_coop_daily_run = _env_int("OROMA_ORCH_TIMEOUT_CHESS2_CANON_COOP_DAILY_RUN", 3000)
     to_chess2_canon_coop_king_daily_run = _env_int("OROMA_ORCH_TIMEOUT_CHESS2_CANON_COOP_KING_DAILY_RUN", 3000)
@@ -731,6 +1003,7 @@ def run_due_jobs(once: bool = False) -> int:
     to_chess_policy_export = _env_int("OROMA_ORCH_TIMEOUT_CHESS_POLICY_EXPORT", 240)
     to_flappy_daily_run = _env_int("OROMA_ORCH_TIMEOUT_FLAPPY_DAILY_RUN", 1800)
     to_memory_daily_run = _env_int("OROMA_ORCH_TIMEOUT_MEMORY_DAILY_RUN", 1200)
+    to_sudoku_daily_run = _env_int("OROMA_ORCH_TIMEOUT_SUDOKU_DAILY_RUN", 1200)
     to_memorymaze_daily_run = _env_int("OROMA_ORCH_TIMEOUT_MEMORYMAZE_DAILY_RUN", 2400)
     to_memorymaze_hybrid_daily_run = _env_int("OROMA_ORCH_TIMEOUT_MEMORYMAZE_HYBRID_DAILY_RUN", 3600)
     to_hideseek_daily_run = _env_int("OROMA_ORCH_TIMEOUT_HIDESEEK_DAILY_RUN", 1800)
@@ -759,6 +1032,10 @@ def run_due_jobs(once: bool = False) -> int:
     # Daily: Snake self-play batches (policy + explore)
     snake_daily_hh, snake_daily_mm = _env_hhmm("OROMA_ORCH_SNAKE_DAILY_AT", 3, 35)
 
+    # Daily: Snake3D Template-Transfer (explore-only, kein Policy-Spielmodus).
+    # Default bewusst nach Sudoku: kleine Evidenzprobe ohne frühe DBWriter-Spitzen.
+    snake3d_daily_hh, snake3d_daily_mm = _env_hhmm("OROMA_ORCH_SNAKE3D_DAILY_AT", 5, 55)
+
     # Daily: Pong self-play batches (policy + explore)
     pong_daily_hh, pong_daily_mm = _env_hhmm("OROMA_ORCH_PONG_DAILY_AT", 3, 40)
 
@@ -772,11 +1049,19 @@ def run_due_jobs(once: bool = False) -> int:
     # sporadisch Gap-Emits (UniversalPolicy→core.gaps) → Lock-Retry → unnötige Latenz.
     memory_daily_hh, memory_daily_mm = _env_hhmm("OROMA_ORCH_MEMORY_DAILY_AT", 4, 40)
 
+    # Daily: Sudoku (mechanic_solved) – nach Memory, damit beide
+    # Constraint-/Positionsspiele nicht um dieselbe frühe DBWriter-Phase konkurrieren.
+    sudoku_daily_hh, sudoku_daily_mm = _env_hhmm("OROMA_ORCH_SUDOKU_DAILY_AT", 5, 35)
+
     # Daily: Chess self-play batches (policy + explore)
     chess_daily_hh, chess_daily_mm = _env_hhmm("OROMA_ORCH_CHESS_DAILY_AT", 3, 45)
     # Daily: Chess2 self-play (mobility-native Parallel-Stack). Standard bewusst aus,
     # damit das System erst nach expliziter Aktivierung zusätzliche Nachtlast erzeugt.
     chess2_daily_hh, chess2_daily_mm = _env_hhmm("OROMA_ORCH_CHESS2_DAILY_AT", 3, 55)
+    chess_pro_white_hh, chess_pro_white_mm = _env_hhmm("OROMA_ORCH_CHESS_PRO_WHITE_AT", 3, 55)
+    chess_pro_black_hh, chess_pro_black_mm = _env_hhmm("OROMA_ORCH_CHESS_PRO_BLACK_AT", 4, 55)
+    chess2_side_white_hh, chess2_side_white_mm = _env_hhmm("OROMA_ORCH_CHESS2_SIDE_WHITE_AT", 3, 55)
+    chess2_side_black_hh, chess2_side_black_mm = _env_hhmm("OROMA_ORCH_CHESS2_SIDE_BLACK_AT", 4, 55)
     chess2_canon_daily_hh, chess2_canon_daily_mm = _env_hhmm("OROMA_ORCH_CHESS2_CANON_DAILY_AT", 4, 25)
     chess2_canon_coop_daily_hh, chess2_canon_coop_daily_mm = _env_hhmm("OROMA_ORCH_CHESS2_CANON_COOP_DAILY_AT", 4, 45)
     chess2_canon_coop_king_daily_hh, chess2_canon_coop_king_daily_mm = _env_hhmm("OROMA_ORCH_CHESS2_CANON_COOP_KING_DAILY_AT", 5, 5)
@@ -817,6 +1102,13 @@ def run_due_jobs(once: bool = False) -> int:
     snake_policy_games = _env_int("OROMA_ORCH_SNAKE_POLICY_GAMES", 100)
     snake_explore_games = _env_int("OROMA_ORCH_SNAKE_EXPLORE_GAMES", 100)
 
+    # Batch sizes (Snake3D) – professional Policy+Explore.
+    snake3d_policy_games = _env_int("OROMA_ORCH_SNAKE3D_POLICY_GAMES", 5)
+    snake3d_explore_games = _env_int("OROMA_ORCH_SNAKE3D_EXPLORE_GAMES", 5)
+    snake3d_size = _env_int("OROMA_ORCH_SNAKE3D_SIZE", 6)
+    snake3d_max_steps = _env_int("OROMA_ORCH_SNAKE3D_MAX_STEPS", 350)
+    snake3d_target_len = _env_int("OROMA_ORCH_SNAKE3D_TARGET_LEN", 20)
+
     # Batch sizes (Pong)
     pong_policy_games = _env_int("OROMA_ORCH_PONG_POLICY_GAMES", 100)
     pong_explore_games = _env_int("OROMA_ORCH_PONG_EXPLORE_GAMES", 100)
@@ -832,9 +1124,24 @@ def run_due_jobs(once: bool = False) -> int:
     memory_max_turns = _env_int("OROMA_ORCH_MEMORY_MAX_TURNS", 220)
     memory_eps = _env_float("OROMA_ORCH_MEMORY_EPS", 0.08)
 
+    # Batch sizes (Sudoku)
+    # Default bewusst kleiner als Arcade-Spiele: Sudoku ist CPU-intensiver im
+    # Puzzle-Generator/Uniqueness-Check und lernt Techniken statt Rohzustände.
+    sudoku_policy_games = _env_int("OROMA_ORCH_SUDOKU_POLICY_GAMES", 10)
+    sudoku_explore_games = _env_int("OROMA_ORCH_SUDOKU_EXPLORE_GAMES", 10)
+    sudoku_difficulty = os.getenv("OROMA_ORCH_SUDOKU_DIFFICULTY", "medium")
+    sudoku_eps = _env_float("OROMA_ORCH_SUDOKU_EPS", 0.08)
+
     # Batch sizes (Chess)
     chess_policy_games = _env_int("OROMA_ORCH_CHESS_POLICY_GAMES", 100)
     chess_explore_games = _env_int("OROMA_ORCH_CHESS_EXPLORE_GAMES", 100)
+
+    # Parameter (ChessPro Zielpfad)
+    chess_pro_depth = _env_int("OROMA_ORCH_CHESS_PRO_DEPTH", 4)
+    chess_pro_max_plies = _env_int("OROMA_ORCH_CHESS_PRO_MAX_PLIES", 180)
+    chess_pro_time_budget_ms = _env_int("OROMA_ORCH_CHESS_PRO_TIME_BUDGET_MS", 12000)
+    chess_pro_game_budget_sec = _env_int("OROMA_ORCH_CHESS_PRO_GAME_BUDGET_SEC", 1680)
+    chess_pro_eps = _env_float("OROMA_ORCH_CHESS_PRO_EPS", 0.01)
 
     # Batch sizes / Parameter (Chess2)
     chess2_policy_games = _env_int("OROMA_ORCH_CHESS2_POLICY_GAMES", 100)
@@ -845,6 +1152,13 @@ def run_due_jobs(once: bool = False) -> int:
     chess2_eps_black = _env_float("OROMA_ORCH_CHESS2_EPS_BLACK", chess2_eps)
     chess2_explore_moves_white = _env_int("OROMA_ORCH_CHESS2_EXPLORE_MOVES_WHITE", 2)
     chess2_explore_moves_black = _env_int("OROMA_ORCH_CHESS2_EXPLORE_MOVES_BLACK", 3)
+    chess2_side_games = _env_int("OROMA_ORCH_CHESS2_SIDE_GAMES", 1)
+    chess2_side_max_plies = _env_int("OROMA_ORCH_CHESS2_SIDE_MAX_PLIES", chess2_max_plies)
+    chess2_side_eps = _env_float("OROMA_ORCH_CHESS2_SIDE_EPS", chess2_eps)
+    chess2_side_eps_white = _env_float("OROMA_ORCH_CHESS2_SIDE_EPS_WHITE", chess2_eps_white)
+    chess2_side_eps_black = _env_float("OROMA_ORCH_CHESS2_SIDE_EPS_BLACK", chess2_eps_black)
+    chess2_side_explore_moves_white = _env_int("OROMA_ORCH_CHESS2_SIDE_EXPLORE_MOVES_WHITE", chess2_explore_moves_white)
+    chess2_side_explore_moves_black = _env_int("OROMA_ORCH_CHESS2_SIDE_EXPLORE_MOVES_BLACK", chess2_explore_moves_black)
     chess2_canon_policy_games = _env_int("OROMA_ORCH_CHESS2_CANON_POLICY_GAMES", chess2_policy_games)
     chess2_canon_explore_games = _env_int("OROMA_ORCH_CHESS2_CANON_EXPLORE_GAMES", chess2_explore_games)
     chess2_canon_max_plies = _env_int("OROMA_ORCH_CHESS2_CANON_MAX_PLIES", chess2_max_plies)
@@ -881,13 +1195,30 @@ def run_due_jobs(once: bool = False) -> int:
     mmzh_hard_policy_games = _env_int("OROMA_ORCH_MEMORYMAZE_HYBRID_HARD_POLICY_GAMES", 20)
     mmzh_hard_explore_games = _env_int("OROMA_ORCH_MEMORYMAZE_HYBRID_HARD_EXPLORE_GAMES", 20)
 
-    # Batch sizes (Hide&Seek)
+    # Batch sizes / runtime (Hide&Seek pro_v2 daily runner)
     hideseek_policy_games = _env_int("OROMA_ORCH_HIDESEEK_POLICY_GAMES", 100)
     hideseek_explore_games = _env_int("OROMA_ORCH_HIDESEEK_EXPLORE_GAMES", 100)
+    hideseek_max_steps = _env_int("OROMA_ORCH_HIDESEEK_MAX_STEPS", _env_int("OROMA_HIDESEEK_MAX_STEPS", 400))
+    hideseek_namespace = str(os.environ.get("OROMA_HIDESEEK_POLICY_NAMESPACE", "game:hideseek") or "game:hideseek")
 
     # Batch sizes (CTF)
     ctf_policy_games = _env_int("OROMA_ORCH_CTF_POLICY_GAMES", 100)
     ctf_explore_games = _env_int("OROMA_ORCH_CTF_EXPLORE_GAMES", 100)
+
+    # Dream→Policy Auto-Mini-Write Defaults (Default-EIN-ENV-Gate)
+    # ---------------------------------------------------------------------
+    # Diese Werte werden nur an den Subprozess core.dream_worker weitergereicht.
+    # Die eigentliche Schreibentscheidung bleibt in adapter_auto_mini_write_gated
+    # und nutzt DBWriter-only + Ledger + Direct-Step-Credit-only.
+    dream_auto_mini_write_namespace = str(os.getenv("OROMA_ORCH_DREAM_AUTO_MINI_WRITE_NAMESPACE", "game:snake3d") or "game:snake3d").strip()
+    dream_auto_mini_write_schema = str(os.getenv("OROMA_ORCH_DREAM_AUTO_MINI_WRITE_STATE_SCHEMA_PREFIX", "snake3d:pro_v1") or "snake3d:pro_v1").strip()
+    dream_auto_mini_write_limit = max(1, min(_env_int("OROMA_ORCH_DREAM_AUTO_MINI_WRITE_LIMIT", 20), 500))
+    dream_auto_mini_write_max = max(1, min(_env_int("OROMA_ORCH_DREAM_AUTO_MINI_WRITE_MAX", 1), 2))
+    dream_auto_mini_write_daily_cap = max(0, min(_env_int("OROMA_ORCH_DREAM_AUTO_MINI_WRITE_DAILY_CAP", 2), 50))
+    dream_auto_mini_write_cooldown_s = max(0, min(_env_int("OROMA_ORCH_DREAM_AUTO_MINI_WRITE_COOLDOWN_S", 3600), 86400))
+    dream_auto_mini_write_min_direct = max(1, min(_env_int("OROMA_ORCH_DREAM_AUTO_MINI_WRITE_MIN_DIRECT_EVIDENCE", 3), 1000))
+    dream_auto_mini_write_min_abs_delta = max(0.0, min(_env_float("OROMA_ORCH_DREAM_AUTO_MINI_WRITE_MIN_ABS_DELTA", 0.0001), 1.0))
+    dream_auto_mini_write_confirm = str(os.getenv("OROMA_ORCH_DREAM_AUTO_MINI_WRITE_CONFIRM", "AUTO_DIRECT_STEP_CREDIT_ONLY") or "AUTO_DIRECT_STEP_CREDIT_ONLY").strip()
 
     # Batch sizes (PTZ Arena)
     # NOTE: PTZ ist echte Hardware. 100×60steps×250ms ≈ 25min pro Batch.
@@ -901,6 +1232,10 @@ def run_due_jobs(once: bool = False) -> int:
     ptz_coverage_explore_games = _env_int("OROMA_ORCH_PTZ_COVERAGE_EXPLORE_GAMES", 20)
 
     state = _load_state(state_path)
+    execution_status = execution_mode.execution_mode_status()
+    state["execution_mode"] = execution_status
+    state.setdefault("legacy_jobs_suppressed", {})
+    _atomic_write_json(state_path, state)
 
     # helper: run job and store state
     def _run(
@@ -1064,6 +1399,324 @@ def run_due_jobs(once: bool = False) -> int:
                 # Refresh Learning-UI caches (maxima + intelligence) so the dashboard stays instant.
                 _run("learning_cache", [sys.executable, os.path.join(base, "tools", "learning_cache_refresh.py")], timeout_sec=to_learning_cache)
 
+            if en_gap_learning_bridge and _should_run_interval(state, "gap_learning_bridge", int_gap_learning_bridge, now_ts):
+                # Gap-Learning-Bridge Dry-Run:
+                # liest knowledge_gaps + policy_rules read-only und schreibt nur
+                # data/state/gap_learning_focus.json als Fokusliste. Kein DB-Write,
+                # kein policy_rules-Write, keine Runner- oder Dream-Aktivierung.
+                _run(
+                    "gap_learning_bridge",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "gap_learning_bridge.py"),
+                        "--once",
+                        "--max-runtime-s",
+                        str(int(gap_learning_bridge_max_runtime_s)),
+                        "--limit-gaps",
+                        str(int(gap_learning_bridge_limit_gaps)),
+                        "--topk",
+                        str(int(gap_learning_bridge_topk)),
+                    ],
+                    timeout_sec=to_gap_learning_bridge,
+                    env_overrides={
+                        "OROMA_GAP_LEARNING_MAX_RUNTIME_S": str(int(gap_learning_bridge_max_runtime_s)),
+                        "OROMA_GAP_LEARNING_LIMIT_GAPS": str(int(gap_learning_bridge_limit_gaps)),
+                        "OROMA_GAP_LEARNING_TOPK": str(int(gap_learning_bridge_topk)),
+                    },
+                )
+
+            if en_gap_focus_consumer and _should_run_interval(state, "gap_focus_consumer", int_gap_focus_consumer, now_ts):
+                # Gap-Focus Consumer Read-Only:
+                # liest nur data/state/gap_learning_focus.json und erzeugt daraus
+                # data/state/gap_focus_consumer.json mit Buckets für Explore,
+                # Replay, Dream und Runner-Priorität. Kein DB-Write, kein
+                # policy_rules-Write, keine Runner-/Replay-/Dream-Aktivierung.
+                _run(
+                    "gap_focus_consumer",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "gap_focus_consumer.py"),
+                        "--once",
+                        "--topk",
+                        str(int(gap_focus_consumer_topk)),
+                        "--max-age-sec",
+                        str(int(gap_focus_consumer_max_age_sec)),
+                    ],
+                    timeout_sec=to_gap_focus_consumer,
+                    env_overrides={
+                        "OROMA_GAP_FOCUS_CONSUMER_TOPK": str(int(gap_focus_consumer_topk)),
+                        "OROMA_GAP_FOCUS_CONSUMER_MAX_AGE_SEC": str(int(gap_focus_consumer_max_age_sec)),
+                    },
+                )
+
+            if en_gap_focus_shadow_plan and _should_run_interval(state, "gap_focus_shadow_plan", int_gap_focus_shadow_plan, now_ts):
+                # Gap-Focus Shadow Plan Read-Only:
+                # liest nur data/state/gap_focus_consumer.json und erzeugt daraus
+                # data/state/gap_focus_shadow_plan.json als Review-/Anschlussplan.
+                # Kein DB-Write, kein policy_rules-Write, keine Runner-/Replay-/
+                # Dream-Aktivierung. Diese Stufe bleibt bewusst Shadow-only.
+                _run(
+                    "gap_focus_shadow_plan",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "gap_focus_shadow_plan.py"),
+                        "--once",
+                        "--topk",
+                        str(int(gap_focus_shadow_plan_topk)),
+                        "--max-age-sec",
+                        str(int(gap_focus_shadow_plan_max_age_sec)),
+                    ],
+                    timeout_sec=to_gap_focus_shadow_plan,
+                    env_overrides={
+                        "OROMA_GAP_FOCUS_SHADOW_PLAN_TOPK": str(int(gap_focus_shadow_plan_topk)),
+                        "OROMA_GAP_FOCUS_SHADOW_PLAN_MAX_AGE_SEC": str(int(gap_focus_shadow_plan_max_age_sec)),
+                    },
+                )
+
+            if en_gap_evidence_queue and _should_run_interval(state, "gap_evidence_queue", int_gap_evidence_queue, now_ts):
+                # Gap Evidence Queue Writer:
+                # liest nur data/state/gap_focus_shadow_plan.json und schreibt
+                # deduplizierte Review-/Evidence-Requests per DBWriter in die
+                # eigene Tabelle gap_focus_evidence_queue. Kein policy_rules-Write,
+                # keine Runner-/Replay-/Dream-Aktivierung, kein lokaler SQLite-Fallback.
+                _run(
+                    "gap_evidence_queue",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "gap_evidence_queue_writer.py"),
+                        "--once",
+                        "--topk",
+                        str(int(gap_evidence_queue_topk)),
+                        "--max-age-sec",
+                        str(int(gap_evidence_queue_max_age_sec)),
+                    ],
+                    timeout_sec=to_gap_evidence_queue,
+                    env_overrides={
+                        "OROMA_DBW_ENABLE": "1",
+                        "OROMA_GAP_EVIDENCE_QUEUE_TOPK": str(int(gap_evidence_queue_topk)),
+                        "OROMA_GAP_EVIDENCE_QUEUE_MAX_AGE_SEC": str(int(gap_evidence_queue_max_age_sec)),
+                    },
+                )
+
+            if en_gap_evidence_review and _should_run_interval(state, "gap_evidence_review", int_gap_evidence_review, now_ts):
+                # Gap Evidence Queue Review Dry-Run:
+                # liest gap_focus_evidence_queue read-only und erzeugt
+                # data/state/gap_evidence_review.json. Kein DB-Write, kein
+                # policy_rules-Write, keine Runner-/Replay-/Dream-Aktivierung.
+                _run(
+                    "gap_evidence_review",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "gap_evidence_review.py"),
+                        "--once",
+                        "--limit",
+                        str(int(gap_evidence_review_limit)),
+                        "--topk",
+                        str(int(gap_evidence_review_topk)),
+                    ],
+                    timeout_sec=to_gap_evidence_review,
+                    env_overrides={
+                        "OROMA_GAP_EVIDENCE_REVIEW_LIMIT": str(int(gap_evidence_review_limit)),
+                        "OROMA_GAP_EVIDENCE_REVIEW_TOPK": str(int(gap_evidence_review_topk)),
+                    },
+                )
+
+            if en_gap_evidence_validation and _should_run_interval(state, "gap_evidence_validation", int_gap_evidence_validation, now_ts):
+                # Gap Evidence Execution/Validation Dry-Run:
+                # liest gap_evidence_review.json und validiert Kandidaten read-only
+                # gegen gap_focus_evidence_queue und policy_rules. Kein DB-Write,
+                # kein policy_rules-Write, keine Runner-/Replay-/Dream-Aktivierung.
+                _run(
+                    "gap_evidence_validation",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "gap_evidence_validation.py"),
+                        "--once",
+                        "--limit",
+                        str(int(gap_evidence_validation_limit)),
+                        "--topk",
+                        str(int(gap_evidence_validation_topk)),
+                        "--max-age-sec",
+                        str(int(gap_evidence_validation_max_age_sec)),
+                    ],
+                    timeout_sec=to_gap_evidence_validation,
+                    env_overrides={
+                        "OROMA_GAP_EVIDENCE_VALIDATION_LIMIT": str(int(gap_evidence_validation_limit)),
+                        "OROMA_GAP_EVIDENCE_VALIDATION_TOPK": str(int(gap_evidence_validation_topk)),
+                        "OROMA_GAP_EVIDENCE_VALIDATION_MAX_AGE_SEC": str(int(gap_evidence_validation_max_age_sec)),
+                    },
+                )
+
+
+            if en_gap_policy_promotion and _should_run_interval(state, "gap_policy_promotion", int_gap_policy_promotion, now_ts):
+                # Gap Policy Promotion Queue:
+                # schreibt validierte Kandidaten per DBWriter in eine eigene
+                # Promotion-/Approval-Tabelle. Kein policy_rules-Write, keine
+                # Runner-/Replay-/Dream-Aktivierung.
+                _run(
+                    "gap_policy_promotion",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "gap_policy_promotion.py"),
+                        "--once",
+                        "--limit",
+                        str(int(gap_policy_promotion_limit)),
+                        "--topk",
+                        str(int(gap_policy_promotion_topk)),
+                        "--max-age-sec",
+                        str(int(gap_policy_promotion_max_age_sec)),
+                    ],
+                    timeout_sec=to_gap_policy_promotion,
+                    env_overrides={
+                        "OROMA_DBW_ENABLE": "1",
+                        "OROMA_GAP_POLICY_PROMOTION_LIMIT": str(int(gap_policy_promotion_limit)),
+                        "OROMA_GAP_POLICY_PROMOTION_TOPK": str(int(gap_policy_promotion_topk)),
+                        "OROMA_GAP_POLICY_PROMOTION_MAX_AGE_SEC": str(int(gap_policy_promotion_max_age_sec)),
+                    },
+                )
+
+
+            if en_gap_evidence_outcome and _should_run_interval(state, "gap_evidence_outcome", int_gap_evidence_outcome, now_ts):
+                # Gap Evidence Outcome Collector:
+                # liest Promotion-Kandidaten und sucht read-only nach direkten
+                # Outcomes in rewards_log, episode_events und Ledgers. Kein DB-Write,
+                # kein policy_rules-Write, keine Runner-/Replay-/Dream-Aktivierung.
+                _run(
+                    "gap_evidence_outcome",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "gap_evidence_outcome.py"),
+                        "--once",
+                        "--limit",
+                        str(int(gap_evidence_outcome_limit)),
+                        "--topk",
+                        str(int(gap_evidence_outcome_topk)),
+                        "--lookback-sec",
+                        str(int(gap_evidence_outcome_lookback_sec)),
+                    ],
+                    timeout_sec=to_gap_evidence_outcome,
+                    env_overrides={
+                        "OROMA_GAP_EVIDENCE_OUTCOME_LIMIT": str(int(gap_evidence_outcome_limit)),
+                        "OROMA_GAP_EVIDENCE_OUTCOME_TOPK": str(int(gap_evidence_outcome_topk)),
+                        "OROMA_GAP_EVIDENCE_OUTCOME_LOOKBACK_SEC": str(int(gap_evidence_outcome_lookback_sec)),
+                    },
+                )
+
+            if en_gap_targeted_evidence_probe and _should_run_interval(state, "gap_targeted_evidence_probe", int_gap_targeted_evidence_probe, now_ts):
+                # Gap Targeted Evidence Probe:
+                # prueft nur wenige Promotion-Kandidaten mit bounded newest-row
+                # scans. Kein DB-Write, kein policy_rules-Write, keine Starts.
+                _run(
+                    "gap_targeted_evidence_probe",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "gap_targeted_evidence_probe.py"),
+                        "--once",
+                        "--limit",
+                        str(int(gap_targeted_evidence_probe_limit)),
+                        "--topk",
+                        str(int(gap_targeted_evidence_probe_topk)),
+                        "--scan-limit",
+                        str(int(gap_targeted_evidence_probe_scan_limit)),
+                    ],
+                    timeout_sec=to_gap_targeted_evidence_probe,
+                    env_overrides={
+                        "OROMA_GAP_TARGETED_EVIDENCE_PROBE_LIMIT": str(int(gap_targeted_evidence_probe_limit)),
+                        "OROMA_GAP_TARGETED_EVIDENCE_PROBE_TOPK": str(int(gap_targeted_evidence_probe_topk)),
+                        "OROMA_GAP_TARGETED_EVIDENCE_PROBE_SCAN_LIMIT": str(int(gap_targeted_evidence_probe_scan_limit)),
+                    },
+                )
+
+            if en_gap_replay_evidence_probe and _should_run_interval(state, "gap_replay_evidence_probe", int_gap_replay_evidence_probe, now_ts):
+                # Gap Targeted Replay Evidence Probe:
+                # nutzt nur lokale, explizite Headless-Adapter fuer wenige
+                # Kandidaten. Kein globaler ReplayManager-Start, kein DB-Write,
+                # kein policy_rules-Write und kein Runner-/Dream-Start.
+                _run(
+                    "gap_replay_evidence_probe",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "gap_replay_evidence_probe.py"),
+                        "--once",
+                        "--limit",
+                        str(int(gap_replay_evidence_probe_limit)),
+                        "--topk",
+                        str(int(gap_replay_evidence_probe_topk)),
+                        "--horizon-steps",
+                        str(int(gap_replay_evidence_probe_horizon)),
+                    ],
+                    timeout_sec=to_gap_replay_evidence_probe,
+                    env_overrides={
+                        "OROMA_GAP_REPLAY_EVIDENCE_PROBE_LIMIT": str(int(gap_replay_evidence_probe_limit)),
+                        "OROMA_GAP_REPLAY_EVIDENCE_PROBE_TOPK": str(int(gap_replay_evidence_probe_topk)),
+                        "OROMA_GAP_REPLAY_EVIDENCE_PROBE_HORIZON_STEPS": str(int(gap_replay_evidence_probe_horizon)),
+                    },
+                )
+
+            if en_snake_autonomous_acquisition and _should_run_interval(state, "snake_autonomous_acquisition", int_snake_autonomous_acquisition, now_ts):
+                # Autonome Snake-Pro-v2-Brücke: verarbeitet ausschließlich den
+                # frischen, promotion-gebundenen Missing-Source-Blocker des
+                # Replay-Probes. Die Evidence-Persistenz bleibt atomar und
+                # DBWriter-only im bestehenden V2-Akquisitionswriter.
+                _run(
+                    "snake_autonomous_acquisition",
+                    [sys.executable, os.path.join(base, "tools", "snake_autonomous_acquisition_bridge.py")],
+                    timeout_sec=to_snake_autonomous_acquisition,
+                    env_overrides={"OROMA_DBW_ENABLE": "1"},
+                )
+
+            if en_gap_evidence_outcome_queue and _should_run_interval(state, "gap_evidence_outcome_queue", int_gap_evidence_outcome_queue, now_ts):
+                # Gap Evidence Outcome Queue Gate:
+                # uebernimmt fertige replay-probe Outcomes DBWriter-only in
+                # gap_evidence_outcome_queue. Kein policy_rules-Write und keine Starts.
+                _run(
+                    "gap_evidence_outcome_queue",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "gap_evidence_outcome_queue.py"),
+                        "--once",
+                        "--limit",
+                        str(int(gap_evidence_outcome_queue_limit)),
+                        "--topk",
+                        str(int(gap_evidence_outcome_queue_topk)),
+                        "--min-confidence",
+                        str(float(gap_evidence_outcome_queue_min_confidence)),
+                    ],
+                    timeout_sec=to_gap_evidence_outcome_queue,
+                    env_overrides={
+                        "OROMA_GAP_EVIDENCE_OUTCOME_QUEUE_LIMIT": str(int(gap_evidence_outcome_queue_limit)),
+                        "OROMA_GAP_EVIDENCE_OUTCOME_QUEUE_TOPK": str(int(gap_evidence_outcome_queue_topk)),
+                        "OROMA_GAP_EVIDENCE_OUTCOME_QUEUE_MIN_CONFIDENCE": str(float(gap_evidence_outcome_queue_min_confidence)),
+                    },
+                )
+
+            if en_gap_policy_mini_write and _should_run_interval(state, "gap_policy_mini_write", int_gap_policy_mini_write, now_ts):
+                # Gap Policy Mini-Write Gate:
+                # finales Policy-Gate mit Ledger. Default ENV bleibt write-seitig
+                # geschlossen. Reine Gap-Wahrscheinlichkeit reicht nie fuer einen
+                # policy_rules-Write; echte Evidence-Outcomes sind Pflicht.
+                _run(
+                    "gap_policy_mini_write",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "gap_policy_mini_write.py"),
+                        "--once",
+                        "--limit",
+                        str(int(gap_policy_mini_write_limit)),
+                        "--topk",
+                        str(int(gap_policy_mini_write_topk)),
+                        "--max-writes",
+                        str(int(gap_policy_mini_write_max_writes)),
+                    ],
+                    timeout_sec=to_gap_policy_mini_write,
+                    env_overrides={
+                        "OROMA_DBW_ENABLE": "1",
+                        "OROMA_GAP_POLICY_MINI_WRITE_LIMIT": str(int(gap_policy_mini_write_limit)),
+                        "OROMA_GAP_POLICY_MINI_WRITE_TOPK": str(int(gap_policy_mini_write_topk)),
+                        "OROMA_GAP_POLICY_MINI_WRITE_MAX_WRITES_PER_RUN": str(int(gap_policy_mini_write_max_writes)),
+                    },
+                )
+
             if en_forget_sample and _should_run_interval(state, "forgetting_sample", int_forget_sample, now_ts):
                 # Write stats_points for Forgetting/Kompression history.
                 _run("forgetting_sample", [sys.executable, os.path.join(base, "tools", "forgetting_sampler.py"), "--once"], timeout_sec=to_forget_sample)
@@ -1141,7 +1794,24 @@ def run_due_jobs(once: bool = False) -> int:
                 _run("crossmodal_linker", [sys.executable, os.path.join(base, "tools", "crossmodal_linker_runner.py"), "--once"], timeout_sec=to_crossmodal_linker)
 
             if en_train and _should_run_interval(state, "train_snake", int_train, now_ts):
-                _run("train_snake", [sys.executable, "-m", "core.train_snake_policy", "--limit", "3000", "--verbose"], timeout_sec=to_train_snake)
+                train_decision = execution_mode.legacy_policy_training_allowed(
+                    writer_id="writer:core.train_snake_policy:legacy", namespace="game:snake"
+                )
+                if train_decision.allowed:
+                    _run("train_snake", [sys.executable, "-m", "core.train_snake_policy", "--limit", "3000", "--verbose"], timeout_sec=to_train_snake)
+                else:
+                    state.setdefault("legacy_jobs_suppressed", {})["train_snake"] = {
+                        **train_decision.to_dict(),
+                        "ts": int(now_ts),
+                    }
+                    _mark_ran(state, "train_snake", now_ts, 0, 0.0, timed_out=False)
+                    _atomic_write_json(state_path, state)
+                    with open(log_out, "a", encoding="utf-8") as fo:
+                        fo.write(
+                            "[ORCH] controlled_skip job=train_snake "
+                            f"mode={train_decision.execution_mode} "
+                            f"namespace={train_decision.namespace} reason={train_decision.reason}\n"
+                        )
 
             if en_dream and _should_run_interval(state, "dream", int_dream, now_ts):
                 allow_dream = True
@@ -1212,10 +1882,123 @@ def run_due_jobs(once: bool = False) -> int:
                         )
                         fo.flush()
 
+            if en_dream_auto_mini_write and _should_run_interval(state, "dream_auto_mini_write", int_dream_auto_mini_write, now_ts):
+                # Dream→Policy Auto-Mini-Write (Default-EIN-ENV-Gate)
+                # -------------------------------------------------------
+                # Der Orchestrator startet hier NICHT den manuellen Mini-Write,
+                # sondern die eigenstaendige Auto-Phase mit konservativen
+                # Default-Limits. Alle produktiven Writes bleiben im DreamWorker
+                # nochmals abgesichert: DBWriter-only, Confirm-Token, Ledger-
+                # Pflicht, Direct-Step-Credit-only, Tageslimit und Cooldown.
+                _run(
+                    "dream_auto_mini_write",
+                    [
+                        sys.executable,
+                        "-m",
+                        "core.dream_worker",
+                        "--once",
+                        "--phase",
+                        "adapter_auto_mini_write_gated",
+                        "--adapter-namespace",
+                        str(dream_auto_mini_write_namespace),
+                        "--adapter-state-schema-prefix",
+                        str(dream_auto_mini_write_schema),
+                        "--adapter-limit",
+                        str(int(dream_auto_mini_write_limit)),
+                    ],
+                    timeout_sec=to_dream_auto_mini_write,
+                    env_overrides={
+                        "OROMA_DBW_ENABLE": "1",
+                        "OROMA_DBW_STRICT_LOCAL_WRITES": "1",
+                        "OROMA_DREAM_ADAPTER_AUTO_MINI_WRITE_ENABLE": "1",
+                        "OROMA_DREAM_ADAPTER_AUTO_MINI_WRITE_CONFIRM": str(dream_auto_mini_write_confirm),
+                        "OROMA_DREAM_ADAPTER_AUTO_MINI_WRITE_MAX": str(int(dream_auto_mini_write_max)),
+                        "OROMA_DREAM_ADAPTER_AUTO_MINI_WRITE_DAILY_CAP": str(int(dream_auto_mini_write_daily_cap)),
+                        "OROMA_DREAM_ADAPTER_AUTO_MINI_WRITE_COOLDOWN_S": str(int(dream_auto_mini_write_cooldown_s)),
+                        "OROMA_DREAM_ADAPTER_AUTO_MINI_WRITE_MIN_DIRECT_EVIDENCE": str(int(dream_auto_mini_write_min_direct)),
+                        "OROMA_DREAM_ADAPTER_AUTO_MINI_WRITE_MIN_ABS_DELTA": str(float(dream_auto_mini_write_min_abs_delta)),
+                    },
+                )
+
             if en_gap_miner and _should_run_interval(state, "gap_miner", int_gap_miner, now_ts):
-                _run("gap_miner", [sys.executable, os.path.join(base, "tools", "gap_miner.py"), "--once", "--mode", "rotate"], timeout_sec=to_gap_miner)
+                _run(
+                    "gap_miner",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "gap_miner.py"),
+                        "--once",
+                        "--mode",
+                        "rotate",
+                        "--max-runtime-s",
+                        str(int(gap_miner_max_runtime_s)),
+                        "--limit-per-kind",
+                        str(int(gap_miner_limit_per_kind)),
+                    ],
+                    timeout_sec=to_gap_miner,
+                    env_overrides={
+                        "OROMA_DBW_ENABLE": "1",
+                        "OROMA_DBW_STRICT_LOCAL_WRITES": "1",
+                        "OROMA_GAP_MINER_REQUIRE_DBWRITER": "1",
+                        "OROMA_GAP_MINER_MAX_INSERTS_PER_RUN": str(int(gap_miner_max_inserts)),
+                        "OROMA_GAP_MINER_MAX_RUNTIME_S": str(int(gap_miner_max_runtime_s)),
+                        "OROMA_GAP_MINER_LIMIT_PER_KIND": str(int(gap_miner_limit_per_kind)),
+                        "OROMA_GAP_MINER_HU_ROW_SCAN_LIMIT": str(int(gap_miner_hu_row_scan_limit)),
+                        "OROMA_GAP_MINER_LE_ROW_SCAN_LIMIT": str(int(gap_miner_le_row_scan_limit)),
+                        "OROMA_GAP_MINER_LC_ROW_SCAN_LIMIT": str(int(gap_miner_lc_row_scan_limit)),
+                        "OROMA_GAPS_LOCK_RETRY_SEC": "2",
+                        "OROMA_DB_LOCK_RETRY_SEC": "2",
+                    },
+                )
 
             # Daily-Jobs (Nightly)
+            # Gap-Miner Night Sweep
+            # ---------------------
+            # Tagsüber läuft gap_miner nur kurz und cursorbasiert. Dieser tägliche
+            # Nacht-Sweep arbeitet dagegen mehrere bounded Rotate-Slices in einem
+            # längeren Fenster ab. Dadurch kann ORÓMA Rückstände systematisch
+            # abbauen, ohne den seriellen Orchestrator tagsüber zu blockieren.
+            if en_gap_miner_night and _should_run_daily(state, "gap_miner_night_sweep", gap_miner_night_hh, gap_miner_night_mm, jitter_daily, now):
+                rc, dur = _run(
+                    "gap_miner_night_sweep",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "gap_miner.py"),
+                        "--once",
+                        "--mode",
+                        "sweep",
+                        "--max-runtime-s",
+                        str(int(gap_miner_night_max_runtime_s)),
+                        "--limit-per-kind",
+                        str(int(gap_miner_night_limit_per_kind)),
+                        "--sweep-passes",
+                        str(int(gap_miner_night_sweep_passes)),
+                    ],
+                    timeout_sec=to_gap_miner_night,
+                    env_overrides={
+                        "OROMA_DBW_ENABLE": "1",
+                        "OROMA_DBW_STRICT_LOCAL_WRITES": "1",
+                        "OROMA_GAP_MINER_REQUIRE_DBWRITER": "1",
+                        "OROMA_GAP_MINER_MAX_INSERTS_PER_RUN": str(int(gap_miner_night_max_inserts)),
+                        "OROMA_GAP_MINER_MAX_RUNTIME_S": str(int(gap_miner_night_max_runtime_s)),
+                        "OROMA_GAP_MINER_LIMIT_PER_KIND": str(int(gap_miner_night_limit_per_kind)),
+                        "OROMA_GAP_MINER_HU_ROW_SCAN_LIMIT": str(int(gap_miner_night_hu_row_scan_limit)),
+                        "OROMA_GAP_MINER_LE_ROW_SCAN_LIMIT": str(int(gap_miner_night_le_row_scan_limit)),
+                        "OROMA_GAP_MINER_LC_ROW_SCAN_LIMIT": str(int(gap_miner_night_lc_row_scan_limit)),
+                        "OROMA_GAP_MINER_SWEEP_SLICE_RUNTIME_S": str(int(gap_miner_night_slice_runtime_s)),
+                        "OROMA_GAPS_LOCK_RETRY_SEC": "2",
+                        "OROMA_DB_LOCK_RETRY_SEC": "2",
+                    },
+                )
+                if int(rc) == 0:
+                    _mark_daily(state, "gap_miner_night_sweep", now)
+                else:
+                    try:
+                        with open(log_err, "a", encoding="utf-8") as fe:
+                            fe.write(f"\n[ORCH] DAILY FAIL job=gap_miner_night_sweep rc={int(rc)} dur_s={float(dur):.3f}\n")
+                    except Exception:
+                        pass
+                _atomic_write_json(state_path, state)
+
             if en_kpi and _should_run_daily(state, "kpi", 3, 10, jitter_daily, now):
                 _run("kpi", [sys.executable, "-m", "tools.kpi_harness"], timeout_sec=to_kpi)
                 _mark_daily(state, "kpi", now)
@@ -1254,6 +2037,7 @@ def run_due_jobs(once: bool = False) -> int:
                         "--policy-games", str(max(0, int(ttt_policy_games))),
                         "--explore-games", str(max(0, int(ttt_explore_games))),
                         "--namespace", "game:tictactoe",
+                        "--seed", str(int(now_ts) & 0xFFFFFFFF),
                         "--once",
                     ],
                     timeout_sec=to_ttt_daily_run,
@@ -1277,6 +2061,7 @@ def run_due_jobs(once: bool = False) -> int:
                         "--policy-games", str(max(0, int(c4_policy_games))),
                         "--explore-games", str(max(0, int(c4_explore_games))),
                         "--namespace", "game:connect4",
+                        "--seed", str(int(now_ts) & 0xFFFFFFFF),
                         "--once",
                     ],
                     timeout_sec=to_c4_daily_run,
@@ -1306,11 +2091,53 @@ def run_due_jobs(once: bool = False) -> int:
                         os.path.join(base, "tools", "snake_daily_runner.py"),
                         "--policy-games", str(max(0, int(snake_policy_games))),
                         "--explore-games", str(max(0, int(snake_explore_games))),
+                        "--seed", str(int(now_ts) & 0xFFFFFFFF),
                         "--namespace", "game:snake",
                     ],
                     timeout_sec=to_snake_daily_run,
+                    env_overrides={
+                        "OROMA_EXECUTION_MODE": execution_mode.get_execution_mode(),
+                        "OROMA_VERTICAL_PROOF_NAMESPACE_ALLOWLIST": ",".join(execution_mode.proof_namespace_allowlist()),
+                    },
                 )
                 _mark_daily(state, "snake_daily_run", now)
+                _atomic_write_json(state_path, state)
+
+            # Daily: Snake3D professional Policy+Explore.
+            #
+            # Ziel:
+            #   • Policy-Games nutzen policy_rules mit Safety-/Q-Gate.
+            #   • Explore-Games liefern weiter neue Z-Achsen-Abdeckung.
+            #   • Keine UI-Starts, kein subprocess aus Flask, kein PTZ-Bezug.
+            #   • policy_rules werden nur über den DBWriter-kompatiblen Pfad des
+            #     Snake3D-Runners geschrieben.
+            if en_snake3d_daily_run and _should_run_daily(state, "snake3d_daily_run", snake3d_daily_hh, snake3d_daily_mm, jitter_daily, now):
+                rc, dur = _run(
+                    "snake3d_daily_run",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "snake3d_daily_runner.py"),
+                        "--policy-games", str(max(0, int(snake3d_policy_games))),
+                        "--explore-games", str(max(0, int(snake3d_explore_games))),
+                        "--seed", str(int(now_ts) & 0xFFFFFFFF),
+                        "--namespace", "game:snake3d",
+                        "--size", str(max(4, int(snake3d_size))),
+                        "--max-steps", str(max(10, int(snake3d_max_steps))),
+                        "--target-len", str(max(4, int(snake3d_target_len))),
+                    ],
+                    timeout_sec=to_snake3d_daily_run,
+                )
+                if int(rc) == 0:
+                    _clear_daily_fail(state, "snake3d_daily_run")
+                    _mark_daily(state, "snake3d_daily_run", now)
+                else:
+                    _mark_daily_fail(state, "snake3d_daily_run", now, int(rc), float(dur))
+                    try:
+                        retry_min = max(1, int(os.getenv("OROMA_ORCH_DAILY_RETRY_MIN", "30").strip() or "30"))
+                        with open(log_err, "a", encoding="utf-8") as fe:
+                            fe.write(f"\n[ORCH] DAILY FAIL job=snake3d_daily_run rc={int(rc)} dur_s={float(dur):.3f} (retry>=\"{retry_min}\"m; env=OROMA_ORCH_DAILY_RETRY_MIN)\n")
+                    except Exception:
+                        pass
                 _atomic_write_json(state_path, state)
 
             # Daily: Pong self-play (policy-benchmark + explore-learning)
@@ -1324,6 +2151,7 @@ def run_due_jobs(once: bool = False) -> int:
                         os.path.join(base, "tools", "pong_daily_runner.py"),
                         "--policy-games", str(max(0, int(pong_policy_games))),
                         "--explore-games", str(max(0, int(pong_explore_games))),
+                        "--seed", str(int(now_ts) & 0xFFFFFFFF),
                         "--namespace", "game:pong",
                     ],
                     timeout_sec=to_pong_daily_run,
@@ -1343,6 +2171,7 @@ def run_due_jobs(once: bool = False) -> int:
                         "--policy-games", str(max(0, int(tetris_policy_games))),
                         "--explore-games", str(max(0, int(tetris_explore_games))),
                         "--seed", str(int(now_ts) & 0xFFFFFFFF),
+                        "--namespace", "game:tetris",
                     ],
                     timeout_sec=to_tetris_daily_run,
                 )
@@ -1364,6 +2193,7 @@ def run_due_jobs(once: bool = False) -> int:
                         "--max-turns", str(max(20, int(memory_max_turns))),
                         "--eps", str(float(memory_eps)),
                         "--seed", str(int(now_ts) & 0xFFFFFFFF),
+                        "--namespace", "game:memory",
                     ],
                     timeout_sec=to_memory_daily_run,
                 )
@@ -1376,6 +2206,38 @@ def run_due_jobs(once: bool = False) -> int:
                         retry_min = max(1, int(os.getenv("OROMA_ORCH_DAILY_RETRY_MIN", "30").strip() or "30"))
                         with open(log_err, "a", encoding="utf-8") as fe:
                             fe.write(f"\n[ORCH] DAILY FAIL job=memory_daily_run rc={int(rc)} dur_s={float(dur):.3f} (retry>=\"{retry_min}\"m; env=OROMA_ORCH_DAILY_RETRY_MIN)\n")
+                    except Exception:
+                        pass
+                _atomic_write_json(state_path, state)
+
+            # Daily: Sudoku (mechanic_solved Constraint Runner)
+            #
+            # Ergebnis: episodes + episodic_metrics in oroma.db sowie
+            # policy_rules(namespace='game:sudoku', state_hash LIKE 'sudoku:pro_v2%').
+            if en_sudoku_daily_run and _should_run_daily(state, "sudoku_daily_run", sudoku_daily_hh, sudoku_daily_mm, jitter_daily, now):
+                rc, dur = _run(
+                    "sudoku_daily_run",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "sudoku_daily_runner.py"),
+                        "--policy-games", str(max(0, int(sudoku_policy_games))),
+                        "--explore-games", str(max(0, int(sudoku_explore_games))),
+                        "--difficulty", str(sudoku_difficulty or "medium"),
+                        "--eps", str(float(sudoku_eps)),
+                        "--seed", str(int(now_ts) & 0xFFFFFFFF),
+                        "--namespace", "game:sudoku",
+                    ],
+                    timeout_sec=to_sudoku_daily_run,
+                )
+                if int(rc) == 0:
+                    _clear_daily_fail(state, "sudoku_daily_run")
+                    _mark_daily(state, "sudoku_daily_run", now)
+                else:
+                    _mark_daily_fail(state, "sudoku_daily_run", now, int(rc), float(dur))
+                    try:
+                        retry_min = max(1, int(os.getenv("OROMA_ORCH_DAILY_RETRY_MIN", "30").strip() or "30"))
+                        with open(log_err, "a", encoding="utf-8") as fe:
+                            fe.write(f"\n[ORCH] DAILY FAIL job=sudoku_daily_run rc={int(rc)} dur_s={float(dur):.3f} (retry>=\"{retry_min}\"m; env=OROMA_ORCH_DAILY_RETRY_MIN)\n")
                     except Exception:
                         pass
                 _atomic_write_json(state_path, state)
@@ -1396,6 +2258,131 @@ def run_due_jobs(once: bool = False) -> int:
                     timeout_sec=to_chess_daily_run,
                 )
                 _mark_daily(state, "chess_daily_run", now)
+                _atomic_write_json(state_path, state)
+
+            # Daily: ChessPro professional self-play (2 Partien/Tag, Farbe-Wechsel)
+            #
+            # Zielarchitektur für ORÓMA-Schach:
+            #   • eigener Namespace `game:chess_pro` statt weiterer Chess2-Ausbau.
+            #   • 1. Lauf: ORÓMA-Fokus Weiß.
+            #   • 2. Lauf: ORÓMA-Fokus Schwarz.
+            #   • 1 Stunde Abstand zwischen den Default-Zeitpunkten.
+            #   • Professionelle Bewertungsregeln + Iterative-Deepening-Alpha-Beta.
+            #   • v0.2.0 Long-Search-Profil: bis 28min pro Partie, aber hart begrenzt.
+            #   • Kontrollierter Lernloop: terminales Ergebnis + Stellungsdelta-Signal
+            #     für Remis-/Budgetpartien, damit lange Berechnungen verwertbar bleiben.
+            if en_chess_pro_daily_run and _should_run_daily(state, "chess_pro_white_daily_run", chess_pro_white_hh, chess_pro_white_mm, jitter_daily, now):
+                _run(
+                    "chess_pro_white_daily_run",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "chess_pro_daily_runner.py"),
+                        "--side", "white",
+                        "--games", "1",
+                        "--depth", str(max(1, int(chess_pro_depth))),
+                        "--max-plies", str(max(20, int(chess_pro_max_plies))),
+                        "--time-budget-ms", str(max(100, int(chess_pro_time_budget_ms))),
+                        "--game-budget-sec", str(max(60, int(chess_pro_game_budget_sec))),
+                        "--eps", str(float(chess_pro_eps)),
+                        "--seed", str(int(now_ts) & 0xFFFFFFFF),
+                        "--namespace", "game:chess_pro",
+                    ],
+                    timeout_sec=to_chess_pro_daily_run,
+                    env_overrides={"OROMA_CHESS_PRO_DB": "1", "OROMA_CHESS_PRO_LEARN": "1"},
+                )
+                _mark_daily(state, "chess_pro_white_daily_run", now)
+                _atomic_write_json(state_path, state)
+
+            if en_chess_pro_daily_run and _should_run_daily(state, "chess_pro_black_daily_run", chess_pro_black_hh, chess_pro_black_mm, jitter_daily, now):
+                _run(
+                    "chess_pro_black_daily_run",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "chess_pro_daily_runner.py"),
+                        "--side", "black",
+                        "--games", "1",
+                        "--depth", str(max(1, int(chess_pro_depth))),
+                        "--max-plies", str(max(20, int(chess_pro_max_plies))),
+                        "--time-budget-ms", str(max(100, int(chess_pro_time_budget_ms))),
+                        "--game-budget-sec", str(max(60, int(chess_pro_game_budget_sec))),
+                        "--eps", str(float(chess_pro_eps)),
+                        "--seed", str((int(now_ts) + 3600) & 0xFFFFFFFF),
+                        "--namespace", "game:chess_pro",
+                    ],
+                    timeout_sec=to_chess_pro_daily_run,
+                    env_overrides={"OROMA_CHESS_PRO_DB": "1", "OROMA_CHESS_PRO_LEARN": "1"},
+                )
+                _mark_daily(state, "chess_pro_black_daily_run", now)
+                _atomic_write_json(state_path, state)
+
+            # Daily: Chess2 Side-Profile self-play (2 Partien/Tag, Farbe-Wechsel)
+            #
+            # Ziel:
+            #   • Exakt zwei ressourcenschonende Chess-Partien pro Tag.
+            #   • 1. Lauf: Weiß-Perspektive im normalen Mobility-Raum.
+            #   • 2. Lauf: Schwarz-Perspektive über primären Flip-Raum.
+            #   • 1 Stunde Abstand zwischen den Default-Zeitpunkten, damit
+            #     Replay/NMR/DBWriter nicht unnötig verdichtet werden.
+            #
+            # Wichtig:
+            #   `--policy-games 0 --explore-games 1` bedeutet: jeder Side-Lauf
+            #   erzeugt genau eine lernende Partie. Der alte große Chess2-Batch
+            #   (`OROMA_ORCH_ENABLE_CHESS2_DAILY_RUN`) bleibt vorhanden, ist aber
+            #   ab 2026-06-27 nicht mehr Default.
+            if en_chess2_side_daily_run and _should_run_daily(state, "chess2_side_white_daily_run", chess2_side_white_hh, chess2_side_white_mm, jitter_daily, now):
+                _run(
+                    "chess2_side_white_daily_run",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "chess2_daily_runner.py"),
+                        "--policy-games", "0",
+                        "--explore-games", str(max(1, int(chess2_side_games))),
+                        "--enable-flip-pass", "0",
+                        "--side-profile", "white",
+                        "--max-plies", str(max(20, int(chess2_side_max_plies))),
+                        "--eps", str(float(chess2_side_eps)),
+                        "--eps-white", str(float(chess2_side_eps_white)),
+                        "--eps-black", str(float(chess2_side_eps_black)),
+                        "--explore-moves-white", str(max(0, int(chess2_side_explore_moves_white))),
+                        "--explore-moves-black", str(max(0, int(chess2_side_explore_moves_black))),
+                        "--seed", str(int(now_ts) & 0xFFFFFFFF),
+                        "--namespace", "game:chess2",
+                    ],
+                    timeout_sec=to_chess2_side_daily_run,
+                    env_overrides={
+                        "OROMA_CHESS2_BOOTSTRAP_FROM_CHESS": "0",
+                        "OROMA_CHESS2_BOOTSTRAP_IF_EMPTY_ONLY": "1",
+                    },
+                )
+                _mark_daily(state, "chess2_side_white_daily_run", now)
+                _atomic_write_json(state_path, state)
+
+            if en_chess2_side_daily_run and _should_run_daily(state, "chess2_side_black_daily_run", chess2_side_black_hh, chess2_side_black_mm, jitter_daily, now):
+                _run(
+                    "chess2_side_black_daily_run",
+                    [
+                        sys.executable,
+                        os.path.join(base, "tools", "chess2_daily_runner.py"),
+                        "--policy-games", "0",
+                        "--explore-games", str(max(1, int(chess2_side_games))),
+                        "--enable-flip-pass", "0",
+                        "--side-profile", "black",
+                        "--max-plies", str(max(20, int(chess2_side_max_plies))),
+                        "--eps", str(float(chess2_side_eps)),
+                        "--eps-white", str(float(chess2_side_eps_white)),
+                        "--eps-black", str(float(chess2_side_eps_black)),
+                        "--explore-moves-white", str(max(0, int(chess2_side_explore_moves_white))),
+                        "--explore-moves-black", str(max(0, int(chess2_side_explore_moves_black))),
+                        "--seed", str((int(now_ts) + 3600) & 0xFFFFFFFF),
+                        "--namespace", "game:chess2",
+                    ],
+                    timeout_sec=to_chess2_side_daily_run,
+                    env_overrides={
+                        "OROMA_CHESS2_BOOTSTRAP_FROM_CHESS": "0",
+                        "OROMA_CHESS2_BOOTSTRAP_IF_EMPTY_ONLY": "1",
+                    },
+                )
+                _mark_daily(state, "chess2_side_black_daily_run", now)
                 _atomic_write_json(state_path, state)
 
             # Daily: Chess2 self-play (mobility-native Parallel-Stack)
@@ -1600,32 +2587,28 @@ def run_due_jobs(once: bool = False) -> int:
                         "--policy-games", str(max(0, int(flappy_policy_games))),
                         "--explore-games", str(max(0, int(flappy_explore_games))),
                         "--seed", str(int(now_ts) & 0xFFFFFFFF),
+                        "--namespace", "game:flappy",
                     ],
                     timeout_sec=to_flappy_daily_run,
                 )
                 _mark_daily(state, "flappy_daily_run", now)
                 _atomic_write_json(state_path, state)
 
-            # Daily: Memory Maze 2033 self-play (policy-benchmark + explore-learning)
-            #
-            # Ergebnis: episodes + episodic_metrics in oroma.db
-            # Hinweis: Headless-safe; Memory-Submode (kein pygame/GUI).
-            if en_memorymaze_daily_run and _should_run_daily(state, "memorymaze_daily_run", memorymaze_daily_hh, memorymaze_daily_mm, jitter_daily, now):
-                _run(
-                    "memorymaze_daily_run",
-                    [
-                        sys.executable,
-                        os.path.join(base, "tools", "memorymaze_daily_runner.py"),
-                        "--policy-games", str(max(0, int(memorymaze_policy_games))),
-                        "--explore-games", str(max(0, int(memorymaze_explore_games))),
-                        "--mem-size", str(memorymaze_mem_size),
-                        "--max-turns", str(max(20, int(memorymaze_max_turns))),
-                        "--seed", str(int(now_ts) & 0xFFFFFFFF),
-                    ],
-                    timeout_sec=to_memorymaze_daily_run,
-                )
-                _mark_daily(state, "memorymaze_daily_run", now)
-                _atomic_write_json(state_path, state)
+            # MemoryMaze2033 legacy-retired:
+            # Der alte Daily-Runner tools/memorymaze_daily_runner.py wird nicht
+            # mehr automatisch gestartet. Produktive Nachfolger sind:
+            #   • tools/memory_daily_runner.py         → memory:pro_v2 / mechanic_solved
+            #   • tools/memorymaze_hybrid_daily_runner.py → MemoryMaze Hybrid
+            # Historische episodes/episodic_metrics bleiben in der DB erhalten
+            # und können weiterhin in der Daily Summary erscheinen. Hier wird
+            # bewusst nur die Runner-Referenz entfernt; keine Datei wird gelöscht
+            # und keine UI-/DB-Historie wird versteckt.
+            if en_memorymaze_daily_run:
+                # Sichtbarer, nicht-destruktiver Hinweis für alte ENV-Setups:
+                # Selbst wenn OROMA_ORCH_ENABLE_MEMORYMAZE_DAILY_RUN=1 gesetzt
+                # ist, wird der Legacy-Runner aus Ressourcengründen nicht mehr
+                # durch den produktiven Orchestrator ausgeführt.
+                pass
 
             # Daily: MemoryMaze Hybrid (PacMan-Maze + Memory-Blocker) – normal + hard_p3
             #
@@ -1677,6 +2660,8 @@ def run_due_jobs(once: bool = False) -> int:
                         "--policy-games", str(max(0, int(hideseek_policy_games))),
                         "--explore-games", str(max(0, int(hideseek_explore_games))),
                         "--seed", str(int(now_ts) & 0xFFFFFFFF),
+                        "--namespace", str(hideseek_namespace),
+                        "--max-steps", str(max(10, int(hideseek_max_steps))),
                     ],
                     timeout_sec=to_hideseek_daily_run,
                 )

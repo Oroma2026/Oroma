@@ -1,0 +1,112 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-ptz-structured-motion-probe.service
+# Projekt:  ORÓMA (Offline-Realtime-Organic-Memory-AI)
+# Modul:    PTZ Structured Motion Probe – Regional Temporal Signature Evidence
+# Version:  v3.7.3+p3a-structured-motion-systemd-v1.0
+# Stand:    2026-06-16
+# Autor:    ORÓMA · ChatGPT Patch-Gate
+# Lizenz:   MIT
+# =============================================================================
+#
+# ZWECK
+# ─────
+# Diese Unit führt `tools/ptz_structured_motion_probe.py` als kurzlebigen
+# systemd-Oneshot aus. Die Probe liest ausschließlich passive Kamera-Frames aus
+# dem CameraHub-Fast-Cache und klassifiziert regionale Zeitsignaturen:
+#
+#   - structured_blob_motion             kleine wandernde Blobs
+#   - fixed_fast_change_region           TV-/Stream-artige schnelle Flächenwechsel
+#   - fixed_low_change_display_region    Alexa-/Uhr-/Display-artige ruhige Fläche
+#   - dark_static_region                 dunkle statische Fläche
+#   - slow_drift_region                  langsame Day/Night-/Fensterdrift
+#
+# ARCHITEKTUR-INVARIANTEN
+# ───────────────────────
+# - Keine PTZ-Motorbefehle.
+# - Keine Policy-Aktivierung.
+# - Keine Writes in `oroma.db`.
+# - Keine object_nodes/object_relations-Materialisierung.
+# - Keine Änderung am Eye/Face-/Positive-Position-Marker-Pfad.
+# - Stats-Writes nur über DBWriter nach `stats.db.stats_points`.
+# - Eigener Namespace: `ptz.motion.*`.
+#
+# ZEITSKALEN
+# ──────────
+# Die Unit läuft alle 5 Minuten. Innerhalb eines Laufes nimmt das Tool mehrere
+# Samples in kurzer Folge auf (Default: 12 × 0.35 s), um schnelle sichtbare
+# Änderungen von langsamer Baseline-Drift zu trennen. Langsame Baselines werden
+# im State `data/state/ptz_structured_motion_state.json` geführt.
+#
+# LOGS
+# ────
+#   /opt/ai/oroma/logs/ptz_structured_motion_probe.out.log
+#   /opt/ai/oroma/logs/ptz_structured_motion_probe.err.log
+#
+# AKTIVIERUNG
+# ───────────
+#   sudo cp systemd/oroma-ptz-structured-motion-probe.service /etc/systemd/system/
+#   sudo cp systemd/oroma-ptz-structured-motion-probe.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now oroma-ptz-structured-motion-probe.timer
+#
+# =============================================================================
+
+[Unit]
+Description=ORÓMA – PTZ Structured Motion Probe (P3a Stage-A Evidence)
+Documentation=file:/opt/ai/oroma/docs/PTZ_MOTOR_WORKER.md
+After=oroma-db-writer.service oroma.service oroma-ptz-motor-worker.service
+Wants=oroma-db-writer.service
+ConditionPathExists=/opt/ai/oroma/.use_orchestrator
+ConditionPathExists=/opt/ai/oroma/tools/ptz_structured_motion_probe.py
+
+[Service]
+Type=oneshot
+User=oroma
+Group=oroma
+UMask=002
+WorkingDirectory=/opt/ai/oroma
+SyslogIdentifier=oroma-ptz-structured-motion-probe
+TimeoutStartSec=120
+
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=UTF-8
+Environment=TZ=Europe/Berlin
+Environment=PYTHONPATH=/opt/ai/oroma
+Environment=OROMA_BASE=/opt/ai/oroma
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=OROMA_LOG_DIR=/opt/ai/oroma/logs
+Environment=OROMA_DBW_ENABLE=1
+Environment=OROMA_DBW_SOCKET=/opt/ai/oroma/data/state/db_writer.sock
+Environment=OROMA_PTZ_STRUCT_MOTION_GRID=6
+Environment=OROMA_PTZ_STRUCT_MOTION_SAMPLES=12
+Environment=OROMA_PTZ_STRUCT_MOTION_SAMPLE_INTERVAL_SEC=0.35
+Environment=OROMA_PTZ_STRUCT_MOTION_DBW_TIMEOUT_MS=10000
+
+ExecStartPre=+/usr/bin/env bash -lc 'mkdir -p /opt/ai/oroma/logs /opt/ai/oroma/data/state && touch /opt/ai/oroma/logs/ptz_structured_motion_probe.out.log /opt/ai/oroma/logs/ptz_structured_motion_probe.err.log && chown oroma:oroma /opt/ai/oroma/logs/ptz_structured_motion_probe.out.log /opt/ai/oroma/logs/ptz_structured_motion_probe.err.log && chown oroma:oroma /opt/ai/oroma/data/state'
+ExecStart=/usr/bin/python3 /opt/ai/oroma/tools/ptz_structured_motion_probe.py --once --write-stats --verbose
+
+StandardOutput=append:/opt/ai/oroma/logs/ptz_structured_motion_probe.out.log
+StandardError=append:/opt/ai/oroma/logs/ptz_structured_motion_probe.err.log
+
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ReadWritePaths=/opt/ai/oroma/logs /opt/ai/oroma/data
+
+[Install]
+WantedBy=multi-user.target

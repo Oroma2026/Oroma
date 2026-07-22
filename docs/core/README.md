@@ -29,6 +29,68 @@ Diese `docs/core/`-Reihe dokumentiert die **kanonischen Kernmechanismen** von OR
 - `85_security_privacy.md` (optional, Phase 2)
 - `90_publication.md`
 
+
+---
+
+## Architekturreview 2026-06-25 – Snap/SnapChain Core
+
+### Ergebnis
+Die Snap-/SnapChain-Kernarchitektur wurde als Fundament der ORÓMA-Gedächtnisebene geprüft.
+Es wurde **keine Replay-ähnliche Doppelstruktur** festgestellt. Die vorhandenen Dateien bilden
+eine bewusst gestufte Kernpipeline und sollen nicht konsolidiert oder zusammengelegt werden.
+
+### Rollen der autoritativen Kernmodule
+- `core/snap.py` / `docs/core/10_snap.md`
+  - autoritative atomare Beobachtungseinheit mit Feature-Vektor, Content, Metadata, Norm-Cache und Fingerprint.
+- `core/snaptoken.py` / `docs/core/12_snaptoken.md`
+  - autoritative symbolische Token-Ebene für Text/Vision/Audio/Motion/Meta; kein Ersatz für Snap.
+- `core/meta_snap.py` / `docs/core/14_meta_snap.md`
+  - autoritative Abstraktionsebene über mehrere Snaps/SnapChains; kein Ersatz für SnapChain.
+- `core/fusion.py` / `docs/core/15_fusion.md`
+  - optionale Crossmodal-Fusion; erweitert Snaps, ersetzt aber keine Snap- oder SnapChain-Rolle.
+- `core/snappattern.py` / `docs/core/20_snappattern.md`
+  - Verdichtung/Cluster-Ebene zwischen Snap und SnapChain.
+- `core/snapchain.py` / `docs/core/22_snapchain.md`
+  - autoritative episodische Gedächtniseinheit und zeitliche Sequenz aus SnapPatterns.
+- `core/snap_indexer.py` / `docs/core/24_snap_indexer.md`
+  - fokussierte Index-Brücke für MetaSnaps in `snap_index`; kein kompletter SnapChain-Persistenzersatz.
+- `core/hooks_av_snaptoken.py`, `core/hooks_audio_snaptoken.py` / `docs/core/26_snaptoken_hooks.md`
+  - Live-Hooks, die kompakte Vision-/Audio-Tokenereignisse in die Gedächtnisstruktur einspeisen.
+- `core/calc_to_snapchain.py` / `docs/core/28_calc_to_snapchain.md`
+  - Calculator→SnapChain-Bridge für deterministische Transfer-Signale.
+
+### Architekturfluss
+```text
+Perzeption / Tools / Spiele / Calculator
+        ↓
+Snap / SnapToken
+        ↓
+SnapPattern
+        ↓
+SnapChain
+        ↓
+Replay / Dream / Policy / Transfer / NMR
+        ↓
+MetaSnap / SnapIndexer / Explainability
+```
+
+### Bewertung
+Die Dateien wirken teilweise ähnlich, erfüllen aber unterschiedliche Ebenen im Gedächtnismodell.
+Eine Zusammenlegung würde die Architektur verschlechtern, weil atomare Beobachtung, symbolische
+Tokenisierung, Musterbildung, episodische Sequenz und Abstraktion bewusst getrennt sind.
+
+### Offene Beobachtungspunkte
+- `docs/snaps_todo.md` ist historisch/TODO-orientiert und sollte nicht als aktuelle
+  Architekturreferenz gelesen werden. Die aktuelle Referenz liegt in `docs/core/10_snap.md`
+  bis `docs/core/28_calc_to_snapchain.md`.
+- `core/replay_system.py` importiert weiterhin `core.snapchain`, ist aber seit der Replay-
+  Konsolidierung als Legacy-Kompatibilitätsmodul markiert. Das ist kein SnapChain-Problem.
+- Keine Codeänderung notwendig.
+
+### Entscheidung
+Für Snap/SnapChain wird aktuell **keine Konsolidierung** durchgeführt.
+Die bestehende Core-Dokumentationsreihe bleibt die autoritative Referenz.
+
 ---
 
 ## EN

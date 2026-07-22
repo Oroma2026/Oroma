@@ -1,0 +1,209 @@
+<!--
+===============================================================================
+Datei:   /opt/ai/oroma/ui/templates/ptz_zoom_observe.html
+Projekt: ORÓMA – Headless UI
+Stand:   2026-06-28
+Autor:   ORÓMA · KI-JWG-X1 + GPT-5.5 Thinking
+Zweck:   Read-only Detailseite für PTZ Zoom Observe. Die Seite zeigt Preview-
+         und Apply-Auditdaten aus stats.db/State-Dateien, ohne PTZ-Kommandos,
+         ohne DB-Writes und ohne Auto-Zoom-Freigabe.
+===============================================================================
+-->
+{% extends "base.html" %}
+{% block content %}
+<main style="padding:2rem; max-width:1200px; margin:auto;">
+  <h1>🔭 PTZ Zoom Observe</h1>
+  <p class="text-muted">
+    Read-only Audit der PTZ-Zoom-Policy. Diese Seite beobachtet Preview, Apply-Gate,
+    Motor-Reason und Confidence-Werte. Sie sendet keine PTZ-Kommandos und aktiviert
+    keinen Auto-Zoom.
+  </p>
+
+  {% if status.errors %}
+    <div class="alert alert-warning">
+      <b>Hinweis:</b>
+      <ul class="mb-0">
+      {% for e in status.errors %}
+        <li><code>{{ e }}</code></li>
+      {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+  <div class="row g-3">
+    <div class="col-md-4">
+      <div class="card bg-dark border-secondary h-100">
+        <div class="card-body">
+          <h5 class="card-title">Safety</h5>
+          <table class="table table-dark table-sm mb-0">
+            <tbody>
+              <tr><th>Zustand</th><td><code>{{ status.safety.state }}</code></td></tr>
+              <tr><th>Read-only UI</th><td>{{ 'ja' if status.safety.read_only_ui else 'nein' }}</td></tr>
+              <tr><th>PTZ-Kommandos</th><td>{{ 'nein' if status.safety.no_ptz_commands else 'ja' }}</td></tr>
+              <tr><th>DB-Writes</th><td>{{ 'nein' if status.safety.no_db_writes else 'ja' }}</td></tr>
+              <tr><th>Auto-Zoom enabled gesehen</th><td>{{ 'ja' if status.safety.auto_zoom_enabled_seen else 'nein' }}</td></tr>
+              <tr><th>Applied Count</th><td>{{ status.safety.applied_count }}</td></tr>
+              <tr><th>Apply Allowed Count</th><td>{{ status.safety.apply_allowed_count }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-4">
+      <div class="card bg-dark border-secondary h-100">
+        <div class="card-body">
+          <h5 class="card-title">Preview</h5>
+          <table class="table table-dark table-sm mb-0">
+            <tbody>
+              <tr><th>Samples</th><td>{{ status.preview.samples }}</td></tr>
+              <tr><th>Recommend Wide</th><td>{{ status.preview.recommend_wide_count }}</td></tr>
+              <tr><th>Rate</th><td>{{ '%.3f'|format(status.preview.recommend_wide_rate or 0) }}</td></tr>
+              <tr><th>Letzter Reason</th><td><code>{{ status.preview.latest.motor_reason or '–' }}</code></td></tr>
+              <tr><th>Letzte Entscheidung</th><td><code>{{ status.preview.latest.final_decision or '–' }}</code></td></tr>
+              <tr><th>Zeit</th><td>{{ status.preview.latest.time or '–' }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-4">
+      <div class="card bg-dark border-secondary h-100">
+        <div class="card-body">
+          <h5 class="card-title">Apply Gate</h5>
+          <table class="table table-dark table-sm mb-0">
+            <tbody>
+              <tr><th>Samples</th><td>{{ status.apply.samples }}</td></tr>
+              <tr><th>Preview Recommend</th><td>{{ status.apply.preview_recommend_count or 0 }}</td></tr>
+              <tr><th>Apply Allowed</th><td>{{ status.apply.apply_allowed_count or 0 }}</td></tr>
+              <tr><th>Applied</th><td>{{ status.apply.applied_count or 0 }}</td></tr>
+              <tr><th>Letzte Entscheidung</th><td><code>{{ status.apply.latest.final_decision or '–' }}</code></td></tr>
+              <tr><th>Letzter Reason</th><td><code>{{ status.apply.latest.motor_reason or '–' }}</code></td></tr>
+              <tr><th>Zeit</th><td>{{ status.apply.latest.time or '–' }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3 mt-1">
+    <div class="col-md-6">
+      <div class="card bg-dark border-secondary h-100">
+        <div class="card-body">
+          <h5 class="card-title">Preview nach Motor-Reason</h5>
+          <table class="table table-dark table-striped table-sm">
+            <thead><tr><th>Reason</th><th class="text-end">alle</th><th class="text-end">recommend</th></tr></thead>
+            <tbody>
+              {% for reason, count in status.preview.by_motor_reason.items() %}
+              <tr>
+                <td><code>{{ reason }}</code></td>
+                <td class="text-end">{{ count }}</td>
+                <td class="text-end">{{ status.preview.recommend_by_reason.get(reason, 0) }}</td>
+              </tr>
+              {% else %}
+              <tr><td colspan="3" class="text-muted">Keine Preview-Daten.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-6">
+      <div class="card bg-dark border-secondary h-100">
+        <div class="card-body">
+          <h5 class="card-title">Apply-Entscheidungen</h5>
+          <table class="table table-dark table-striped table-sm">
+            <thead><tr><th>Final Decision</th><th class="text-end">Anzahl</th></tr></thead>
+            <tbody>
+              {% for decision, count in status.apply.final_decisions.items() %}
+              <tr><td><code>{{ decision }}</code></td><td class="text-end">{{ count }}</td></tr>
+              {% else %}
+              <tr><td colspan="2" class="text-muted">Keine Apply-Daten.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card bg-dark border-secondary mt-3">
+    <div class="card-body">
+      <h5 class="card-title">Letzte Preview-Samples</h5>
+      <div class="table-responsive">
+        <table class="table table-dark table-striped table-sm">
+          <thead>
+            <tr>
+              <th>Zeit</th><th class="text-end">rec</th><th>final</th><th>motor</th><th>quality</th>
+              <th class="text-end">target</th><th class="text-end">obs</th><th class="text-end">candidate</th><th>reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for it in status.preview.latest_items %}
+            <tr>
+              <td>{{ it.time }}</td>
+              <td class="text-end">{{ '%.0f'|format(it.recommend or 0) }}</td>
+              <td><code>{{ it.final_decision or '' }}</code></td>
+              <td><code>{{ it.motor_reason or '' }}</code></td>
+              <td>{{ it.quality or '' }}</td>
+              <td class="text-end">{{ it.target_conf }}</td>
+              <td class="text-end">{{ it.obs_conf }}</td>
+              <td class="text-end">{{ it.candidate_conf }}</td>
+              <td class="small text-muted">{{ it.reason or '' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="9" class="text-muted">Keine Preview-Samples.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card bg-dark border-secondary mt-3">
+    <div class="card-body">
+      <h5 class="card-title">Letzte Apply-Samples</h5>
+      <div class="table-responsive">
+        <table class="table table-dark table-striped table-sm">
+          <thead>
+            <tr>
+              <th>Zeit</th><th>final</th><th>motor</th><th class="text-end">enabled</th>
+              <th class="text-end">preview</th><th class="text-end">allowed</th><th class="text-end">applied</th>
+              <th class="text-end">zoom</th><th>reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for it in status.apply.latest_items %}
+            <tr>
+              <td>{{ it.time }}</td>
+              <td><code>{{ it.final_decision or '' }}</code></td>
+              <td><code>{{ it.motor_reason or '' }}</code></td>
+              <td class="text-end">{{ 1 if it.enabled else 0 }}</td>
+              <td class="text-end">{{ 1 if it.preview_recommend else 0 }}</td>
+              <td class="text-end">{{ 1 if it.apply_allowed else 0 }}</td>
+              <td class="text-end">{{ 1 if it.applied else 0 }}</td>
+              <td class="text-end">{{ it.current_zoom or '' }} → {{ it.target_zoom or '' }}</td>
+              <td class="small text-muted">{{ it.reason or '' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="9" class="text-muted">Keine Apply-Samples.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-3 d-flex gap-2" style="gap:.5rem;">
+    <a class="btn btn-sm btn-outline-primary" href="/games/">← zurück zur Spieleliste</a>
+    <a class="btn btn-sm btn-outline-secondary" href="/ptz_zoom_observe/api/status" target="_blank">JSON öffnen</a>
+  </div>
+
+  <p class="text-muted small mt-3">
+    Pfade: <code>{{ status.stats_db }}</code> · Preview-State: <code>{{ status.preview_state_path }}</code> · Apply-State: <code>{{ status.apply_state_path }}</code>
+  </p>
+</main>
+{% endblock %}

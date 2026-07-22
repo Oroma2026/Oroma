@@ -3,8 +3,8 @@
 # =============================================================================
 # Pfad:    /opt/ai/oroma/core/reward.py
 # Projekt: ORÓMA
-# Version: v3.7 (Reward-Core + optionale Empathie-Δ-Brücke + Thread-Attach)
-# Stand:   2025-09-29
+# Version: v3.7.3+reward-dbwriter-backpressure-v1.1
+# Stand:   2026-06-13
 #
 # Zweck
 # ─────
@@ -12,6 +12,16 @@
 #     - Verwaltung von Belohnungssignalen (Games, Wrapper, Episoden, Tools)
 #     - Aggregation/Statistik (aggregator)
 #     - Speicherung in SQL-Logs (rewards_log)
+#
+# Patch v1.1 – DBWriter-Backpressure-Schutz (2026-06-13)
+# ─────────────────────────────────────────────────────────
+#   Der PTZ-Motor-Reward-Collector ist ein Slow-Loop und darf bei DBWriter-
+#   Backpressure etwas länger warten als UI-/Hot-Path-Aufrufe. In der Live-
+#   Diagnose wurden einzelne `reward.log`-Writes mit dem bisherigen 2000-ms-
+#   Default verworfen. Dieser Patch erhöht den Default auf 10000 ms, hält die
+#   Priorität weiterhin niedrig und protokolliert Fehler mit Quelle, Tag,
+#   Timeout und Priorität sichtbar. Es gibt weiterhin KEINEN lokalen SQLite-
+#   Fallback, wenn DBWriter aktiv ist.
 #
 # Neu in v3.7 (optional, idempotent)
 # ─────────────────────────────────
@@ -95,6 +105,29 @@ _REWARD_SCHEMA_DONE = False
 # Thread-Attach (roter Faden) optional
 _ATTACH_THREAD = (os.environ.get("OROMA_REWARD_ATTACH_THREAD", "true").lower()
                   not in ("0", "false", "no", "off"))
+
+
+def _reward_dbw_timeout_ms() -> int:
+    """Timeout für Reward-Logs im DBWriter-Pfad.
+
+    Reward-Logging ist kein Motor-Hot-Path. Ein kurzer 2s-Timeout kann bei
+    Backpressure zu unnötigen Datenverlusten führen. Der Default ist deshalb
+    konservativ auf 10s gesetzt, bleibt aber per ENV exakt steuerbar.
+    """
+    try:
+        raw = str(os.getenv("OROMA_DBW_REWARD_TIMEOUT_MS", "10000")).strip()
+        value = int(raw) if raw else 10000
+    except Exception:
+        value = 10000
+    return max(500, min(int(value), 120000))
+
+
+def _reward_dbw_priority() -> str:
+    """DBWriter-Priorität für Reward-Logs. Default bleibt `low`."""
+    value = str(os.getenv("OROMA_DBW_REWARD_PRIORITY", "low")).strip().lower()
+    if value not in ("low", "normal", "high"):
+        return "low"
+    return value
 try:
     from core import roter_faden  # type: ignore
     def _attach_thread_info(info: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -189,14 +222,28 @@ class RewardLogger:
                     int(episode_id) if episode_id is not None else None,
                     str(tag) if tag is not None else None,
                 )
-                getattr(_dbw, "exec_write")(sql_stmt, params=list(params), tag="reward.log", priority="low", timeout_ms=int(os.getenv("OROMA_DBW_REWARD_TIMEOUT_MS","2000")), db="oroma")
+                timeout_ms = _reward_dbw_timeout_ms()
+                priority = _reward_dbw_priority()
+                getattr(_dbw, "exec_write")(
+                    sql_stmt,
+                    params=list(params),
+                    tag="reward.log",
+                    priority=priority,
+                    timeout_ms=timeout_ms,
+                    db="oroma",
+                )
                 return 0
         except Exception as e:
             # Im Single-Writer-Modus niemals auf lokalen SQLite-Write zurückfallen.
             # Sichtbar loggen und überspringen, damit keine Writer-Kollisionen entstehen.
             try:
                 if callable(getattr(sql_manager, "_dbw_enabled", None)) and getattr(sql_manager, "_dbw_enabled")():
-                    print(f"[reward] DBWriter write failed – skip (no local fallback): {e}")
+                    print(
+                        "[reward] DBWriter write failed – skip (no local fallback): "
+                        f"source={source!r} tag={tag!r} timeout_ms={_reward_dbw_timeout_ms()} "
+                        f"priority={_reward_dbw_priority()!r} err={e}",
+                        flush=True,
+                    )
                     return -1
             except Exception:
                 pass

@@ -1,0 +1,32 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-ptz-zoom-policy-apply.timer
+# Projekt:  ORÓMA (Offline-Realtime-Organic-Memory-AI)
+# Modul:    PTZ Zoom Policy Apply Timer – P3z1c Gated Auto-Zoom
+# Version:  v3.7.3+p3z1c-wide-observe-auto-zoom-timer-v1.0
+# Stand:    2026-06-26
+# Autor:    ORÓMA · ChatGPT Patch-Gate
+# Lizenz:   MIT
+# =============================================================================
+#
+# ZWECK
+# ─────
+# Startet die P3z1c Auto-Zoom-Gate-Prüfung periodisch. Die Unit bleibt durch
+# OROMA_PTZ_ZOOM_AUTO_APPLY_ENABLE=0 zunächst fail-closed und schreibt nur
+# Apply-/No-op-Stats. Eine echte Zoom-Änderung braucht eine explizite ENV-
+# Freigabe plus das `--apply`-CLI-Gate der Service-Datei.
+# =============================================================================
+
+[Unit]
+Description=ORÓMA – PTZ Zoom Policy Apply Timer (P3z1c gated auto-zoom)
+Documentation=file:/opt/ai/oroma/docs/PTZ_MOTOR_WORKER.md
+
+[Timer]
+OnBootSec=1200s
+OnUnitActiveSec=600s
+Persistent=true
+RandomizedDelaySec=60s
+AccuracySec=30s
+Unit=oroma-ptz-zoom-policy-apply.service
+
+[Install]
+WantedBy=timers.target

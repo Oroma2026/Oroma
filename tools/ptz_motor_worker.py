@@ -4,9 +4,9 @@
 # Pfad:      /opt/ai/oroma/tools/ptz_motor_worker.py
 # Projekt:   ORÓMA (Offline-Realtime-Organic-Memory-AI)
 # Modul:     PTZ Motor Worker – schneller persistenter Servo-/Reflex-Loop
-# Version:   v3.7.3+ptz-motor-worker-v1.5b
-# Stand:     2026-05-16
-# Autor:     ORÓMA · KI-JWG-X1
+# Version:   v3.7.3+ptz-motor-worker-v1.6d-positive-marker-guard
+# Stand:     2026-06-13
+# Autor:     ORÓMA · Jörg Werner + OpenAI GPT-5.5 Thinking
 # Lizenz:    MIT
 # =============================================================================
 #
@@ -198,6 +198,65 @@
 #       ist ein Soft-Ranking-Signal fuer Eye/Face-Salience; Motion bleibt
 #       Fallback. Keine schweren Modelle, keine Cascade, kein Per-Pixel-Hotpath.
 #
+# Learned PTZ Motor Policy Bias v1.6b / Phase 5b:
+#   OROMA_PTZ_MOTOR_POLICY_BIAS_ENABLE Default 0
+#       Optionaler, streng gegateter Online-Rueckfluss der im DreamWorker aus
+#       ptz_motor/*-Rewards verdichteten policy_rules namespace='ptz_motor'.
+#       Dieser Bias ist KEINE harte Policy-Steuerung: Reflex-/Safety-Logik,
+#       Deadzone, Energy-Gate, Micro-Guard, Cooldown, Axis-Lock und Reversal-
+#       Guard bleiben vorrangig. Der Bias wirkt nur auf bereits plausible
+#       Bewegungsaktionen und kann kleine Kommandos leicht daempfen/boosten.
+#   OROMA_PTZ_MOTOR_POLICY_NS Default ptz_motor
+#   OROMA_PTZ_MOTOR_POLICY_BIAS_WEIGHT Default 0.08
+#   OROMA_PTZ_MOTOR_POLICY_BIAS_MIN_N Default 10
+#       Mindest-Evidenz pro Aktion nach Filterung. Gemeint ist SUM(n), nicht
+#       Anzahl der Regeln. Dadurch wird ein einzelner State-Ausreisser nicht
+#       policy-wirksam.
+#   OROMA_PTZ_MOTOR_POLICY_BIAS_MIN_RULE_N Default 3
+#       Mindest-Evidenz pro einzelner policy_rules-Zeile. Regeln mit n < 3
+#       bleiben fuer Online-Bias unberuecksichtigt, werden aber weiterhin in
+#       der Offline-Policy gespeichert und im Meta-Status sichtbar gemacht.
+#   OROMA_PTZ_MOTOR_POLICY_BIAS_MIN_ABS_Q Default 0.05
+#   OROMA_PTZ_MOTOR_POLICY_BIAS_REFRESH_SEC Default 60
+#   OROMA_PTZ_MOTOR_POLICY_BIAS_MAX_ABS Default 0.20
+#   OROMA_PTZ_MOTOR_POLICY_BIAS_DB_PATH Optional; Default {BASE}/data/oroma.db
+#       Read-only SELECT auf policy_rules; keine DB-Writes, kein DBWriter, keine
+#       Schema-Aenderung, kein Local-Fallback. Fehler werden im State sichtbar.
+#       v1.6b nutzt weighted_q = SUM(q*n)/SUM(n) statt AVG(q), damit Regeln
+#       mit hoher Evidenz (n) starker wirken als Einzelbeobachtungen.
+#
+# Positive Position Marker / Ceiling-Recovery v1.6c:
+#   OROMA_PTZ_MOTOR_POS_MARKER_ENABLE Default 1
+#       Speichert wiederholt interessante Bildpositionen als rein lokale
+#       Attention-Marker in data/state/ptz_positive_position_markers.json.
+#       Das ist KEIN Policy-Bias und KEINE automatische Dauersteuerung, sondern
+#       ein beobachtender Positionsspeicher: „Hier passiert wiederholt etwas“.
+#   OROMA_PTZ_MOTOR_POS_MARKER_PATH Default {BASE}/data/state/ptz_positive_position_markers.json
+#   OROMA_PTZ_MOTOR_POS_MARKER_GRID Default 6
+#   OROMA_PTZ_MOTOR_POS_MARKER_MIN_CONF Default 0.18
+#   OROMA_PTZ_MOTOR_POS_MARKER_MOTION_MIN_CONF Default 0.45
+#       Motion-only Marker sind ab v1.6d bewusst strenger: einfache
+#       motion_diff/motion_diff_upper Signale duerfen nicht mehr automatisch
+#       als positive Interessensposition gelten. Damit wird verhindert, dass
+#       Deckenrauschen, Lampenflackern oder obere Bildkanten als „interessant“
+#       gelernt werden. Eye-/Face-nahe Kandidaten bleiben bevorzugt.
+#   OROMA_PTZ_MOTOR_POS_MARKER_ALLOW_MOTION_ONLY Default 0
+#   OROMA_PTZ_MOTOR_POS_MARKER_ALLOW_UPPER_MOTION Default 0
+#   OROMA_PTZ_MOTOR_POS_MARKER_MIN_REPEATS Default 3
+#   OROMA_PTZ_MOTOR_POS_MARKER_MAX Default 48
+#   OROMA_PTZ_MOTOR_POS_MARKER_DECAY_SEC Default 172800
+#   OROMA_PTZ_MOTOR_CEILING_RECOVERY_ENABLE Default 1
+#       Safety-Rueckstellung: Wenn ueber laengere Zeit kein brauchbarer Marker
+#       oder Target entsteht, faehrt der Worker rate-limited auf HOME zurueck.
+#       Das verhindert, dass die Kamera stundenlang an die Decke schaut.
+#   OROMA_PTZ_MOTOR_CEILING_RECOVERY_IDLE_SEC Default 900
+#   OROMA_PTZ_MOTOR_CEILING_RECOVERY_COOLDOWN_SEC Default 900
+#   OROMA_PTZ_MOTOR_CEILING_RECOVERY_CONF_MAX Default 0.020
+#   OROMA_PTZ_MOTOR_CEILING_RECOVERY_START_GRACE_SEC Default 300
+#       Kein sofortiger zweiter HOME-Befehl direkt nach Worker-Start. Der
+#       normale home_on_start bleibt erhalten; Ceiling-Recovery greift erst
+#       nach einer kurzen Beobachtungsphase.
+#
 # LOGGING
 # ───────
 #   --verbose zeigt einzelne Tick-Entscheidungen.
@@ -215,6 +274,7 @@ import json
 import math
 import os
 import signal
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -302,6 +362,387 @@ def _now() -> float:
 
 def _state_path(base: str) -> Path:
     return Path(os.environ.get("OROMA_PTZ_MOTOR_STATE_PATH", os.path.join(base, "data", "state", "ptz_motor_state.json")))
+
+
+def _oroma_db_path(base: str) -> Path:
+    return Path(os.environ.get("OROMA_PTZ_MOTOR_POLICY_BIAS_DB_PATH", os.path.join(base, "data", "oroma.db")))
+
+
+def _pos_marker_path(base: str) -> Path:
+    return Path(os.environ.get("OROMA_PTZ_MOTOR_POS_MARKER_PATH", os.path.join(base, "data", "state", "ptz_positive_position_markers.json")))
+
+
+def _load_ptz_motor_policy_bias(
+    *,
+    base: str,
+    namespace: str,
+    min_total_n: int,
+    min_rule_n: int,
+    min_abs_q: float,
+    weight: float,
+    max_abs: float,
+) -> Tuple[Dict[str, float], Dict[str, Any], str]:
+    """Read a bounded, evidence-weighted action-bias map from policy_rules.
+
+    DreamWorker materializes ptz_motor/* utility rewards into
+    policy_rules(namespace='ptz_motor'). The online motor worker consumes only a
+    small, action-level aggregate. v1.6b intentionally uses
+
+        weighted_q = SUM(q * n) / SUM(n)
+
+    after filtering individual rules by min_rule_n. This prevents one-shot
+    outliers (for example n=1, q=1.0) from having the same online influence as
+    repeated evidence (for example n=38, q=0.575). A read-only SQLite URI and
+    explicit close in finally keep this path lock-safe and DBWriter-free.
+    """
+    allowed_actions = {"left", "right", "up", "down"}
+    db_path = _oroma_db_path(base)
+    min_total_n_i = max(1, int(min_total_n))
+    min_rule_n_i = max(1, int(min_rule_n))
+    meta: Dict[str, Any] = {
+        "db_path": str(db_path),
+        "namespace": str(namespace),
+        "loaded_ts": int(_now()),
+        "aggregation": "weighted_q=sum(q*n)/sum(n)",
+        "raw_rule_count": 0,
+        "eligible_rule_count": 0,
+        "used_rule_count": 0,
+        "used_action_count": 0,
+        "min_total_n": int(min_total_n_i),
+        "min_rule_n": int(min_rule_n_i),
+        "min_abs_q": float(min_abs_q),
+        "weight": float(weight),
+        "max_abs": float(max_abs),
+        "actions": {},
+    }
+    if not db_path.exists():
+        return {}, meta, f"db_missing:{db_path}"
+
+    con = None
+    try:
+        con = sqlite3.connect("file:" + str(db_path) + "?mode=ro", uri=True, timeout=2.0)
+        raw_count_row = con.execute(
+            "SELECT COUNT(*) FROM policy_rules WHERE namespace = ?",
+            (str(namespace),),
+        ).fetchone()
+        try:
+            meta["raw_rule_count"] = int((raw_count_row or [0])[0] or 0)
+        except Exception:
+            meta["raw_rule_count"] = 0
+
+        rows = con.execute(
+            """
+            SELECT
+                action,
+                COUNT(*) AS eligible_rule_count,
+                COALESCE(SUM(n), 0) AS total_n,
+                COALESCE(SUM(q * n) / NULLIF(SUM(n), 0), 0.0) AS weighted_q,
+                COALESCE(MIN(q), 0.0) AS q_min,
+                COALESCE(MAX(q), 0.0) AS q_max,
+                COALESCE(SUM(pos), 0) AS pos_sum,
+                COALESCE(SUM(neg), 0) AS neg_sum,
+                COALESCE(SUM(draw), 0) AS draw_sum,
+                MAX(last_ts) AS last_ts
+            FROM policy_rules
+            WHERE namespace = ?
+              AND n >= ?
+            GROUP BY action
+            ORDER BY action
+            """,
+            (str(namespace), int(min_rule_n_i)),
+        ).fetchall()
+        bias: Dict[str, float] = {}
+        eligible_total = 0
+        used_actions = 0
+        for row in rows:
+            (
+                action_raw,
+                eligible_rule_count_raw,
+                total_n_raw,
+                weighted_q_raw,
+                q_min_raw,
+                q_max_raw,
+                pos_sum_raw,
+                neg_sum_raw,
+                draw_sum_raw,
+                last_ts_raw,
+            ) = row
+            action = str(action_raw or "").strip().lower()
+            if action not in allowed_actions:
+                continue
+            try:
+                eligible_rule_count = int(eligible_rule_count_raw or 0)
+            except Exception:
+                eligible_rule_count = 0
+            try:
+                total_n = int(total_n_raw or 0)
+            except Exception:
+                total_n = 0
+            try:
+                weighted_q = float(weighted_q_raw or 0.0)
+            except Exception:
+                weighted_q = 0.0
+            try:
+                q_min = float(q_min_raw or 0.0)
+            except Exception:
+                q_min = 0.0
+            try:
+                q_max = float(q_max_raw or 0.0)
+            except Exception:
+                q_max = 0.0
+            try:
+                pos_sum = int(pos_sum_raw or 0)
+            except Exception:
+                pos_sum = 0
+            try:
+                neg_sum = int(neg_sum_raw or 0)
+            except Exception:
+                neg_sum = 0
+            try:
+                draw_sum = int(draw_sum_raw or 0)
+            except Exception:
+                draw_sum = 0
+            eligible_total += int(eligible_rule_count)
+            meta["actions"][action] = {
+                "eligible_rules": int(eligible_rule_count),
+                "total_n": int(total_n),
+                "weighted_q": round(float(weighted_q), 6),
+                "q": round(float(weighted_q), 6),
+                "q_min": round(float(q_min), 6),
+                "q_max": round(float(q_max), 6),
+                "pos_sum": int(pos_sum),
+                "neg_sum": int(neg_sum),
+                "draw_sum": int(draw_sum),
+                "last_ts": int(last_ts_raw or 0) if last_ts_raw is not None else 0,
+                "passes_total_n": bool(total_n >= min_total_n_i),
+                "passes_min_abs_q": bool(abs(float(weighted_q)) >= float(min_abs_q)),
+            }
+            if total_n < int(min_total_n_i):
+                continue
+            if abs(float(weighted_q)) < float(min_abs_q):
+                continue
+            delta = _clamp_float(float(weighted_q) * float(weight), -float(max_abs), float(max_abs))
+            if abs(delta) > 0.0:
+                bias[action] = float(delta)
+                used_actions += 1
+        meta["eligible_rule_count"] = int(eligible_total)
+        meta["used_rule_count"] = int(used_actions)
+        meta["used_action_count"] = int(used_actions)
+        return bias, meta, ""
+    except Exception as e:
+        return {}, meta, str(e)
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+
+def _policy_bias_delta_for_action(bias: Dict[str, float], action: str) -> float:
+    try:
+        return float(bias.get(str(action or "").strip().lower(), 0.0) or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _load_pos_marker_state(path: Path) -> Dict[str, Any]:
+    """Load the local PTZ positive-position marker file without DB access."""
+    try:
+        if not path.exists():
+            return {"ok": True, "version": 2, "markers": {}, "created_ts": int(_now()), "updated_ts": 0}
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return {"ok": True, "version": 2, "markers": {}, "created_ts": int(_now()), "updated_ts": 0}
+        markers = raw.get("markers") if isinstance(raw.get("markers"), dict) else {}
+        version = int(raw.get("version") or 1)
+        if version < 2:
+            # v1.6c allowed motion_diff_upper to become positive too easily.
+            # Treat legacy runtime markers as untrusted derived state and start
+            # a clean v2 marker store instead of letting ceiling/noise markers
+            # suppress the recovery guard for hours. No DB/user data is deleted.
+            return {
+                "ok": True,
+                "version": 2,
+                "markers": {},
+                "created_ts": int(_now()),
+                "updated_ts": 0,
+                "legacy_reset_count": len(markers),
+                "legacy_reset_reason": "v16d_motion_marker_guard",
+            }
+        raw["markers"] = markers
+        raw["version"] = 2
+        raw.setdefault("created_ts", int(_now()))
+        raw.setdefault("updated_ts", 0)
+        raw["ok"] = True
+        return raw
+    except Exception as e:
+        print(f"[ptz_motor_worker] pos_marker_load_error={e} path={path}", file=sys.stderr, flush=True)
+        return {"ok": False, "version": 2, "markers": {}, "created_ts": int(_now()), "updated_ts": 0, "error": str(e)}
+
+
+def _marker_cell(dx: float, dy: float, grid: int) -> Tuple[int, int, str]:
+    """Map normalized image-space coordinates (-1..+1) into a stable grid cell."""
+    g = max(2, int(grid))
+    x = _clamp_float((float(dx) + 1.0) / 2.0, 0.0, 0.999999)
+    y = _clamp_float((float(dy) + 1.0) / 2.0, 0.0, 0.999999)
+    ix = int(x * g)
+    iy = int(y * g)
+    return ix, iy, f"g{g}:x{ix}:y{iy}"
+
+
+def _marker_candidate_quality(
+    candidate: Dict[str, Any],
+    target_conf: float,
+    energy: float,
+    *,
+    allow_motion_only: bool,
+    allow_upper_motion: bool,
+    motion_min_conf: float,
+) -> Tuple[float, str, bool]:
+    """Return a conservative salience score for storing an attention marker.
+
+    v1.6d deliberately separates *observed motion* from a *positive position*.
+    Motion in the upper half of the image is common when the camera points at
+    ceiling/lights/edges, so motion-only candidates no longer become positive
+    markers by default. They can be enabled explicitly with environment gates,
+    but the safe default prefers eye/face-associated salience.
+    """
+    if not isinstance(candidate, dict):
+        return 0.0, "missing", False
+    kind = str(candidate.get("kind") or "")
+    src = str(candidate.get("source") or "")
+    conf = float(candidate.get("confidence") or 0.0)
+    face_ctx = candidate.get("face_region") if isinstance(candidate.get("face_region"), dict) else {}
+    face_ok = bool(face_ctx.get("ok"))
+    face_score = float(face_ctx.get("score_norm") or 0.0)
+    gate_ok = str(candidate.get("gate_state") or "accepted") == "accepted"
+    score = max(float(conf), float(target_conf), float(energy) * 0.25)
+    if face_ok:
+        score = max(score, min(1.0, 0.18 + face_score))
+    if not gate_ok:
+        return _clamp_float(score, 0.0, 1.0), "gate", False
+    if not src:
+        return _clamp_float(score, 0.0, 1.0), "missing_source", False
+    if kind == "eye_pair_salience":
+        return _clamp_float(score, 0.0, 1.0), "ok_eye_pair", True
+    if kind == "motion_centroid":
+        upper_motion = bool(src == "motion_diff_upper" or str(candidate.get("target_mode") or "") == "motion_upper")
+        if upper_motion and not bool(allow_upper_motion):
+            return _clamp_float(score, 0.0, 1.0), "upper_motion_guard", False
+        if not face_ok and not bool(allow_motion_only):
+            return _clamp_float(score, 0.0, 1.0), "motion_only_guard", False
+        if score < float(motion_min_conf):
+            return _clamp_float(score, 0.0, 1.0), "motion_below_min_conf", False
+        return _clamp_float(score, 0.0, 1.0), "ok_motion", True
+    return _clamp_float(score, 0.0, 1.0), "unsupported_kind", False
+
+
+def _top_pos_markers(marker_state: Dict[str, Any], *, limit: int = 5, min_repeats: int = 1) -> list:
+    markers = marker_state.get("markers") if isinstance(marker_state.get("markers"), dict) else {}
+    out = []
+    for key, m in markers.items():
+        if not isinstance(m, dict):
+            continue
+        count = int(m.get("count") or 0)
+        if count < int(min_repeats) or not bool(m.get("is_positive")):
+            continue
+        out.append({
+            "key": str(key),
+            "count": count,
+            "score_ema": round(float(m.get("score_ema") or 0.0), 6),
+            "avg_dx": round(float(m.get("avg_dx") or 0.0), 6),
+            "avg_dy": round(float(m.get("avg_dy") or 0.0), 6),
+            "last_ts": int(m.get("last_ts") or 0),
+            "last_kind": str(m.get("last_kind") or ""),
+            "last_source": str(m.get("last_source") or ""),
+            "is_positive": bool(m.get("is_positive")),
+        })
+    out.sort(key=lambda item: (int(item.get("count") or 0), float(item.get("score_ema") or 0.0), int(item.get("last_ts") or 0)), reverse=True)
+    return out[: max(0, int(limit))]
+
+
+def _update_pos_markers(
+    marker_state: Dict[str, Any],
+    *,
+    candidate: Dict[str, Any],
+    target_conf: float,
+    energy: float,
+    now: float,
+    grid: int,
+    min_conf: float,
+    motion_min_conf: float,
+    allow_motion_only: bool,
+    allow_upper_motion: bool,
+    min_repeats: int,
+    max_markers: int,
+    decay_sec: float,
+) -> Tuple[Dict[str, Any], Dict[str, Any], bool]:
+    """Update local positive-position markers from a qualified attention candidate.
+
+    Markers describe image-space positions, not motor commands. They answer:
+    "Where did ORÓMA repeatedly see something interesting?"  This keeps the
+    feature safe as observation memory and avoids turning one noisy event into
+    a steering policy.
+    """
+    markers = marker_state.get("markers") if isinstance(marker_state.get("markers"), dict) else {}
+    marker_state["markers"] = markers
+    meta: Dict[str, Any] = {"updated": False, "reason": "not_evaluated", "top": _top_pos_markers(marker_state, limit=5, min_repeats=min_repeats)}
+    score, reason, good = _marker_candidate_quality(candidate, target_conf=target_conf, energy=energy, allow_motion_only=bool(allow_motion_only), allow_upper_motion=bool(allow_upper_motion), motion_min_conf=float(motion_min_conf))
+    if not good or score < float(min_conf):
+        meta.update({"reason": reason if reason != "ok" else "below_min_conf", "score": round(float(score), 6)})
+        return marker_state, meta, False
+    dx = float(candidate.get("dx") or 0.0)
+    dy = float(candidate.get("dy") or 0.0)
+    ix, iy, key = _marker_cell(dx, dy, int(grid))
+    now_i = int(now)
+    old = markers.get(key) if isinstance(markers.get(key), dict) else {}
+    count = int(old.get("count") or 0) + 1
+    alpha = 1.0 / float(min(20, max(1, count)))
+    avg_dx = (float(old.get("avg_dx") or dx) * (1.0 - alpha)) + (float(dx) * alpha)
+    avg_dy = (float(old.get("avg_dy") or dy) * (1.0 - alpha)) + (float(dy) * alpha)
+    score_ema = (float(old.get("score_ema") or score) * 0.85) + (float(score) * 0.15)
+    markers[key] = {
+        "key": key,
+        "grid": int(grid),
+        "cell_x": int(ix),
+        "cell_y": int(iy),
+        "count": int(count),
+        "score_ema": round(float(score_ema), 6),
+        "avg_dx": round(float(avg_dx), 6),
+        "avg_dy": round(float(avg_dy), 6),
+        "last_dx": round(float(dx), 6),
+        "last_dy": round(float(dy), 6),
+        "last_score": round(float(score), 6),
+        "first_ts": int(old.get("first_ts") or now_i),
+        "last_ts": int(now_i),
+        "last_kind": str(candidate.get("kind") or ""),
+        "last_source": str(candidate.get("source") or ""),
+        "last_winner": str(candidate.get("candidate_winner") or candidate.get("kind") or ""),
+        "is_positive": bool(count >= int(min_repeats)),
+        "note": "positive attention position marker; no identity, no automatic steering policy",
+    }
+    cutoff = int(now - max(60.0, float(decay_sec)))
+    for k in list(markers.keys()):
+        m = markers.get(k)
+        if not isinstance(m, dict) or int(m.get("last_ts") or 0) < cutoff:
+            markers.pop(k, None)
+    if len(markers) > int(max_markers):
+        ranked = sorted(markers.items(), key=lambda kv: (int(kv[1].get("count") or 0), float(kv[1].get("score_ema") or 0.0), int(kv[1].get("last_ts") or 0)), reverse=True)
+        keep = {k for k, _m in ranked[: int(max_markers)]}
+        for k in list(markers.keys()):
+            if k not in keep:
+                markers.pop(k, None)
+    marker_state["updated_ts"] = now_i
+    marker_state["version"] = 2
+    marker_state["grid"] = int(grid)
+    marker_state["min_conf"] = float(min_conf)
+    marker_state["min_repeats"] = int(min_repeats)
+    marker_state["max_markers"] = int(max_markers)
+    marker_state["decay_sec"] = float(decay_sec)
+    positives = _top_pos_markers(marker_state, limit=5, min_repeats=min_repeats)
+    meta.update({"updated": True, "reason": "stored", "key": key, "score": round(float(score), 6), "count": int(count), "is_positive": bool(count >= int(min_repeats)), "top": positives})
+    return marker_state, meta, True
 
 
 def _atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
@@ -1307,6 +1748,31 @@ def run_worker(duration_sec: float = 0.0, once: bool = False, verbose: bool = Fa
     eye_face_radius_boost = _clamp_float(_env_float("OROMA_PTZ_MOTOR_EYE_FACE_RADIUS_BOOST", 1.55), 1.0, 4.0)
     eye_face_radius_boost_min = _clamp_float(_env_float("OROMA_PTZ_MOTOR_EYE_FACE_RADIUS_BOOST_MIN", 0.40), 0.0, 1.0)
 
+    policy_bias_enable = _env_bool("OROMA_PTZ_MOTOR_POLICY_BIAS_ENABLE", False)
+    policy_bias_ns = str(os.environ.get("OROMA_PTZ_MOTOR_POLICY_NS", "ptz_motor")).strip() or "ptz_motor"
+    policy_bias_weight = _clamp_float(_env_float("OROMA_PTZ_MOTOR_POLICY_BIAS_WEIGHT", 0.08), 0.0, 1.0)
+    policy_bias_min_n = _clamp_int(_env_int("OROMA_PTZ_MOTOR_POLICY_BIAS_MIN_N", 10), 1, 1000000)
+    policy_bias_min_rule_n = _clamp_int(_env_int("OROMA_PTZ_MOTOR_POLICY_BIAS_MIN_RULE_N", 3), 1, 1000000)
+    policy_bias_min_abs_q = _clamp_float(_env_float("OROMA_PTZ_MOTOR_POLICY_BIAS_MIN_ABS_Q", 0.05), 0.0, 1.0)
+    policy_bias_refresh_sec = _clamp_float(_env_float("OROMA_PTZ_MOTOR_POLICY_BIAS_REFRESH_SEC", 60.0), 5.0, 3600.0)
+    policy_bias_max_abs = _clamp_float(_env_float("OROMA_PTZ_MOTOR_POLICY_BIAS_MAX_ABS", 0.20), 0.0, 1.0)
+
+    pos_marker_enable = _env_bool("OROMA_PTZ_MOTOR_POS_MARKER_ENABLE", True)
+    pos_marker_path = _pos_marker_path(base)
+    pos_marker_grid = _clamp_int(_env_int("OROMA_PTZ_MOTOR_POS_MARKER_GRID", 6), 2, 16)
+    pos_marker_min_conf = _clamp_float(_env_float("OROMA_PTZ_MOTOR_POS_MARKER_MIN_CONF", 0.18), 0.0, 1.0)
+    pos_marker_motion_min_conf = _clamp_float(_env_float("OROMA_PTZ_MOTOR_POS_MARKER_MOTION_MIN_CONF", 0.45), 0.0, 1.0)
+    pos_marker_allow_motion_only = _env_bool("OROMA_PTZ_MOTOR_POS_MARKER_ALLOW_MOTION_ONLY", False)
+    pos_marker_allow_upper_motion = _env_bool("OROMA_PTZ_MOTOR_POS_MARKER_ALLOW_UPPER_MOTION", False)
+    pos_marker_min_repeats = _clamp_int(_env_int("OROMA_PTZ_MOTOR_POS_MARKER_MIN_REPEATS", 3), 1, 1000)
+    pos_marker_max = _clamp_int(_env_int("OROMA_PTZ_MOTOR_POS_MARKER_MAX", 48), 4, 512)
+    pos_marker_decay_sec = _clamp_float(_env_float("OROMA_PTZ_MOTOR_POS_MARKER_DECAY_SEC", 172800.0), 60.0, 31536000.0)
+    ceiling_recovery_enable = _env_bool("OROMA_PTZ_MOTOR_CEILING_RECOVERY_ENABLE", True)
+    ceiling_recovery_idle_sec = _clamp_float(_env_float("OROMA_PTZ_MOTOR_CEILING_RECOVERY_IDLE_SEC", 900.0), 30.0, 86400.0)
+    ceiling_recovery_cooldown_sec = _clamp_float(_env_float("OROMA_PTZ_MOTOR_CEILING_RECOVERY_COOLDOWN_SEC", 900.0), 30.0, 86400.0)
+    ceiling_recovery_conf_max = _clamp_float(_env_float("OROMA_PTZ_MOTOR_CEILING_RECOVERY_CONF_MAX", 0.020), 0.0, 1.0)
+    ceiling_recovery_start_grace_sec = _clamp_float(_env_float("OROMA_PTZ_MOTOR_CEILING_RECOVERY_START_GRACE_SEC", 300.0), 0.0, 86400.0)
+
     started = _now()
     counters: Dict[str, int] = {
         "ticks": 0,
@@ -1344,6 +1810,16 @@ def run_worker(duration_sec: float = 0.0, once: bool = False, verbose: bool = Fa
         "face_region_checked": 0,
         "face_region_ok": 0,
         "face_region_bonus": 0,
+        "policy_bias_loads": 0,
+        "policy_bias_errors": 0,
+        "policy_bias_applied": 0,
+        "policy_bias_boosts": 0,
+        "policy_bias_damps": 0,
+        "policy_bias_holds": 0,
+        "pos_marker_updates": 0,
+        "pos_marker_positive": 0,
+        "ceiling_recoveries": 0,
+        "ceiling_recovery_holds": 0,
     }
     last_state_write = 0.0
     last_summary = started
@@ -1374,6 +1850,29 @@ def run_worker(duration_sec: float = 0.0, once: bool = False, verbose: bool = Fa
     move_cooldown_active = False
     move_cooldown_bypass = False
     micro_guard_active = False
+    policy_bias: Dict[str, float] = {}
+    policy_bias_meta: Dict[str, Any] = {
+        "namespace": policy_bias_ns,
+        "enabled": bool(policy_bias_enable),
+        "raw_rule_count": 0,
+        "eligible_rule_count": 0,
+        "used_rule_count": 0,
+        "used_action_count": 0,
+        "min_total_n": int(policy_bias_min_n),
+        "min_rule_n": int(policy_bias_min_rule_n),
+        "aggregation": "weighted_q=sum(q*n)/sum(n)",
+        "actions": {},
+    }
+    policy_bias_loaded_mono = 0.0
+    policy_bias_error = ""
+    policy_bias_applied_action = ""
+    policy_bias_applied_delta = 0.0
+    policy_bias_active = False
+    pos_marker_state: Dict[str, Any] = _load_pos_marker_state(pos_marker_path) if bool(pos_marker_enable) else {"ok": True, "version": 2, "markers": {}}
+    pos_marker_meta: Dict[str, Any] = {"enabled": bool(pos_marker_enable), "path": str(pos_marker_path), "grid": int(pos_marker_grid), "min_conf": float(pos_marker_min_conf), "motion_min_conf": float(pos_marker_motion_min_conf), "allow_motion_only": bool(pos_marker_allow_motion_only), "allow_upper_motion": bool(pos_marker_allow_upper_motion), "min_repeats": int(pos_marker_min_repeats), "positive_count": 0, "marker_count": 0, "top": [], "last_update": {}}
+    last_positive_marker_ts = started if _top_pos_markers(pos_marker_state, limit=1, min_repeats=pos_marker_min_repeats) else 0.0
+    last_ceiling_recovery_ts = 0.0
+    ceiling_recovery_last: Dict[str, Any] = {"active": False, "reason": "none"}
 
     if not enabled:
         result = {"ok": True, "enabled": False, "reason": "OROMA_PTZ_MOTOR_ENABLE=0", "ts": int(_now())}
@@ -1429,7 +1928,17 @@ def run_worker(duration_sec: float = 0.0, once: bool = False, verbose: bool = Fa
         f"eye_stable_radius={eye_pair_stable_radius:.3f} face_region={1 if face_region_enable else 0} "
         f"face_bonus={face_region_bonus:.2f} face_min={face_region_min_score:.3f} "
         f"face_grad_min={face_region_grad_min:.3f} eye_face_rank={eye_face_rank_threshold:.2f} "
-        f"eye_face_radius_boost={eye_face_radius_boost:.2f} eye_face_radius_min={eye_face_radius_boost_min:.2f}",
+        f"eye_face_radius_boost={eye_face_radius_boost:.2f} eye_face_radius_min={eye_face_radius_boost_min:.2f} "
+        f"policy_bias={1 if policy_bias_enable else 0} policy_ns={policy_bias_ns} "
+        f"policy_w={policy_bias_weight:.3f} policy_min_total_n={policy_bias_min_n} "
+        f"policy_min_rule_n={policy_bias_min_rule_n} policy_min_q={policy_bias_min_abs_q:.3f} "
+        f"policy_refresh={policy_bias_refresh_sec:.1f}s pos_marker={1 if pos_marker_enable else 0} "
+        f"pos_marker_grid={int(pos_marker_grid)} pos_marker_min_conf={pos_marker_min_conf:.3f} "
+        f"pos_marker_motion_min_conf={pos_marker_motion_min_conf:.3f} "
+        f"pos_marker_motion_only={1 if pos_marker_allow_motion_only else 0} "
+        f"pos_marker_upper_motion={1 if pos_marker_allow_upper_motion else 0} "
+        f"ceiling_recovery={1 if ceiling_recovery_enable else 0} ceiling_idle={ceiling_recovery_idle_sec:.1f}s "
+        f"ceiling_start_grace={ceiling_recovery_start_grace_sec:.1f}s",
         flush=True,
     )
 
@@ -1469,8 +1978,40 @@ def run_worker(duration_sec: float = 0.0, once: bool = False, verbose: bool = Fa
         move_cooldown_active = bool(move_cooldown_remaining > 0)
         move_cooldown_bypass = False
         micro_guard_active = False
+        policy_bias_applied_action = ""
+        policy_bias_applied_delta = 0.0
+        policy_bias_active = bool(policy_bias_enable and policy_bias and not policy_bias_error)
         frame_src = "none"
         frame_meta: Dict[str, Any] = {}
+
+        if bool(policy_bias_enable) and (time.monotonic() - float(policy_bias_loaded_mono)) >= float(policy_bias_refresh_sec):
+            new_bias, new_meta, new_error = _load_ptz_motor_policy_bias(
+                base=base,
+                namespace=policy_bias_ns,
+                min_total_n=policy_bias_min_n,
+                min_rule_n=policy_bias_min_rule_n,
+                min_abs_q=policy_bias_min_abs_q,
+                weight=policy_bias_weight,
+                max_abs=policy_bias_max_abs,
+            )
+            policy_bias = new_bias
+            policy_bias_meta = new_meta
+            policy_bias_error = str(new_error or "")
+            policy_bias_loaded_mono = time.monotonic()
+            counters["policy_bias_loads"] += 1
+            if policy_bias_error:
+                counters["policy_bias_errors"] += 1
+                print(f"[ptz_motor_worker] policy_bias_error={policy_bias_error}", file=sys.stderr, flush=True)
+            elif verbose:
+                print(
+                    f"[ptz_motor_worker] policy_bias_load ns={policy_bias_ns} "
+                    f"raw={int(policy_bias_meta.get('raw_rule_count') or 0)} "
+                    f"eligible={int(policy_bias_meta.get('eligible_rule_count') or 0)} "
+                    f"used_actions={int(policy_bias_meta.get('used_action_count') or 0)} "
+                    f"bias={policy_bias} actions={policy_bias_meta.get('actions', {})}",
+                    flush=True,
+                )
+            policy_bias_active = bool(policy_bias_enable and policy_bias and not policy_bias_error)
 
         frame, frame_ts, frame_src, frame_meta = _read_frame()
         if frame is None or frame_ts <= 0.0:
@@ -1616,6 +2157,15 @@ def run_worker(duration_sec: float = 0.0, once: bool = False, verbose: bool = Fa
                 candidate_source_kind = str(candidate.get("source") or "")
                 relevant = bool(obs_action and (energy >= energy_min or (candidate_kind == "eye_pair_salience" and not bool(eye_pair_require_motion))))
                 obs_conf = float(candidate.get("confidence") or 0.0)
+                if bool(pos_marker_enable):
+                    pos_marker_state, pos_marker_meta_update, marker_updated = _update_pos_markers(pos_marker_state, candidate=candidate, target_conf=float(target_conf), energy=float(energy), now=float(now), grid=int(pos_marker_grid), min_conf=float(pos_marker_min_conf), motion_min_conf=float(pos_marker_motion_min_conf), allow_motion_only=bool(pos_marker_allow_motion_only), allow_upper_motion=bool(pos_marker_allow_upper_motion), min_repeats=int(pos_marker_min_repeats), max_markers=int(pos_marker_max), decay_sec=float(pos_marker_decay_sec))
+                    if marker_updated:
+                        counters["pos_marker_updates"] += 1
+                        if bool(pos_marker_meta_update.get("is_positive")):
+                            counters["pos_marker_positive"] += 1
+                            last_positive_marker_ts = float(now)
+                    top_markers = _top_pos_markers(pos_marker_state, limit=5, min_repeats=pos_marker_min_repeats)
+                    pos_marker_meta = {"enabled": True, "path": str(pos_marker_path), "grid": int(pos_marker_grid), "min_conf": float(pos_marker_min_conf), "motion_min_conf": float(pos_marker_motion_min_conf), "allow_motion_only": bool(pos_marker_allow_motion_only), "allow_upper_motion": bool(pos_marker_allow_upper_motion), "min_repeats": int(pos_marker_min_repeats), "marker_count": len(pos_marker_state.get("markers") if isinstance(pos_marker_state.get("markers"), dict) else {}), "positive_count": len(top_markers), "top": top_markers, "last_update": pos_marker_meta_update}
                 eye_hold_eligible = bool(
                     eye_hold_bias_enable
                     and target_last_qualified_kind == "eye_pair_salience"
@@ -1768,8 +2318,29 @@ def run_worker(duration_sec: float = 0.0, once: bool = False, verbose: bool = Fa
                         cmd_ok = None
                 else:
                     action = mapped_action
+                    policy_bias_applied_action = ""
+                    policy_bias_applied_delta = 0.0
+                    if bool(policy_bias_enable) and action:
+                        policy_bias_applied_delta = _policy_bias_delta_for_action(policy_bias, action)
+                        if abs(float(policy_bias_applied_delta)) > 0.0:
+                            policy_bias_applied_action = str(action)
+                            counters["policy_bias_applied"] += 1
+                            strength = max(0.0, float(strength) + float(policy_bias_applied_delta))
+                            strong_bypass = bool(strength >= strong_signal_bypass or dist >= strong_signal_bypass)
+                            if policy_bias_applied_delta < 0.0 and strength < deadzone and not strong_bypass:
+                                counters["policy_bias_holds"] += 1
+                                reason = "policy_bias_hold"
+                                action = ""
+                                amount = 0
+                                cmd_ok = None
                     effective_energy = max(float(energy), float(target_conf) if eye_hold_command_active else float(energy))
-                    amount = _dynamic_amount(dist, effective_energy, amount_min, amount_max, dist_scale, e_scale)
+                    amount = _dynamic_amount(dist, effective_energy, amount_min, amount_max, dist_scale, e_scale) if action else 0
+                    if action and policy_bias_applied_delta > 0.0 and amount > 0 and amount < amount_max:
+                        amount = min(int(amount_max), int(amount) + 1)
+                        counters["policy_bias_boosts"] += 1
+                    elif action and policy_bias_applied_delta < 0.0 and amount > amount_min:
+                        amount = max(int(amount_min), int(amount) - 1)
+                        counters["policy_bias_damps"] += 1
                     if action == "down":
                         if down_confirm_count < down_confirm_min and not strong_bypass:
                             counters["down_holds"] += 1
@@ -1815,6 +2386,33 @@ def run_worker(duration_sec: float = 0.0, once: bool = False, verbose: bool = Fa
                             counters["cmd_fail"] += 1
                             reason = "cmd_fail"
 
+        if bool(ceiling_recovery_enable):
+            marker_age = None if not last_positive_marker_ts else max(0.0, float(now) - float(last_positive_marker_ts))
+            target_weak = bool(float(target_conf) <= float(ceiling_recovery_conf_max))
+            marker_stale = bool(last_positive_marker_ts <= 0.0 or (marker_age is not None and marker_age >= float(ceiling_recovery_idle_sec)))
+            cooldown_ok = bool(last_ceiling_recovery_ts <= 0.0 or (float(now) - float(last_ceiling_recovery_ts)) >= float(ceiling_recovery_cooldown_sec))
+            start_grace_ok = bool((float(now) - float(started)) >= float(ceiling_recovery_start_grace_sec))
+            should_recover = bool(marker_stale and target_weak and cooldown_ok and start_grace_ok and not action)
+            ceiling_recovery_last = {"enabled": True, "active": bool(should_recover), "reason": "idle_home_recovery" if should_recover else "watch", "marker_age_sec": None if marker_age is None else round(float(marker_age), 3), "target_weak": bool(target_weak), "marker_stale": bool(marker_stale), "cooldown_ok": bool(cooldown_ok), "start_grace_ok": bool(start_grace_ok), "start_grace_sec": float(ceiling_recovery_start_grace_sec), "idle_sec": float(ceiling_recovery_idle_sec), "cooldown_sec": float(ceiling_recovery_cooldown_sec), "conf_max": float(ceiling_recovery_conf_max), "last_recovery_ts": int(last_ceiling_recovery_ts or 0)}
+            if should_recover:
+                recovery_ok = bool(motor.home(pan=int(home_pan), tilt=int(home_tilt), zoom=None, settle_sec=float(home_settle_sec)))
+                last_ceiling_recovery_ts = float(now)
+                counters["ceiling_recoveries"] += 1
+                reason = "ceiling_recovery_home" if recovery_ok else "ceiling_recovery_failed"
+                target_conf = 0.0
+                target_age_ticks = 0
+                target_dx = 0.0
+                target_dy = 0.0
+                axis_lock_axis = "-"
+                axis_lock_until_tick = 0
+                move_cooldown_remaining = int(move_cooldown_ticks)
+                ceiling_recovery_last["ok"] = bool(recovery_ok)
+                ceiling_recovery_last["error"] = getattr(motor, "last_error", "")
+            elif marker_stale and target_weak:
+                counters["ceiling_recovery_holds"] += 1
+        else:
+            ceiling_recovery_last = {"enabled": False, "active": False, "reason": "disabled"}
+
         last_result = {
             "ok": True,
             "enabled": True,
@@ -1828,6 +2426,19 @@ def run_worker(duration_sec: float = 0.0, once: bool = False, verbose: bool = Fa
             "frame_meta": frame_meta,
             "reason": reason,
             "action": action or "",
+            "policy_bias_enabled": bool(policy_bias_enable),
+            "policy_bias_active": bool(policy_bias_enable and policy_bias and not policy_bias_error),
+            "policy_bias_ns": str(policy_bias_ns),
+            "policy_bias": {k: round(float(v), 6) for k, v in dict(policy_bias).items()},
+            "policy_bias_meta": policy_bias_meta,
+            "policy_bias_error": policy_bias_error,
+            "positive_position_marker_enabled": bool(pos_marker_enable),
+            "positive_position_marker_path": str(pos_marker_path),
+            "positive_position_marker_meta": pos_marker_meta,
+            "ceiling_recovery_enabled": bool(ceiling_recovery_enable),
+            "ceiling_recovery": ceiling_recovery_last,
+            "policy_bias_applied_action": policy_bias_applied_action,
+            "policy_bias_applied_delta": round(float(policy_bias_applied_delta), 6),
             "raw_action": raw_action or "",
             "mapped_action": mapped_action or "",
             "axis": axis,
@@ -1949,6 +2560,7 @@ def run_worker(duration_sec: float = 0.0, once: bool = False, verbose: bool = Fa
                 f"micro={1 if micro_guard_active else 0} | "
                 f"dx={dx:.4f} dy={dy:.4f} dist={dist:.4f} e={energy:.4f} ew={energy_weighted:.4f} axis={axis} "
                 f"raw={raw_action or '-'} mapped={mapped_action or '-'} action={action or '-'} "
+                f"policy={policy_bias_applied_action or '-'}:{policy_bias_applied_delta:.4f} "
                 f"amount={amount} cmd_ok={cmd_s} upper_bias={upper_bias_delta:.4f} "
                 f"down_confirm={down_confirm_count}/{history_n} stable={stable_count}/{history_n} bypass={1 if strong_bypass else 0}",
                 flush=True,
@@ -1956,6 +2568,8 @@ def run_worker(duration_sec: float = 0.0, once: bool = False, verbose: bool = Fa
 
         if (now - last_state_write) >= state_write_sec:
             _atomic_write_json(state_path, last_result)
+            if bool(pos_marker_enable):
+                _atomic_write_json(pos_marker_path, pos_marker_state)
             last_state_write = now
 
         if (now - last_summary) >= summary_sec:
@@ -1971,6 +2585,12 @@ def run_worker(duration_sec: float = 0.0, once: bool = False, verbose: bool = Fa
                 f"eye_motion={counters['eye_pair_motion_gated']} eye_temp={counters['eye_pair_temporal_gated']} "
                 f"eye_sel={counters['eye_pair_selected']} face_ok={counters['face_region_ok']} face_bonus={counters['face_region_bonus']} "
                 f"eye_rej_m={counters['eye_pair_rejected_motion']} eye_rej_t={counters['eye_pair_rejected_temporal']} "
+                f"policy_loads={counters['policy_bias_loads']} policy_raw={int(policy_bias_meta.get('raw_rule_count') or 0)} "
+                f"policy_eligible={int(policy_bias_meta.get('eligible_rule_count') or 0)} "
+                f"policy_used={int(policy_bias_meta.get('used_action_count') or 0)} "
+                f"policy_applied={counters['policy_bias_applied']} policy_hold={counters['policy_bias_holds']} "
+                f"pos_marker={counters['pos_marker_updates']} pos_positive={counters['pos_marker_positive']} "
+                f"ceil_recover={counters['ceiling_recoveries']} ceil_hold={counters['ceiling_recovery_holds']} "
                 f"last={reason}/{action or '-'} dx={dx:.3f} dy={dy:.3f} e={energy:.3f}",
                 flush=True,
             )

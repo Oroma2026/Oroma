@@ -1,0 +1,172 @@
+<!--
+===============================================================================
+Datei:   /opt/ai/oroma/ui/templates/snake3d.html
+Projekt: ORÓMA – Headless UI
+Modul:   Snake3D Policy-/Explore Status
+Stand:   2026-06-28
+Zweck:   Read-only Anzeige für Snake3D Policy+Explore nach validiertem Template-Transfer.
+         Keine Runner-Starts, keine DB-Writes aus der UI, keine Autoplay-Aktivierung.
+===============================================================================
+-->
+{% extends "base.html" %}
+{% block title %}Snake3D{% endblock %}
+{% block content %}
+<div class="container" style="max-width: 1100px; margin: auto; padding: 2rem;">
+  <h2>Snake3D</h2>
+  <p style="opacity:0.85">
+    3D-Snake als professioneller Policy-/Explore-Lernloop. Die validierte Schablone
+    ist <code>snake3d:pro_v1</code>, basierend auf <code>snake:pro_v2</code> plus
+    <code>spatial_navigation_z_extension</code> mit relativem 5er-Aktionsraum
+    <code>forward/left/right/up/down</code>.
+  </p>
+
+  <div class="alert alert-info" style="margin: 1rem 0;">
+    <b>Status:</b> read-only UI · keine Runner-Starts · Policy/Explore nur über Runner/Orchestrator · kein PTZ-Bezug.
+  </div>
+
+  <div style="display:flex; gap:1rem; flex-wrap:wrap; margin-bottom:1rem;">
+    <button class="btn btn-sm btn-primary" onclick="loadStatus()">↻ Aktualisieren</button>
+    <a class="btn btn-sm btn-secondary" href="/games/">Zur Games-Übersicht</a>
+    <span id="loadState" style="opacity:0.8"></span>
+  </div>
+
+  <h3>Schablonen-Validierung</h3>
+  <table class="table table-dark table-striped table-sm">
+    <tbody>
+      <tr><th>Base Template</th><td id="baseTemplate">{{ status.template.best_template or 'snake:pro_v2' }}</td></tr>
+      <tr><th>State Schema</th><td><code>{{ status.state_schema }}</code></td></tr>
+      <tr><th>Action Schema</th><td><code>{{ status.action_schema }}</code></td></tr>
+      <tr><th>Fit Score</th><td id="fitScore">{{ status.summary.template_fit_score }}</td></tr>
+      <tr><th>Gaps</th><td id="gaps">{{ (status.template.gaps or ['z_axis'])|join(', ') }}</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Letzter Snake3D-Lauf</h3>
+  <table class="table table-dark table-striped table-sm">
+    <tbody>
+      <tr><th>Episode</th><td id="episodeId">{{ status.episode.id if status.episode.found else '–' }}</td></tr>
+      <tr><th>Zeit</th><td id="episodeTime">{{ status.episode.time_end if status.episode.found else '–' }}</td></tr>
+      <tr><th>Mode</th><td id="runMode">{{ status.mode }}</td></tr>
+      <tr><th>Explore-only</th><td id="exploreOnly">{{ status.summary.explore_only }}</td></tr>
+      <tr><th>Policy Games / Explore Games</th><td id="gameSplit">{{ status.summary.policy_games }} / {{ status.summary.explore_games }}</td></tr>
+      <tr><th>Games</th><td id="games">{{ status.summary.games }}</td></tr>
+      <tr><th>Ø Steps</th><td id="avgSteps">{{ status.summary.avg_steps }}</td></tr>
+      <tr><th>Ø Food / High Food</th><td id="food">{{ status.summary.avg_food }} / {{ status.summary.high_food }}</td></tr>
+      <tr><th>Learn</th><td id="learn">{{ status.summary.learned_items }} / {{ status.summary.learn_items }}</td></tr>
+      <tr><th>Credit Items</th><td id="creditItems">pos={{ status.summary.pos_items }} · neg={{ status.summary.neg_items }} · draw={{ status.summary.draw_items }}</td></tr>
+      <tr><th>DBWriter</th><td id="dbw">{{ status.summary.policy_learn_ok }} · {{ status.summary.policy_learn_status }}</td></tr>
+      <tr><th>SnapChains</th><td id="snapchains">written={{ status.summary.snapchains_written }} · total={{ status.snapchains.chains if status.snapchains.ok else 0 }} · policy/explore={{ status.snapchains.policy_chains if status.snapchains.ok else 0 }}/{{ status.snapchains.explore_chains if status.snapchains.ok else 0 }}</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Z-Achsen-Relevanz</h3>
+  <table class="table table-dark table-striped table-sm">
+    <tbody>
+      <tr><th>danger_z_rate</th><td id="dangerZ">{{ status.summary.danger_z_rate }}</td></tr>
+      <tr><th>food_up_signal_rate</th><td id="foodUp">{{ status.summary.food_up_signal_rate }}</td></tr>
+      <tr><th>vertical_action_rate</th><td id="verticalAction">{{ status.summary.vertical_action_rate }}</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Policy-Regeln und Policy-Nutzung</h3>
+  <table class="table table-dark table-striped table-sm">
+    <tbody>
+      <tr><th>Namespace</th><td><code>{{ status.policy.namespace }}</code></td></tr>
+      <tr><th>Rules</th><td id="rules">{{ status.policy.rules }}</td></tr>
+      <tr><th>Samples</th><td id="samples">{{ status.policy.n }}</td></tr>
+      <tr><th>pos / neg / draw</th><td id="policyPND">{{ status.policy.pos }} / {{ status.policy.neg }} / {{ status.policy.draw }}</td></tr>
+      <tr><th>q avg/min/max</th><td id="qStats">{{ status.policy.q_avg }} / {{ status.policy.q_min }} / {{ status.policy.q_max }}</td></tr>
+      <tr><th>seen / accepted / fallback</th><td id="policyUse">{{ status.summary.policy_seen }} / {{ status.summary.policy_accepted }} / {{ status.summary.policy_fallback }}</td></tr>
+      <tr><th>reject n / q / unsafe</th><td id="policyReject">{{ status.summary.policy_rejected_n }} / {{ status.summary.policy_rejected_q }} / {{ status.summary.policy_rejected_unsafe }}</td></tr>
+      <tr><th>guarded</th><td id="policyGuarded">{{ status.summary.policy_guarded }}</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Template Adjustment Suggestions</h3>
+  <ul id="suggestions">
+    {% set suggestions = status.episode.meta_core.template_adjustment_suggestions if status.episode.found else [] %}
+    {% if suggestions %}
+      {% for s in suggestions %}
+        <li><b>{{ s.dimension }}</b> [{{ s.severity }}]: {{ s.observation }} — {{ s.suggestion }}</li>
+      {% endfor %}
+    {% else %}
+      <li>Noch keine Suggestions vorhanden. Erst einen Explore-Lauf starten.</li>
+    {% endif %}
+  </ul>
+
+  <details style="margin-top:1rem;">
+    <summary>Test-Kommando</summary>
+    <pre><code>cd /opt/ai/oroma &amp;&amp; PYTHONPATH=. python3 tools/snake3d_daily_runner.py --policy-games 5 --explore-games 5 --seed "$(date +%s)" --namespace game:snake3d</code></pre>
+    <p style="opacity:0.8">Dieses Kommando wird bewusst nicht von der UI gestartet.</p>
+  </details>
+</div>
+
+<script>
+function fmt(v) {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'number') return Number.isInteger(v) ? String(v) : String(Number(v.toFixed(6)));
+  return String(v);
+}
+function setText(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = fmt(value);
+}
+async function loadStatus() {
+  const st = document.getElementById('loadState');
+  if (st) st.textContent = 'lädt…';
+  try {
+    const r = await fetch('/snake3d/api/status', {cache:'no-store'});
+    const j = await r.json();
+    const s = j.summary || {};
+    const p = j.policy || {};
+    const sc = j.snapchains || {};
+    const e = j.episode || {};
+    const t = j.template || {};
+    setText('baseTemplate', t.best_template || 'snake:pro_v2');
+    setText('fitScore', s.template_fit_score || t.score || '');
+    setText('gaps', Array.isArray(t.gaps) ? t.gaps.join(', ') : '');
+    setText('episodeId', e.found ? e.id : '–');
+    setText('episodeTime', e.found ? e.time_end : '–');
+    setText('runMode', j.mode || '');
+    setText('exploreOnly', s.explore_only);
+    setText('gameSplit', `${fmt(s.policy_games)} / ${fmt(s.explore_games)}`);
+    setText('games', s.games);
+    setText('avgSteps', s.avg_steps);
+    setText('food', `${fmt(s.avg_food)} / ${fmt(s.high_food)}`);
+    setText('learn', `${fmt(s.learned_items)} / ${fmt(s.learn_items)}`);
+    setText('creditItems', `pos=${fmt(s.pos_items)} · neg=${fmt(s.neg_items)} · draw=${fmt(s.draw_items)}`);
+    setText('dbw', `${fmt(s.policy_learn_ok)} · ${fmt(s.policy_learn_status)}`);
+    setText('snapchains', `written=${fmt(s.snapchains_written)} · total=${fmt(sc.chains || 0)} · policy/explore=${fmt(sc.policy_chains || 0)}/${fmt(sc.explore_chains || 0)}`);
+    setText('dangerZ', s.danger_z_rate);
+    setText('foodUp', s.food_up_signal_rate);
+    setText('verticalAction', s.vertical_action_rate);
+    setText('rules', p.rules);
+    setText('samples', p.n);
+    setText('policyPND', `${fmt(p.pos)} / ${fmt(p.neg)} / ${fmt(p.draw)}`);
+    setText('qStats', `${fmt(p.q_avg)} / ${fmt(p.q_min)} / ${fmt(p.q_max)}`);
+    setText('policyUse', `${fmt(s.policy_seen)} / ${fmt(s.policy_accepted)} / ${fmt(s.policy_fallback)}`);
+    setText('policyReject', `${fmt(s.policy_rejected_n)} / ${fmt(s.policy_rejected_q)} / ${fmt(s.policy_rejected_unsafe)}`);
+    setText('policyGuarded', s.policy_guarded);
+    const ul = document.getElementById('suggestions');
+    const suggestions = (((e || {}).meta_core || {}).template_adjustment_suggestions || []);
+    if (ul) {
+      ul.innerHTML = '';
+      if (Array.isArray(suggestions) && suggestions.length) {
+        for (const x of suggestions) {
+          const li = document.createElement('li');
+          li.innerHTML = `<b>${fmt(x.dimension)}</b> [${fmt(x.severity)}]: ${fmt(x.observation)} — ${fmt(x.suggestion)}`;
+          ul.appendChild(li);
+        }
+      } else {
+        const li = document.createElement('li');
+        li.textContent = 'Noch keine Suggestions vorhanden. Erst einen Explore-Lauf starten.';
+        ul.appendChild(li);
+      }
+    }
+    if (st) st.textContent = j.ok ? 'OK' : 'Fehler';
+  } catch (e) {
+    if (st) st.textContent = 'Fehler: ' + e;
+  }
+}
+</script>
+{% endblock %}

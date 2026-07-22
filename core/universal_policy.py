@@ -4,7 +4,7 @@
 # Pfad:    /opt/ai/oroma/core/universal_policy.py
 # Projekt: ORÓMA (Offline-Realtime-Organic-Memory-AI)
 # Modul:   Universal Policy (UP) – tabellarische State→Action-Policy
-# Version: v3.9-rc3 (Proaktive Knowledge-Gaps in choose; Fix: partial-legal table)
+# Version: v3.9-rc4 (Vertical-Proof Policy-Mutation Gate)
 # Stand:   2026-04-18
 #
 # Autor (öffentlich / Zenodo):
@@ -105,6 +105,7 @@ LOG.setLevel(logging.INFO)
 # Core-DB + optional Regelarchiv + optional Universal-Adapter
 # -----------------------------------------------------------------------------
 from core import sql_manager
+from core import execution_mode
 try:
     from core import db_writer_client as db_writer_client
 except Exception:
@@ -269,8 +270,10 @@ class Policy:
     DB-gestützte Universal-Policy (tabellarisch).
     """
 
-    def __init__(self, namespace: str = "game:any") -> None:
+    def __init__(self, namespace: str = "game:any", writer_id: str = "writer:core.universal_policy:legacy") -> None:
         self.namespace = namespace.strip() or "game:any"
+        self.writer_id = str(writer_id or "writer:core.universal_policy:legacy").strip()
+        self.last_mutation_decision: Dict[str, Any] = {}
 
         # Auswahl-/Prior-Parameter
         self.temp      = _env_float("OROMA_UP_TEMP", 0.0)
@@ -529,6 +532,20 @@ class Policy:
           - selektive Cache-Invalidierung nur für betroffene state_hashes
         """
         if not items:
+            return
+
+        decision = execution_mode.policy_mutation_decision(
+            writer_id=self.writer_id,
+            namespace=self.namespace,
+            mutation_type="UPDATE_RULE_STATISTICS",
+            boundary_authorized=False,
+        )
+        self.last_mutation_decision = decision.to_dict()
+        if not decision.allowed:
+            LOG.warning(
+                "Policy-Mutation blockiert: mode=%s writer_id=%s namespace=%s reason=%s items=%d",
+                decision.execution_mode, decision.writer_id, decision.namespace, decision.reason, len(items),
+            )
             return
 
         now = int(time.time())

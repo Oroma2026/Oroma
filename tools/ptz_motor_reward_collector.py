@@ -4,8 +4,8 @@
 # Pfad:      /opt/ai/oroma/tools/ptz_motor_reward_collector.py
 # Projekt:   ORÓMA – Offline-Realtime-Organic-Memory-AI
 # Modul:     PTZ Motor Reward Collector – Local Utility Slow-Loop
-# Version:   v3.7.3+structured-plasticity-ptz-motor-collector-v1.2
-# Stand:     2026-05-17
+# Version:   v3.7.3+structured-plasticity-ptz-motor-collector-v1.4
+# Stand:     2026-06-06
 # Autor:     ORÓMA / ChatGPT Patch-Gate
 # Lizenz:    MIT
 # =============================================================================
@@ -51,9 +51,13 @@
 #   - Stale Worker-State erzeugt KEINE Penalty-Signale.
 #   - Stillstand durch deadzone/energy_low erzeugt KEINE Bewegungs-Penalties.
 #   - Kontext trennt Policy-Felder sauber von Diagnose-Rohfeldern:
-#       policy_action   = nur bei cmd_ok=True für späteres Motor-Policy-Lernen
-#       executed_action = tatsächlich ausgeführte Worker-Aktion
+#       policy_action   = nur bei echtem Motorereignis für Policy-Lernen
+#                         (cmd_ok=True ODER cmd_ok/moves-Counter steigt zwischen
+#                         zwei State-Snapshots; reine Beobachtungsrewards bleiben
+#                         absichtlich policy_action="")
+#       executed_action = tatsächlich/zuverlässig abgeleitete Motoraktion
 #       proposed_action = berechnete/naheliegende Kandidatenaktion
+#       policy_event    = Diagnoseblock für Counter-/Aktionsableitung
 #       debug           = Rohfelder für Diagnose, nicht für DreamWorker-Policy nötig
 #
 # GELERNTE/EMITTIERTE SIGNALQUELLEN
@@ -215,7 +219,10 @@ _SKIP_REASON_KEYS = (
     "stability_below_min",
     "fail_count_unchanged",
     "reversal_unchanged",
+    "policy_action_missing",
 )
+
+_VALID_MOTOR_ACTIONS = frozenset(("left", "right", "up", "down"))
 
 
 # -----------------------------------------------------------------------------
@@ -363,6 +370,91 @@ def _first_non_empty_str(*values: Any) -> str:
     return ""
 
 
+def _normalize_motor_action(value: Any) -> str:
+    """Normalisiert Motoraktionen auf die kleine PTZ-Policy-Aktionsmenge.
+
+    Der DreamWorker lernt nur stabile, hardware-nahe Aktionsnamen. Alles andere
+    bleibt Diagnose und wird nicht als ``policy_action`` verwendet. Dadurch
+    entstehen keine künstlichen Regeln aus freien Reason-/Debug-Strings.
+    """
+
+    text = str(value or "").strip().lower()
+    if text in _VALID_MOTOR_ACTIONS:
+        return text
+    return ""
+
+
+def _counter_delta(prev: Mapping[str, Any], curr: Mapping[str, Any], name: str) -> int:
+    """Liest Counter-Deltas robust aus zwei State-Snapshots."""
+
+    return int(_counter(curr, name, 0) - _counter(prev, name, 0))
+
+
+def _movement_event(prev: Mapping[str, Any], curr: Mapping[str, Any]) -> Tuple[bool, int, Dict[str, int]]:
+    """Erkennt ein echtes erfolgreiches Motorereignis zwischen Snapshots.
+
+    Der Worker schreibt den State nur periodisch. Deshalb kann der Collector den
+    exakten Tick mit ``cmd_ok=True`` verpassen. Der zuverlässige Beleg ist dann
+    der Anstieg der kumulativen Worker-Counter ``cmd_ok`` oder ``moves``.
+    """
+
+    deltas = {
+        "cmd_ok_delta": _counter_delta(prev, curr, "cmd_ok"),
+        "moves_delta": _counter_delta(prev, curr, "moves"),
+    }
+    count = max(int(deltas["cmd_ok_delta"]), int(deltas["moves_delta"]), 0)
+    return bool(curr.get("cmd_ok") is True or count > 0), int(count), deltas
+
+
+def _infer_policy_action(prev: Mapping[str, Any], curr: Mapping[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    """Leitet eine policy-fähige Aktion nur bei echtem Motorereignis ab.
+
+    Priorität:
+      1. aktuelle tatsächlich ausgeführte Aktion, wenn ``cmd_ok=True`` sichtbar ist
+      2. Worker-``last_action`` falls vorhanden
+      3. aktuelle/letzte gemappte Aktionskandidaten, aber nur wenn Counter-Deltas
+         belegen, dass zwischen den Snapshots ein Move stattgefunden hat
+
+    Ohne Motorereignis bleibt ``policy_action`` leer. Das verhindert, dass
+    Beobachtungsrewards wie ``target_conf_gain`` scheinbare Aktionsregeln bilden.
+    """
+
+    has_event, event_count, deltas = _movement_event(prev, curr)
+    candidates = [
+        curr.get("action"),
+        curr.get("last_action"),
+        curr.get("mapped_action"),
+        curr.get("raw_action"),
+        prev.get("action"),
+        prev.get("last_action"),
+        prev.get("mapped_action"),
+        prev.get("raw_action"),
+        curr.get("obs_mapped_action"),
+        curr.get("obs_action"),
+    ]
+
+    chosen = ""
+    if has_event:
+        for candidate in candidates:
+            chosen = _normalize_motor_action(candidate)
+            if chosen:
+                break
+
+    event_info: Dict[str, Any] = {
+        "has_policy_event": bool(has_event),
+        "policy_event_count": int(event_count),
+        "cmd_ok_delta": int(deltas.get("cmd_ok_delta", 0)),
+        "moves_delta": int(deltas.get("moves_delta", 0)),
+        "action_source_available": bool(chosen),
+        "curr_cmd_ok": curr.get("cmd_ok"),
+        "curr_action": str(curr.get("action") or ""),
+        "curr_mapped_action": str(curr.get("mapped_action") or ""),
+        "prev_action": str(prev.get("action") or ""),
+        "prev_mapped_action": str(prev.get("mapped_action") or ""),
+    }
+    return chosen, event_info
+
+
 def _action_context(prev: Mapping[str, Any], curr: Mapping[str, Any]) -> Dict[str, Any]:
     """Baut den domänenspezifischen, aber DreamWorker-freundlichen Kontext.
 
@@ -376,14 +468,18 @@ def _action_context(prev: Mapping[str, Any], curr: Mapping[str, Any]) -> Dict[st
     curr_counters = curr.get("counters") if isinstance(curr.get("counters"), Mapping) else {}
 
     reason = str(curr.get("reason") or curr.get("last_reason") or "")
-    executed_action = _first_non_empty_str(curr.get("action"), curr.get("last_action"))
-    proposed_action = _first_non_empty_str(
-        curr.get("mapped_action"),
-        curr.get("raw_action"),
-        curr.get("obs_mapped_action"),
-        curr.get("obs_action"),
+    policy_action, policy_event = _infer_policy_action(prev, curr)
+    executed_action = _first_non_empty_str(
+        policy_action,
+        _normalize_motor_action(curr.get("action")),
+        _normalize_motor_action(curr.get("last_action")),
     )
-    policy_action = executed_action if curr.get("cmd_ok") is True else ""
+    proposed_action = _first_non_empty_str(
+        _normalize_motor_action(curr.get("mapped_action")),
+        _normalize_motor_action(curr.get("raw_action")),
+        _normalize_motor_action(curr.get("obs_mapped_action")),
+        _normalize_motor_action(curr.get("obs_action")),
+    )
 
     return {
         # Kompatibilität: action bleibt das tatsächlich ausgeführte Worker-Feld.
@@ -412,6 +508,7 @@ def _action_context(prev: Mapping[str, Any], curr: Mapping[str, Any]) -> Dict[st
         "curr_ticks": _ticks(curr),
         "prev_counters": dict(prev_counters),
         "curr_counters": dict(curr_counters),
+        "policy_event": dict(policy_event),
         "debug": {
             "raw_action": str(curr.get("raw_action") or ""),
             "mapped_action": str(curr.get("mapped_action") or ""),
@@ -447,6 +544,53 @@ def _reason_allows_motion_reward(state: Mapping[str, Any]) -> bool:
     return True
 
 
+def _policy_context_for_source(source: str, context: Mapping[str, Any]) -> Dict[str, Any]:
+    """Erzwingt die Policy-Invariante unmittelbar vor dem Emit.
+
+    Dieser Guard ist absichtlich zentral in der letzten Emit-Stufe platziert.
+    Damit bleibt die Lernlogik auch dann korrekt, wenn ein vorheriger Zweig
+    versehentlich einen Basis-Kontext mit policy_action wiederverwendet.
+
+    Regel:
+      - Nur echte motorische Ergebnis-Rewards dürfen policy_action tragen.
+      - Reine Beobachtungs-, Diagnose- und Schutzsignale verlieren alle
+        policy-/action-Felder, damit DreamWorker daraus keine scheinbaren
+        state_hash+action-Regeln bildet.
+    """
+
+    ctx = dict(context or {})
+    motor_policy_sources = {
+        "ptz_motor/center_gain",
+        "ptz_motor/wasted_motion_penalty",
+    }
+
+    if str(source) not in motor_policy_sources:
+        # Für Nicht-Motor-Policy-Signale werden bewusst alle Aktionsfelder
+        # geleert, nicht nur policy_action. Das schützt auch spätere Auswerter,
+        # die aus Kompatibilitätsgründen noch context["action"] lesen könnten.
+        ctx["policy_action"] = ""
+        ctx["action"] = ""
+        ctx["executed_action"] = ""
+        ctx["proposed_action"] = ""
+        ctx["policy_action_suppressed_for_source"] = str(source)
+        ctx.setdefault("observational_or_diagnostic_reward", True)
+        return ctx
+
+    # Motorische Ergebnis-Rewards behalten policy_action nur, wenn sie wirklich
+    # auf eine normalisierte Motoraktion abbildbar ist. Freie Strings oder
+    # leere Werte bleiben Diagnose und werden nicht zu Policy-Lernmaterial.
+    action = _normalize_motor_action(ctx.get("policy_action"))
+    ctx["policy_action"] = action
+    if action:
+        ctx["action"] = action
+        ctx["executed_action"] = action
+    else:
+        ctx["action"] = ""
+        ctx["executed_action"] = ""
+        ctx["policy_action_missing"] = True
+    return ctx
+
+
 def _emit_signal(
     *,
     source: str,
@@ -455,12 +599,13 @@ def _emit_signal(
     context: Dict[str, Any],
     verbose: bool,
 ) -> bool:
+    safe_context = _policy_context_for_source(source, context)
     signal = UtilitySignal(
         source=source,
         bahn="ptz",
         value=float(value),
         confidence=float(confidence),
-        context=context,
+        context=safe_context,
         tag="ptz_motor.reward_collector",
     )
     ok = emit(signal)
@@ -549,16 +694,26 @@ def evaluate_pair(
     dist_delta = prev_dist - curr_dist  # positiv = besser zentriert
 
     # Bewegungs-Rewards nur bei echtem erfolgreichen Kommando.
-    if _cmd_ok_true(curr) and _reason_allows_motion_reward(curr):
+    has_motion_event, _, _ = _movement_event(prev, curr)
+    # Wenn der periodische State den exakten cmd_ok-Tick verpasst hat, ist der
+    # Counter-Anstieg der verlässlichere Beleg. Dann darf ein Bewegungsreward
+    # trotz späterem aktuellen Reason wie energy_low/deadzone entstehen. Ohne
+    # Counter-Beleg bleibt die alte Reason-Unterdrückung aktiv.
+    motion_reward_allowed = bool(has_motion_event or (_cmd_ok_true(curr) and _reason_allows_motion_reward(curr)))
+    if motion_reward_allowed:
         if dist_delta >= float(min_dist_change):
             context = dict(base_context)
-            context.update({"dist_delta": dist_delta, "min_dist_change": float(min_dist_change)})
+            if not str(context.get("policy_action") or "").strip():
+                _inc_skip_reason(skip_reasons, "policy_action_missing")
+            context.update({"dist_delta": dist_delta, "min_dist_change": float(min_dist_change), "motor_reward": True})
             value = _clamp(dist_delta / max(float(min_dist_change) * 5.0, 1e-9), 0.0, 1.0)
             if _emit_signal(source="ptz_motor/center_gain", value=value, confidence=confidence, context=context, verbose=verbose):
                 emitted += 1
         elif dist_delta <= -float(min_dist_change):
             context = dict(base_context)
-            context.update({"dist_delta": dist_delta, "min_dist_change": float(min_dist_change)})
+            if not str(context.get("policy_action") or "").strip():
+                _inc_skip_reason(skip_reasons, "policy_action_missing")
+            context.update({"dist_delta": dist_delta, "min_dist_change": float(min_dist_change), "motor_reward": True})
             value = -_clamp(abs(dist_delta) / max(float(min_dist_change) * 5.0, 1e-9), 0.0, 1.0)
             if _emit_signal(source="ptz_motor/wasted_motion_penalty", value=value, confidence=confidence, context=context, verbose=verbose):
                 emitted += 1
@@ -567,7 +722,7 @@ def evaluate_pair(
             _inc_skip_reason(skip_reasons, "dist_delta_below_min")
     else:
         skipped += 1
-        if not _cmd_ok_true(curr):
+        if not _cmd_ok_true(curr) and not has_motion_event:
             _inc_skip_reason(skip_reasons, "cmd_not_ok")
         else:
             _inc_skip_reason(skip_reasons, "reason_suppressed")
@@ -579,7 +734,11 @@ def evaluate_pair(
     conf_delta = curr_conf - prev_conf
     if abs(conf_delta) >= float(min_conf_change):
         context = dict(base_context)
-        context.update({"target_conf_delta": conf_delta, "min_conf_change": float(min_conf_change)})
+        # Beobachtungsreward: absichtlich keine policy_action, selbst wenn in
+        # demselben Fenster ein Motorereignis stattgefunden hat. Motorisches
+        # Lernen erfolgt über center_gain/wasted_motion_penalty.
+        context["policy_action"] = ""
+        context.update({"target_conf_delta": conf_delta, "min_conf_change": float(min_conf_change), "observational_reward": True})
         value = _clamp(conf_delta / max(float(min_conf_change) * 5.0, 1e-9), -1.0, 1.0)
         conf_for_signal = _clamp(max(prev_conf, curr_conf, confidence), conf_floor, conf_ceil)
         if _emit_signal(source="ptz_motor/target_conf_gain", value=value, confidence=conf_for_signal, context=context, verbose=verbose):
@@ -596,8 +755,12 @@ def evaluate_pair(
     stable_delta = curr_stable - prev_stable
     if curr_stable >= int(stability_min_count) and stable_delta >= int(min_stability_delta):
         context = dict(base_context)
+        # Beobachtungsreward: Stabilität beschreibt Perzeption, keine ausgeführte
+        # Motoraktion. Deshalb bleibt policy_action leer.
+        context["policy_action"] = ""
         context.update(
             {
+                "observational_reward": True,
                 "before_eye_pair_stable_count": prev_stable,
                 "after_eye_pair_stable_count": curr_stable,
                 "stable_delta": stable_delta,
@@ -618,7 +781,10 @@ def evaluate_pair(
     fail_delta = _counter(curr, "cmd_fail", 0) - _counter(prev, "cmd_fail", 0)
     if fail_delta > 0:
         context = dict(base_context)
-        context.update({"cmd_fail_delta": fail_delta})
+        # Fehlercounter sind Diagnose-/Penalty-Signale und kein erfolgreiches
+        # Motorereignis; keine policy_action für Erfolgsregeln setzen.
+        context["policy_action"] = ""
+        context.update({"cmd_fail_delta": fail_delta, "diagnostic_penalty": True})
         value = -_clamp(float(fail_delta) / 3.0, 0.0, 1.0)
         if _emit_signal(source="ptz_motor/cmd_fail_penalty", value=value, confidence=1.0, context=context, verbose=verbose):
             emitted += 1
@@ -631,7 +797,10 @@ def evaluate_pair(
     reversal_delta = reversal_curr - reversal_prev
     if reversal_delta > 0:
         context = dict(base_context)
-        context.update({"reversal_delta": reversal_delta, "counter_name": "guarded_reversals"})
+        # Guarded-Reversal ist ein Schutz-/Diagnoseereignis, kein ausgeführtes
+        # positives Motor-Kommando. Deshalb keine policy_action.
+        context["policy_action"] = ""
+        context.update({"reversal_delta": reversal_delta, "counter_name": "guarded_reversals", "diagnostic_penalty": True})
         value = -_clamp(float(reversal_delta) / 3.0, 0.0, 1.0)
         if _emit_signal(source="ptz_motor/reversal_penalty", value=value, confidence=1.0, context=context, verbose=verbose):
             emitted += 1

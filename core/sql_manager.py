@@ -6,8 +6,8 @@
 #            Offline-First · Headless · SQLite-First · Edge Runtime
 # Modul:     SQLManager – zentrale SQLite-Schicht (Autoritativ)
 #            Connections/PRAGMAs · Schema/Migrationen · Read/Write Helper · Lock-Disziplin
-# Version:   v3.7.3
-# Stand:     2026-04-18
+# Version:   v3.7.3+dbwriter-hygiene-v1.1
+# Stand:     2026-06-14
 #
 # Autor (öffentlich / Zenodo):
 #   Jörg Werner
@@ -32,6 +32,13 @@
 #
 # Diese Datei ist bewusst “Herzstück”: Änderungen müssen minimal-invasiv, testbar
 # und kompatibel zur DBWriter-Strategie erfolgen (keine stillen Fallback-Writes).
+#
+# PATCH-HINWEIS 2026-06-14 / P2.5a:
+# - Eine tote doppelte `_dbw_enabled()`-Definition wurde entfernt.
+# - Die aktive, ENV-basierte Implementierung bleibt erhalten und entspricht dem
+#   Verhalten von `core.db_writer_client.enabled()` im aktuellen Stand.
+# - Ziel ist reine Wartbarkeit/Hygiene: kein Semantikwechsel, kein DB-Pfadwechsel,
+#   kein lokaler Write-Fallback und keine Änderung der Connection-/Schema-Logik.
 #
 # 1) HEADLESS / PRODUKTIONSINVARIANTEN (DO NOT BREAK)
 # ────────────────────────────────────────────────────
@@ -191,16 +198,6 @@ def _env_int(name: str, default: int) -> int:
     except Exception as e:
         log_suppressed(_log, key="sql_manager.ret.1", msg="Suppressed exception (returning default)", exc=e, level=logging.DEBUG, interval_s=300)
         return int(default)
-
-
-def _dbw_enabled() -> bool:
-    """True, wenn DB Writer Routing (Stufe C) aktiv ist und Client verfügbar ist."""
-    try:
-        if _dbw is None:
-            return False
-        return bool(getattr(_dbw, "enabled")())
-    except Exception:
-        return False
 
 
 def _dbw_timeout_ms(kind: str = "dream") -> int:

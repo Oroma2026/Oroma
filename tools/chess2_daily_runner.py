@@ -4,10 +4,23 @@
 # Pfad:    /opt/ai/oroma/tools/chess2_daily_runner.py
 # Projekt: ORÓMA (Offline-First · Headless · SQLite-First)
 # Modul:   Chess2 Daily Runner – mobility-native Daily + optionaler Domain-Transfer
-# Version: v3.8-r2-v1.2.2
-# Stand:   2026-03-24
+# Version: v3.8-r2-v1.2.3
+# Stand:   2026-06-27
 # Autor:   Jörg + GPT-5.4 Thinking
 # Lizenz:  MIT
+# =============================================================================
+#
+# SIDE-PROFILE / FARBE-WECHSEL (2026-06-27)
+# ------------------------------------------
+# Der Runner unterstützt einen expliziten Tagesprofil-Schalter
+# `--side-profile white|black|auto`. Für `white` läuft der normale Mobility-
+# Raum; für `black` nutzt der primäre Lauf den vorhandenen Flip-Pass, damit
+# schwarze Stellungen aus ORÓMA-Sicht kanonisch wie weiße Stellungen bewertet
+# und gelernt werden. Das ist bewusst minimal-invasiv: Die Engine bleibt
+# headless, alle Züge/Traces bleiben erhalten, und die neue Information wird
+# additiv in Episode-Meta/JSON persistiert. Der Orchestrator kann dadurch zwei
+# ressourcenschonende Tagesläufe mit 1 Stunde Abstand planen: einmal Weiß-,
+# einmal Schwarz-Perspektive.
 # =============================================================================
 
 from __future__ import annotations
@@ -79,6 +92,26 @@ def _env_float(name: str, default: float) -> float:
 def _env_str(name: str, default: str) -> str:
     v = (os.environ.get(name, "") or "").strip()
     return v if v else default
+
+
+def _sanitize_side_profile(value: Any) -> str:
+    """Normalisiert das Chess2-Tagesprofil für den Farbe-Wechsel.
+
+    Gültige Werte:
+      • auto  -> historisches Verhalten, keine erzwungene Perspektive
+      • white -> normaler Mobility-Raum; ORÓMA-Tagesprofil Weiß
+      • black -> primärer Flip-Raum; ORÓMA-Tagesprofil Schwarz
+
+    Der Wert ist additiv und ändert keine Datenbank-Schemata. Unbekannte Werte
+    fallen produktiv auf `auto` zurück, damit fehlerhafte ENV-Werte den Runner
+    nicht stoppen.
+    """
+    v = str(value or "auto").strip().lower()
+    if v in {"w", "white", "weiss", "weiß"}:
+        return "white"
+    if v in {"b", "black", "schwarz"}:
+        return "black"
+    return "auto"
 
 
 _PIECE_ABS_VALUE: Dict[str, float] = {
@@ -3137,6 +3170,12 @@ def _apply_phase2_batch_defaults(batch: Dict[str, Any], namespace: str) -> Dict[
 
 def _db_write_episode(batch: Dict[str, Any], kind: str) -> bool:
     try:
+        # Side-Daily-Jobs nutzen gezielt `--policy-games 0`, damit pro
+        # Tagesprofil exakt eine lernende Explore-Partie entsteht. Null-Batches
+        # dürfen deshalb keine leeren Episode-Zeilen erzeugen, sonst würde die
+        # Daily Summary scheinbar zusätzliche Chess-Durchläufe anzeigen.
+        if int(batch.get("games") or 0) <= 0:
+            return True
         ts_start = int(batch.get("ts_start") or time.time())
         ts_end = int(batch.get("ts_end") or ts_start)
         label = str(batch.get("label") or kind)
@@ -3144,6 +3183,7 @@ def _db_write_episode(batch: Dict[str, Any], kind: str) -> bool:
             "namespace": batch.get("namespace"),
             "mode": batch.get("mode"),
             "runner": batch.get("runner"),
+            "side_profile": batch.get("side_profile"),
             "eps": batch.get("eps"),
             "chains_count": batch.get("chains_count"),
             "learn_items_count": batch.get("learn_items_count"),
@@ -3239,7 +3279,7 @@ def _db_write_episode(batch: Dict[str, Any], kind: str) -> bool:
         return False
 
 
-def run_batch(rng: random.Random, shim: PolicyShim, games: int, mode: str, eps_white: float, eps_black: float, explore_moves_white: int, explore_moves_black: int, max_plies: int, learn: bool, label: str, source: str, pass_name: str = "normal", draw_stress: float = 0.0, draw_stress_threshold_n: int = 0, draw_stress_q_band: float = 0.05, draw_stress_max_extra_per_key: int = 3, win_weight: float = 1.0, opening_seed_book: bool = False, opening_seed_policy_only: bool = True, opening_seed_offset: int = 0) -> Dict[str, Any]:
+def run_batch(rng: random.Random, shim: PolicyShim, games: int, mode: str, eps_white: float, eps_black: float, explore_moves_white: int, explore_moves_black: int, max_plies: int, learn: bool, label: str, source: str, pass_name: str = "normal", draw_stress: float = 0.0, draw_stress_threshold_n: int = 0, draw_stress_q_band: float = 0.05, draw_stress_max_extra_per_key: int = 3, win_weight: float = 1.0, opening_seed_book: bool = False, opening_seed_policy_only: bool = True, opening_seed_offset: int = 0, side_profile: str = "auto") -> Dict[str, Any]:
     """Führt einen Chess2-Batch aus und sammelt Diagnosemetriken.
 
     Der aktuelle Chess2-Fokus ist nicht nur "mehr Spiele", sondern die Frage,
@@ -3350,6 +3390,7 @@ def run_batch(rng: random.Random, shim: PolicyShim, games: int, mode: str, eps_w
         "max_plies_seen": int(max_plies_seen),
         "mode": str(mode),
         "pass_name": str(pass_name),
+        "side_profile": _sanitize_side_profile(side_profile),
         "namespace": shim.namespace,
         "policy_enabled": 1.0 if shim.pol else 0.0,
         "eps": float(max(eps_white, eps_black) if mode == "explore" else 0.0),
@@ -3562,6 +3603,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     _default_canon = _env_bool("OROMA_CHESS2_CANONICAL", _default_namespace.endswith("_canon"))
     _default_flip = _env_bool("OROMA_CHESS2_ENABLE_FLIP_PASS", not _default_canon)
     ap.add_argument("--enable-flip-pass", type=int, default=1 if _default_flip else 0)
+    ap.add_argument("--side-profile", type=str, default=_env_str("OROMA_CHESS2_SIDE_PROFILE", "auto"), help="auto|white|black; black uses the primary flip perspective for daily color alternation")
     ap.add_argument("--flip-policy-games", type=int, default=_env_int("OROMA_CHESS2_FLIP_POLICY_GAMES", _env_int("OROMA_CHESS2_POLICY_GAMES", 100)))
     ap.add_argument("--flip-explore-games", type=int, default=_env_int("OROMA_CHESS2_FLIP_EXPLORE_GAMES", _env_int("OROMA_CHESS2_EXPLORE_GAMES", 100)))
     ap.add_argument("--namespace", type=str, default=_default_namespace)
@@ -3599,6 +3641,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--penalty-damper-ratio", type=float, default=_env_float("OROMA_CHESS2_PENALTY_DAMPER_RATIO", 0.24))
     ap.add_argument("--aggro", type=float, default=_env_float("OROMA_CHESS2_AGGRO", 1.0))
     args = ap.parse_args(argv)
+    side_profile = _sanitize_side_profile(getattr(args, "side_profile", "auto"))
     seed = int(args.seed) if int(args.seed) != 0 else int(time.time())
     rng = random.Random(seed)
     canon_mode = bool(int(args.canonical))
@@ -3617,6 +3660,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     underdefended_piece_bias = max(0.0, float(args.underdefended_piece_bias))
     opening_seed_book = bool(int(args.opening_seed_book))
     opening_seed_policy_only = bool(int(args.opening_seed_policy_only))
+    # `side_profile=black` nutzt den vorhandenen Flip-Raum als primäre
+    # Perspektive. Dadurch kann der Orchestrator genau eine Schwarz-Partie
+    # auslösen, ohne zusätzlich den alten Flip-Zusatzbatch zu starten.
+    primary_flip_mode = bool(side_profile == "black" and not bool(canon_mode))
     self_hanging_penalty = max(0.0, float(args.self_hanging_penalty))
     retaliation_penalty = max(0.0, float(args.retaliation_penalty))
     defended_attack_bonus = max(0.0, float(args.defended_attack_bonus))
@@ -3676,22 +3723,27 @@ def main(argv: Optional[List[str]] = None) -> int:
             ("game:chess2_coop_king" if (cooperation_mode and king_mode) else
              ("game:chess2_coop" if cooperation_mode else "game:chess2"))))))
     )
-    shim = PolicyShim(namespace=str(args.namespace or _ns_default), flip_mode=False, canon_mode=canon_mode, cooperation_mode=cooperation_mode, king_mode=king_mode, territory_mode=territory_mode, capture_bias=capture_bias, king_shuffle_penalty=king_shuffle_penalty, piece_variety_bias=piece_variety_bias, hanging_piece_bias=hanging_piece_bias, underdefended_piece_bias=underdefended_piece_bias, self_hanging_penalty=self_hanging_penalty, retaliation_penalty=retaliation_penalty, defended_attack_bonus=defended_attack_bonus, discovery_exposure_penalty=discovery_exposure_penalty, castle_bias=castle_bias, promotion_bias=promotion_bias, en_passant_bias=en_passant_bias, check_bias=check_bias, line_pressure_bias=line_pressure_bias, line_pressure_middlegame_lift=line_pressure_middlegame_lift, defense_disruption_bias=defense_disruption_bias, lookahead_conversion_bias=lookahead_conversion_bias, penalty_damper_ratio=penalty_damper_ratio, opening_guideline_bias=opening_guideline_bias, anti_flat_bias=anti_flat_bias, asymmetry_keep_bias=asymmetry_keep_bias, worst_piece_improve_bias=worst_piece_improve_bias, coordination_bias=coordination_bias, rook_file_activity_bias=rook_file_activity_bias, attack_coordination_bias=attack_coordination_bias, king_line_open_bias=king_line_open_bias, attacker_trade_penalty=attacker_trade_penalty, orbit_penalty_bias=orbit_penalty_bias, neutral_path_penalty_bias=neutral_path_penalty_bias, productive_asymmetry_bias=productive_asymmetry_bias, fixpoint_warning_bias=fixpoint_warning_bias, aggro=aggro)
-    flip_enabled = bool(int(args.enable_flip_pass)) and (not canon_mode)
+    shim = PolicyShim(namespace=str(args.namespace or _ns_default), flip_mode=primary_flip_mode, canon_mode=canon_mode, cooperation_mode=cooperation_mode, king_mode=king_mode, territory_mode=territory_mode, capture_bias=capture_bias, king_shuffle_penalty=king_shuffle_penalty, piece_variety_bias=piece_variety_bias, hanging_piece_bias=hanging_piece_bias, underdefended_piece_bias=underdefended_piece_bias, self_hanging_penalty=self_hanging_penalty, retaliation_penalty=retaliation_penalty, defended_attack_bonus=defended_attack_bonus, discovery_exposure_penalty=discovery_exposure_penalty, castle_bias=castle_bias, promotion_bias=promotion_bias, en_passant_bias=en_passant_bias, check_bias=check_bias, line_pressure_bias=line_pressure_bias, line_pressure_middlegame_lift=line_pressure_middlegame_lift, defense_disruption_bias=defense_disruption_bias, lookahead_conversion_bias=lookahead_conversion_bias, penalty_damper_ratio=penalty_damper_ratio, opening_guideline_bias=opening_guideline_bias, anti_flat_bias=anti_flat_bias, asymmetry_keep_bias=asymmetry_keep_bias, worst_piece_improve_bias=worst_piece_improve_bias, coordination_bias=coordination_bias, rook_file_activity_bias=rook_file_activity_bias, attack_coordination_bias=attack_coordination_bias, king_line_open_bias=king_line_open_bias, attacker_trade_penalty=attacker_trade_penalty, orbit_penalty_bias=orbit_penalty_bias, neutral_path_penalty_bias=neutral_path_penalty_bias, productive_asymmetry_bias=productive_asymmetry_bias, fixpoint_warning_bias=fixpoint_warning_bias, aggro=aggro)
+    # Bei explizitem Tagesprofil white/black wird kein zusätzlicher Flip-Batch
+    # gestartet. Sonst würde ein einzelner geplanter Tageslauf wieder mehr als
+    # eine Partie erzeugen und die Ressourcenbegrenzung unterlaufen.
+    flip_enabled = bool(int(args.enable_flip_pass)) and (not canon_mode) and side_profile == "auto"
     shim_flip = PolicyShim(namespace=str(shim.namespace), flip_mode=True, canon_mode=canon_mode, cooperation_mode=cooperation_mode, king_mode=king_mode, territory_mode=territory_mode, capture_bias=capture_bias, king_shuffle_penalty=king_shuffle_penalty, piece_variety_bias=piece_variety_bias, hanging_piece_bias=hanging_piece_bias, underdefended_piece_bias=underdefended_piece_bias, self_hanging_penalty=self_hanging_penalty, retaliation_penalty=retaliation_penalty, defended_attack_bonus=defended_attack_bonus, discovery_exposure_penalty=discovery_exposure_penalty, castle_bias=castle_bias, promotion_bias=promotion_bias, en_passant_bias=en_passant_bias, check_bias=check_bias, line_pressure_bias=line_pressure_bias, line_pressure_middlegame_lift=line_pressure_middlegame_lift, defense_disruption_bias=defense_disruption_bias, lookahead_conversion_bias=lookahead_conversion_bias, penalty_damper_ratio=penalty_damper_ratio, opening_guideline_bias=opening_guideline_bias, anti_flat_bias=anti_flat_bias, asymmetry_keep_bias=asymmetry_keep_bias, worst_piece_improve_bias=worst_piece_improve_bias, coordination_bias=coordination_bias, rook_file_activity_bias=rook_file_activity_bias, attack_coordination_bias=attack_coordination_bias, king_line_open_bias=king_line_open_bias, attacker_trade_penalty=attacker_trade_penalty, orbit_penalty_bias=orbit_penalty_bias, neutral_path_penalty_bias=neutral_path_penalty_bias, productive_asymmetry_bias=productive_asymmetry_bias, fixpoint_warning_bias=fixpoint_warning_bias, aggro=aggro) if flip_enabled else None
     rules_before = _namespace_rule_count(shim.namespace)
     bootstrap_info = bootstrap_from_old_chess(shim, rng)
-    policy_res = run_batch(rng, shim, int(args.policy_games), "policy", 0.0, 0.0, 0, 0, int(args.max_plies), False, f"chess2:policy ({int(args.policy_games)} games)", "orchestrator", pass_name="normal", draw_stress=draw_stress, draw_stress_threshold_n=draw_stress_threshold_n, draw_stress_q_band=draw_stress_q_band, draw_stress_max_extra_per_key=draw_stress_max_extra_per_key, win_weight=win_weight, opening_seed_book=opening_seed_book, opening_seed_policy_only=opening_seed_policy_only, opening_seed_offset=0)
-    explore_res = run_batch(rng, shim, int(args.explore_games), "explore", float(args.eps_white), float(args.eps_black), int(args.explore_moves_white), int(args.explore_moves_black), int(args.max_plies), True, f"chess2:explore ({int(args.explore_games)} games)", "orchestrator", pass_name="normal", draw_stress=0.0, draw_stress_threshold_n=draw_stress_threshold_n, draw_stress_q_band=draw_stress_q_band, draw_stress_max_extra_per_key=draw_stress_max_extra_per_key, win_weight=win_weight, opening_seed_book=opening_seed_book, opening_seed_policy_only=opening_seed_policy_only, opening_seed_offset=int(args.policy_games))
+    label_side = "" if side_profile == "auto" else f":{side_profile}"
+    primary_pass_name = "flip" if primary_flip_mode else "normal"
+    policy_res = run_batch(rng, shim, int(args.policy_games), "policy", 0.0, 0.0, 0, 0, int(args.max_plies), False, f"chess2{label_side}:policy ({int(args.policy_games)} games)", "orchestrator", pass_name=primary_pass_name, draw_stress=draw_stress, draw_stress_threshold_n=draw_stress_threshold_n, draw_stress_q_band=draw_stress_q_band, draw_stress_max_extra_per_key=draw_stress_max_extra_per_key, win_weight=win_weight, opening_seed_book=opening_seed_book, opening_seed_policy_only=opening_seed_policy_only, opening_seed_offset=0, side_profile=side_profile)
+    explore_res = run_batch(rng, shim, int(args.explore_games), "explore", float(args.eps_white), float(args.eps_black), int(args.explore_moves_white), int(args.explore_moves_black), int(args.max_plies), True, f"chess2{label_side}:explore ({int(args.explore_games)} games)", "orchestrator", pass_name=primary_pass_name, draw_stress=0.0, draw_stress_threshold_n=draw_stress_threshold_n, draw_stress_q_band=draw_stress_q_band, draw_stress_max_extra_per_key=draw_stress_max_extra_per_key, win_weight=win_weight, opening_seed_book=opening_seed_book, opening_seed_policy_only=opening_seed_policy_only, opening_seed_offset=int(args.policy_games), side_profile=side_profile)
     flip_policy_res = None
     flip_explore_res = None
     if flip_enabled and shim_flip is not None:
         flip_policy_games = max(0, int(args.flip_policy_games))
         flip_explore_games = max(0, int(args.flip_explore_games))
         if flip_policy_games > 0:
-            flip_policy_res = run_batch(rng, shim_flip, flip_policy_games, "policy", 0.0, 0.0, 0, 0, int(args.max_plies), False, f"chess2:policy:flip ({flip_policy_games} games)", "orchestrator", pass_name="flip", draw_stress=draw_stress, draw_stress_threshold_n=draw_stress_threshold_n, draw_stress_q_band=draw_stress_q_band, draw_stress_max_extra_per_key=draw_stress_max_extra_per_key, win_weight=win_weight, opening_seed_book=opening_seed_book, opening_seed_policy_only=opening_seed_policy_only, opening_seed_offset=0)
+            flip_policy_res = run_batch(rng, shim_flip, flip_policy_games, "policy", 0.0, 0.0, 0, 0, int(args.max_plies), False, f"chess2:policy:flip ({flip_policy_games} games)", "orchestrator", pass_name="flip", draw_stress=draw_stress, draw_stress_threshold_n=draw_stress_threshold_n, draw_stress_q_band=draw_stress_q_band, draw_stress_max_extra_per_key=draw_stress_max_extra_per_key, win_weight=win_weight, opening_seed_book=opening_seed_book, opening_seed_policy_only=opening_seed_policy_only, opening_seed_offset=0, side_profile="black")
         if flip_explore_games > 0:
-            flip_explore_res = run_batch(rng, shim_flip, flip_explore_games, "explore", float(args.eps_white), float(args.eps_black), int(args.explore_moves_white), int(args.explore_moves_black), int(args.max_plies), True, f"chess2:explore:flip ({flip_explore_games} games)", "orchestrator", pass_name="flip", draw_stress=0.0, draw_stress_threshold_n=draw_stress_threshold_n, draw_stress_q_band=draw_stress_q_band, draw_stress_max_extra_per_key=draw_stress_max_extra_per_key, win_weight=win_weight, opening_seed_book=opening_seed_book, opening_seed_policy_only=opening_seed_policy_only, opening_seed_offset=flip_policy_games)
+            flip_explore_res = run_batch(rng, shim_flip, flip_explore_games, "explore", float(args.eps_white), float(args.eps_black), int(args.explore_moves_white), int(args.explore_moves_black), int(args.max_plies), True, f"chess2:explore:flip ({flip_explore_games} games)", "orchestrator", pass_name="flip", draw_stress=0.0, draw_stress_threshold_n=draw_stress_threshold_n, draw_stress_q_band=draw_stress_q_band, draw_stress_max_extra_per_key=draw_stress_max_extra_per_key, win_weight=win_weight, opening_seed_book=opening_seed_book, opening_seed_policy_only=opening_seed_policy_only, opening_seed_offset=flip_policy_games, side_profile="black")
     rules_after = _namespace_rule_count(shim.namespace)
     for batch in (policy_res, explore_res, flip_policy_res, flip_explore_res):
         if isinstance(batch, dict):
@@ -3771,6 +3823,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         "policy_rules_after": int(rules_after),
         "policy_rules_delta": int(max(0, rules_after - rules_before)),
         "policy_games": int(policy_res.get("games", 0) or 0),
+        "side_profile": str(side_profile),
+        "primary_flip_pass": bool(primary_flip_mode),
         "flip_pass_enabled": bool(flip_enabled),
         "flip_policy_games": int((flip_policy_res or {}).get("games", 0) or 0),
         "flip_explore_games": int((flip_explore_res or {}).get("games", 0) or 0),

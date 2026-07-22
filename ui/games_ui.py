@@ -3,9 +3,9 @@
 # =============================================================================
 # Pfad:    /opt/ai/oroma/ui/games_ui.py
 # Projekt: ORÓMA – Headless UI (kein Qt/Wayland/X11)
-# Version: v3.7.3
-# Stand:   2025-12-14
-# Autor:   ORÓMA · KI-JWG-X1 + GPT-5.2 Thinking
+# Version: v3.8.0
+# Stand:   2026-07-22
+# Autor:   ORÓMA · KI-JWG-X1 + GPT-5.5 Thinking
 # =============================================================================
 #
 # Zweck
@@ -13,9 +13,53 @@
 #   Registriert verfügbare Spiel-Blueprints und stellt eine schnelle
 #   Übersichtsseite unter /games bereit (nur Liste + Notizen, kein Preview).
 #
-# Erweiterung v3.7.3
+# Erweiterung v3.7.4
 # ──────────────────
-#   • Sudoku hinzugefügt: ui.sudoku_ui → /sudoku
+#   • ChessPro wird als normales ORÓMA-Spiel in der Übersicht geführt, obwohl
+#     die Implementierung bewusst unter core/chess_pro/ liegt und keine eigene
+#     Brett-UI benötigt. Die neue Route /games/chesspro/ zeigt den produktiven
+#     Ist-Stand aus episodes/episodic_metrics und policy_rules.
+#   • Daily Summary normalisiert Siegmetriken aus mehreren historischen Runner-
+#     Konventionen: wins_p1/wins_p2, wins_oroma/wins_human, wins_x/wins_o,
+#     wins_white/wins_black und wins. Dadurch werden Connect4, TicTacToe,
+#     Chess/Chess2, Snake, Pong, CTF, Hide & Seek und ChessPro nicht mehr als
+#     0/0 angezeigt, wenn die DB reale Siege enthält.
+#   • ChessPro-spezifische Lernsignale werden zusätzlich gelesen: score_cp,
+#     plies, nodes/qnodes, nps, depth_reached_avg/max, rule_hits, learn_items
+#     und shaped_pos/shaped_neg/shaped_draw. Diese Werte sind bei ChessPro keine
+#     Dekoration, sondern der eigentliche entscheidungsbasierte Lernnachweis.
+#   • v3.7.5 ergänzt MemoryMaze-Hybrid-Lernmetriken: Reveals, Claims, Matches,
+#     gelöste Paare, Pit-Hits, P3-Kontakte, policy_used/fallback und learn_items.
+#   • v3.7.6 ergänzt Flappy-Pro-v2/v3-Metriken: high_score/high_steps,
+#     death_world/death_pipe/death_max_steps, policy_used/fallback/guarded
+#     und learn_items. Damit ist sichtbar, ob Flappy nur läuft oder Regeln
+#     wiederverwendet und echte Pipe-/Crash-Signale lernt.
+#   • v3.7.7 ergänzt Tetris-Pro-v2/v3-Metriken: high_score/high_lines,
+#     learn_items, line/risk/topout credit, policy_used/fallback/q_rejected,
+#     Speed-Timing und Boardqualität (holes).
+#   • v3.7.8 ergänzt Tetris-Reuse-Guard-Metriken: policy_seen/accepted,
+#     rejected_n/q/quality/unsafe und score_delta. Damit ist sichtbar, ob eine
+#     Policy-Regel nur vorhanden ist oder board-technisch akzeptiert wurde.
+#   • v3.7.9 ergänzt TicTacToe-Solved-Game-Diversity: unique_lines,
+#     unique_openings und unique_final_boards zeigen, ob ein gelöstes Spiel
+#     perfekte, aber nicht stumpf identische Partien erzeugt.
+#   • v3.7.10 ergänzt Hide&Seek-Pro-v2-Metriken: avg_found, Captures,
+#     BFS-/Path-Credits, Policy-Reuse, Safety-Rejects und pro_v2-Coverage.
+#   • v3.7.11 ergänzt Sudoku-Pro-v2-Metriken: Constraint-Techniken,
+#     mechanic_solved/explore_reduced, Policy-Reuse, Lernitems und Coverage.
+#   • v3.7.12 ergänzt PTZ Zoom Observe als read-only Safety-/Audit-Kachel.
+#     Diese Karte zeigt Preview-/Apply-Gate, Motor-Reason und Confidence-Werte,
+#     ohne PTZ-Kommandos auszulösen oder Auto-Zoom freizugeben.
+#   • v3.7.13 ergänzt Snake3D als explore-only Schablonen-Transfer-Spiel.
+#     Die Route /snake3d/ zeigt read-only Template-Fit, Z-Achsen-Relevanz,
+#     DBWriter-Lernstatus und policy_rules-Coverage, ohne Runner zu starten.
+#
+#   • v3.8.0 ergänzt eine strikt read-only Vertical-Learning-Observability.
+#     Die API /games/api/vertical_learning aggregiert vorhandene DB-Spuren aus
+#     SnapChains, Policy, Promotion, Targeted Acquisition, Outcome Queue,
+#     Mini-Write-Ledger und Evidence-Lineage. Alle Werte sind ausdrücklich als
+#     aktueller DB-Bestand bzw. Retention-Fenster gekennzeichnet; sie starten
+#     keine Runner und führen keinerlei Mutation aus.
 #
 # =============================================================================
 
@@ -25,10 +69,13 @@ import logging
 import os
 import importlib
 import time
+import sqlite3
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Any, Dict
 
-from flask import Blueprint, render_template, jsonify
+from flask import Blueprint, render_template, render_template_string, jsonify
 
 from core import sql_manager
 
@@ -52,6 +99,7 @@ class GameMeta:
 
 GAMES: List[GameMeta] = [
     GameMeta("snake",      "Snake",             "ui.snake_ui",      ["snake_bp", "bp"],        "/snake",      "Headless Snake (Pfeiltasten)"),
+    GameMeta("snake3d",    "Snake3D",           "ui.snake3d_ui",    ["snake3d_bp", "bp"],      "/snake3d",    "3D-Snake Policy+Explore Template-Transfer"),
     GameMeta("pong",       "Pong",              "ui.pong_ui",       ["pong_bp", "bp"],         "/pong",       "Headless Pong (Canvas)"),
     GameMeta("flappy",     "Flappy",            "ui.flappy_ui",     ["bp", "flappy_bp"],       "/flappy",     "Erfordert pygame/OpenCV"),
     GameMeta("ctf",        "Capture the Flag",  "ui.ctf_ui",        ["bp", "ctf_bp"],          "/ctf",        None),
@@ -59,6 +107,7 @@ GAMES: List[GameMeta] = [
     GameMeta("ptz_arena",  "PTZ Arena",         "ui.ptz_arena_ui",  ["ptz_arena_bp", "bp"],   "/ptz_arena",  "PTZ Policy Training (DeviceHub)"),
     GameMeta("ptz_target", "PTZ Target",        "ui.ptz_target_ui", ["ptz_target_bp", "bp"], "/ptz_target", "PTZ Targeting (Motion-Centroid)"),
     GameMeta("ptz_coverage", "PTZ Coverage",     "ui.ptz_coverage_ui", ["ptz_coverage_bp", "bp"], "/ptz_coverage", "Staubsauger-Sweep (Coverage über stats.db)"),
+    GameMeta("ptz_zoom_observe", "PTZ Zoom Observe", "ui.ptz_zoom_observe_ui", ["ptz_zoom_observe_bp", "bp"], "/ptz_zoom_observe", "Read-only Audit: Preview/Apply-Gate, Motor-Reason und Confidence"),
     GameMeta("memory",     "Memory",            "ui.memory_ui",     ["bp", "memory_bp"],       "/memory",     None),
     GameMeta("tictactoe",  "Tic Tac Toe",       "ui.tictactoe_ui",  ["bp", "tictactoe_bp"],    "/tictactoe",  "9-Felder-Board, KI/Heuristik"),
     GameMeta("tetris",     "Tetris",            "ui.tetris_ui",     ["tetris_bp", "bp"],   "/tetris",   "WASD/←↑→↓, SPACE=Hard Drop, Autoplay client-side"),
@@ -67,6 +116,7 @@ GAMES: List[GameMeta] = [
     GameMeta("vs",         "ORÓMA vs ORÓMA",    "ui.vs_ui",         ["bp", "vs_bp"],           "/vs",         None),
     GameMeta("chess",      "Chess",             "ui.chess_ui",      ["chess_bp", "bp"],        "/chess",      "Mini-Schach UI (PURE)"),
     GameMeta("chess2",     "Chess2",            "ui.chess2_ui",     ["chess2_bp", "bp"],      "/chess2",     "Mobility-native Chess Parallel-Stack"),
+    GameMeta("chess_pro",  "ChessPro",          "__internal__",     [],                         "/games/chesspro", "Professionelles ORÓMA-Schach mit Long-Search, Positions-Trace und Policy-Lernen"),
     GameMeta("sudoku",     "Sudoku",            "ui.sudoku_ui",     ["sudoku_bp", "bp"],       "/sudoku",     "Headless Sudoku (Generator + Check + Hint)"),
 ]
 
@@ -102,6 +152,393 @@ def page() -> str:
     available = [g for g in GAMES if g.registered_as and g.url]
     unavailable = [g for g in GAMES if not g.registered_as]
     return render_template("games.html", games_available=available, games_unavailable=unavailable)
+
+
+
+
+_VERTICAL_CACHE_LOCK = threading.Lock()
+_VERTICAL_CACHE: Dict[str, Any] = {"payload": None, "built_monotonic": 0.0}
+_VERTICAL_CACHE_TTL_SEC = max(5, int(os.environ.get("OROMA_GAMES_VERTICAL_CACHE_TTL_SEC", "30") or 30))
+_VERTICAL_QUERY_BUDGET_SEC = max(0.25, float(os.environ.get("OROMA_GAMES_VERTICAL_QUERY_BUDGET_SEC", "2.0") or 2.0))
+_VERTICAL_BUSY_TIMEOUT_MS = max(100, int(os.environ.get("OROMA_GAMES_VERTICAL_BUSY_TIMEOUT_MS", "1500") or 1500))
+_VERTICAL_TAIL_LIMIT = max(100, min(20000, int(os.environ.get("OROMA_GAMES_VERTICAL_TAIL_LIMIT", "2000") or 2000)))
+
+_VERTICAL_TABLES = {
+    "snapchains": "snapchains",
+    "policy": "policy_rules",
+    "promotions": "gap_policy_promotion_queue",
+    "acquisitions": "gap_targeted_acquisition_lifecycle",
+    "outcomes": "gap_evidence_outcome_queue",
+    "ledger": "gap_policy_mini_write_ledger",
+    "links": "policy_rule_evidence_links",
+}
+
+
+def _vertical_family(namespace: Any) -> str:
+    """Map a concrete learning namespace to a stable UI family.
+
+    The mapping is intentionally conservative.  It never rewrites persisted
+    identities and is used only for read-only presentation.  Snake and Snake3D
+    remain separate because they use distinct state/action schemas; Chess and
+    PTZ variants are grouped so the overview remains useful despite multiple
+    production namespaces.
+    """
+    ns = str(namespace or "").strip()
+    if ns == "game:snake":
+        return "snake"
+    if ns == "game:snake3d":
+        return "snake3d"
+    if ns.startswith("game:chess"):
+        return "chess"
+    if ns.startswith("game:ptz") or ns.startswith("ptz:"):
+        return "ptz"
+    if ns.startswith("game:"):
+        tail = ns[5:]
+        return tail.split(":", 1)[0] or ns
+    return ns or "unknown"
+
+
+
+@contextmanager
+def _vertical_read_conn():
+    """Open a bounded, strictly read-only connection for UI aggregation.
+
+    This intentionally bypasses ``sql_manager.get_conn()`` because that helper
+    configures WAL pragmas for general runtime connections.  In DBWriter strict
+    mode the database is opened read-only; trying to re-assert journal mode on
+    such a connection can wait behind SQLite locks and is unnecessary for a
+    dashboard read.  The dedicated UI connection therefore uses ``mode=ro``,
+    ``query_only`` and a short busy timeout and never mutates schema or data.
+    """
+    db_path = os.path.abspath(str(sql_manager.get_db_path()))
+    uri = f"file:{db_path}?mode=ro"
+    conn = sqlite3.connect(
+        uri,
+        uri=True,
+        timeout=float(_VERTICAL_BUSY_TIMEOUT_MS) / 1000.0,
+        check_same_thread=False,
+    )
+    conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout={int(_VERTICAL_BUSY_TIMEOUT_MS)}")
+    conn.execute("PRAGMA query_only=ON")
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _vertical_rows_bounded(
+    conn: Any,
+    sql: str,
+    params: Tuple[Any, ...] = (),
+    *,
+    query_name: str,
+    warnings: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Execute one UI aggregation with a hard VM-step time budget.
+
+    A slow historical table must not occupy a Flask request thread for minutes.
+    SQLite's progress handler aborts only this SELECT; the endpoint continues
+    with partial, explicitly marked data.
+    """
+    started = time.monotonic()
+
+    def _abort_if_over_budget() -> int:
+        return 1 if (time.monotonic() - started) >= _VERTICAL_QUERY_BUDGET_SEC else 0
+
+    conn.set_progress_handler(_abort_if_over_budget, 10_000)
+    try:
+        rows = conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+    except sqlite3.OperationalError as exc:
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        warnings.append({
+            "query": query_name,
+            "error": str(exc),
+            "elapsed_ms": elapsed_ms,
+            "partial": True,
+        })
+        log.warning("Vertical Learning query skipped name=%s elapsed_ms=%s err=%s", query_name, elapsed_ms, exc)
+        return []
+    finally:
+        conn.set_progress_handler(None, 0)
+
+
+def _vertical_table_exists(conn: Any, table: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+        (str(table),),
+    ).fetchone()
+    return bool(row)
+
+
+def _vertical_rows(conn: Any, sql: str, params: Tuple[Any, ...] = ()) -> List[Dict[str, Any]]:
+    rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _vertical_tail_rows(
+    conn: Any,
+    *,
+    table: str,
+    columns: str,
+    order_expr: str,
+    query_name: str,
+    warnings: List[Dict[str, Any]],
+    limit: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Read only a bounded newest-row window without global aggregation.
+
+    ORÓMA production databases can be tens of gigabytes large.  Dashboard
+    requests must therefore follow the same scale-safe rule as the productive
+    backup tool: never COUNT or GROUP the whole table; read the newest bounded
+    row window through an integer primary key/rowid and aggregate in Python.
+    """
+    row_limit = max(1, int(limit or _VERTICAL_TAIL_LIMIT))
+    sql = f"SELECT {columns} FROM {table} ORDER BY {order_expr} DESC LIMIT ?"
+    return _vertical_rows_bounded(
+        conn,
+        sql,
+        (row_limit,),
+        query_name=query_name,
+        warnings=warnings,
+    )
+
+
+def _vertical_pct(numerator: int, denominator: int) -> Optional[float]:
+    if int(denominator or 0) <= 0:
+        return None
+    return round((100.0 * int(numerator or 0)) / int(denominator), 2)
+
+
+def build_vertical_learning_status() -> Dict[str, Any]:
+    """Build a bounded, read-only cross-game vertical-learning status.
+
+    Scale contract
+    --------------
+    * no COUNT(*), GROUP BY, DISTINCT, MIN or MAX over complete live tables;
+    * each source is read through a bounded newest-row window;
+    * aggregation occurs in Python after the bounded read;
+    * values are window counts, never advertised as lifetime totals;
+    * no writes, schema changes, runner starts or policy mutations.
+    """
+    now = int(time.time())
+    families: Dict[str, Dict[str, Any]] = {}
+    available_tables: Dict[str, bool] = {}
+    table_windows: Dict[str, Dict[str, Any]] = {}
+    warnings: List[Dict[str, Any]] = []
+
+    def ensure(ns: Any) -> Dict[str, Any]:
+        family = _vertical_family(ns)
+        row = families.setdefault(family, {
+            "family": family,
+            "namespaces": set(),
+            "snapchains": 0,
+            "policy_rules": 0,
+            "policy_samples": 0,
+            "promotions": 0,
+            "promotion_reviews": 0,
+            "promotion_policy_written": 0,
+            "acquisitions": 0,
+            "acquisitions_evidence_acquired": 0,
+            "outcomes": 0,
+            "outcomes_ready": 0,
+            "outcomes_policy_written": 0,
+            "mini_writes": 0,
+            "blocked_writes": 0,
+            "evidence_links": 0,
+            "newest_ts": 0,
+        })
+        if ns:
+            row["namespaces"].add(str(ns))
+        return row
+
+    def observe_window(key: str, rows: List[Dict[str, Any]], ts_fields: Tuple[str, ...]) -> None:
+        timestamps: List[int] = []
+        for item in rows:
+            for field in ts_fields:
+                try:
+                    value = int(item.get(field) or 0)
+                except Exception:
+                    value = 0
+                if value > 0:
+                    timestamps.append(value)
+        table_windows[key] = {
+            "sampled_rows": len(rows),
+            "sample_limit": _VERTICAL_TAIL_LIMIT,
+            "truncated": len(rows) >= _VERTICAL_TAIL_LIMIT,
+            "oldest_ts": min(timestamps) if timestamps else 0,
+            "newest_ts": max(timestamps) if timestamps else 0,
+            "semantics": "bounded_newest_rows",
+        }
+
+    with _vertical_read_conn() as conn:
+        for key, table in _VERTICAL_TABLES.items():
+            available_tables[key] = _vertical_table_exists(conn, table)
+
+        if available_tables["snapchains"]:
+            rows = _vertical_tail_rows(conn, table="snapchains", columns="namespace, origin, ts", order_expr="id", query_name="snapchains", warnings=warnings)
+            observe_window("snapchains", rows, ("ts",))
+            for item in rows:
+                ns = item.get("namespace") or item.get("origin") or "unknown"
+                if not str(ns).startswith("game:"):
+                    continue
+                dst = ensure(ns)
+                dst["snapchains"] += 1
+                dst["newest_ts"] = max(dst["newest_ts"], int(item.get("ts") or 0))
+
+        if available_tables["policy"]:
+            rows = _vertical_tail_rows(conn, table="policy_rules", columns="namespace, n, last_ts", order_expr="id", query_name="policy", warnings=warnings)
+            observe_window("policy", rows, ("last_ts",))
+            for item in rows:
+                ns = str(item.get("namespace") or "")
+                if not (ns.startswith("game:") or ns.startswith("ptz:")):
+                    continue
+                dst = ensure(ns)
+                dst["policy_rules"] += 1
+                dst["policy_samples"] += int(item.get("n") or 0)
+                dst["newest_ts"] = max(dst["newest_ts"], int(item.get("last_ts") or 0))
+
+        if available_tables["promotions"]:
+            rows = _vertical_tail_rows(conn, table="gap_policy_promotion_queue", columns="namespace, status, created_ts, updated_ts", order_expr="id", query_name="promotions", warnings=warnings)
+            observe_window("promotions", rows, ("created_ts", "updated_ts"))
+            for item in rows:
+                ns = item.get("namespace")
+                if not ns:
+                    continue
+                dst = ensure(ns)
+                dst["promotions"] += 1
+                dst["promotion_reviews"] += int(item.get("status") == "promotion_review")
+                dst["promotion_policy_written"] += int(item.get("status") == "policy_written")
+                dst["newest_ts"] = max(dst["newest_ts"], int(item.get("updated_ts") or 0))
+
+        if available_tables["acquisitions"]:
+            rows = _vertical_tail_rows(conn, table="gap_targeted_acquisition_lifecycle", columns="namespace, status, created_ts, updated_ts", order_expr="rowid", query_name="acquisitions", warnings=warnings)
+            observe_window("acquisitions", rows, ("created_ts", "updated_ts"))
+            for item in rows:
+                ns = item.get("namespace")
+                if not ns:
+                    continue
+                dst = ensure(ns)
+                dst["acquisitions"] += 1
+                dst["acquisitions_evidence_acquired"] += int(item.get("status") == "evidence_acquired")
+                dst["newest_ts"] = max(dst["newest_ts"], int(item.get("updated_ts") or 0))
+
+        if available_tables["outcomes"]:
+            rows = _vertical_tail_rows(conn, table="gap_evidence_outcome_queue", columns="namespace, status, created_ts, updated_ts", order_expr="id", query_name="outcomes", warnings=warnings)
+            observe_window("outcomes", rows, ("created_ts", "updated_ts"))
+            for item in rows:
+                ns = item.get("namespace")
+                if not ns:
+                    continue
+                dst = ensure(ns)
+                dst["outcomes"] += 1
+                dst["outcomes_ready"] += int(item.get("status") == "outcome_ready")
+                dst["outcomes_policy_written"] += int(item.get("status") == "policy_written")
+                dst["newest_ts"] = max(dst["newest_ts"], int(item.get("updated_ts") or 0))
+
+        if available_tables["ledger"]:
+            rows = _vertical_tail_rows(conn, table="gap_policy_mini_write_ledger", columns="namespace, status, policy_written, created_ts, updated_ts", order_expr="id", query_name="ledger", warnings=warnings)
+            observe_window("ledger", rows, ("created_ts", "updated_ts"))
+            for item in rows:
+                ns = item.get("namespace")
+                if not ns:
+                    continue
+                dst = ensure(ns)
+                dst["mini_writes"] += int(item.get("policy_written") or 0) == 1
+                dst["blocked_writes"] += int(item.get("status") == "blocked")
+                dst["newest_ts"] = max(dst["newest_ts"], int(item.get("updated_ts") or 0))
+
+        if available_tables["links"]:
+            rows = _vertical_tail_rows(conn, table="policy_rule_evidence_links", columns="namespace, created_ts", order_expr="id", query_name="links", warnings=warnings)
+            observe_window("links", rows, ("created_ts",))
+            for item in rows:
+                ns = item.get("namespace")
+                if not ns:
+                    continue
+                dst = ensure(ns)
+                dst["evidence_links"] += 1
+                dst["newest_ts"] = max(dst["newest_ts"], int(item.get("created_ts") or 0))
+
+    order = {"snake": 0, "snake3d": 1, "chess": 2, "ptz": 3}
+    result_rows: List[Dict[str, Any]] = []
+    for row in families.values():
+        row["namespaces"] = sorted(row["namespaces"])
+        row["promotion_to_acquisition_pct"] = _vertical_pct(row["acquisitions"], row["promotions"])
+        row["acquisition_to_outcome_pct"] = _vertical_pct(row["outcomes"], row["acquisitions"])
+        row["outcome_to_write_pct"] = _vertical_pct(row["mini_writes"], row["outcomes"])
+        row["age_sec"] = max(0, now - int(row["newest_ts"])) if row["newest_ts"] else None
+        result_rows.append(row)
+    result_rows.sort(key=lambda r: (order.get(str(r["family"]), 100), str(r["family"])))
+
+    return {
+        "ok": True,
+        "generated_ts": now,
+        "read_only": True,
+        "count_semantics": "bounded_newest_row_window",
+        "conversion_semantics": "window_stock_ratio_not_cohort_conversion",
+        "tail_limit_per_table": _VERTICAL_TAIL_LIMIT,
+        "tables": available_tables,
+        "table_windows": table_windows,
+        "partial": bool(warnings),
+        "warnings": warnings,
+        "rows": result_rows,
+    }
+
+@games_bp.route("/api/vertical_learning", methods=["GET"])
+def api_vertical_learning():
+    now_mono = time.monotonic()
+    cached = _VERTICAL_CACHE.get("payload")
+    cache_age = now_mono - float(_VERTICAL_CACHE.get("built_monotonic") or 0.0)
+    if cached is not None and cache_age < float(_VERTICAL_CACHE_TTL_SEC):
+        payload = dict(cached)
+        payload["cache"] = {"hit": True, "age_sec": round(cache_age, 3), "ttl_sec": _VERTICAL_CACHE_TTL_SEC}
+        return jsonify(payload)
+
+    acquired = _VERTICAL_CACHE_LOCK.acquire(timeout=0.25)
+    if not acquired:
+        if cached is not None:
+            payload = dict(cached)
+            payload["cache"] = {"hit": True, "stale": True, "age_sec": round(cache_age, 3), "ttl_sec": _VERTICAL_CACHE_TTL_SEC}
+            return jsonify(payload)
+        return jsonify({
+            "ok": False,
+            "read_only": True,
+            "err": "vertical_learning_refresh_in_progress",
+            "retry_after_sec": 1,
+        }), 503
+
+    try:
+        # A second request may have populated the cache while this request was
+        # waiting for the single-flight lock.
+        now_mono = time.monotonic()
+        cached = _VERTICAL_CACHE.get("payload")
+        cache_age = now_mono - float(_VERTICAL_CACHE.get("built_monotonic") or 0.0)
+        if cached is not None and cache_age < float(_VERTICAL_CACHE_TTL_SEC):
+            payload = dict(cached)
+            payload["cache"] = {"hit": True, "age_sec": round(cache_age, 3), "ttl_sec": _VERTICAL_CACHE_TTL_SEC}
+            return jsonify(payload)
+
+        payload = build_vertical_learning_status()
+        _VERTICAL_CACHE["payload"] = payload
+        _VERTICAL_CACHE["built_monotonic"] = time.monotonic()
+        response = dict(payload)
+        response["cache"] = {"hit": False, "age_sec": 0.0, "ttl_sec": _VERTICAL_CACHE_TTL_SEC}
+        return jsonify(response)
+    except Exception as exc:
+        log.exception("/games/api/vertical_learning failed")
+        cached = _VERTICAL_CACHE.get("payload")
+        if cached is not None:
+            payload = dict(cached)
+            payload["cache"] = {"hit": True, "stale": True, "build_error": f"{type(exc).__name__}: {exc}"}
+            return jsonify(payload)
+        return jsonify({
+            "ok": False,
+            "read_only": True,
+            "err": f"{type(exc).__name__}: {exc}",
+        }), 500
+    finally:
+        _VERTICAL_CACHE_LOCK.release()
 
 
 @games_bp.route("/api/list", methods=["GET"])
@@ -161,6 +598,563 @@ def _fmt_time_local(ts: Any) -> str:
         return ""
 
 
+def _to_float(v: Any) -> Optional[float]:
+    """Best-effort float conversion for DB metric values.
+
+    ORÓMA runner history contains several insert helper signatures and row
+    factories. The UI must therefore not assume one exact sqlite return type.
+    Invalid or missing values remain None so the frontend can distinguish
+    "0.0" from "not produced by this game".
+    """
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except Exception:
+        return None
+    if not (f == f):
+        return None
+    return f
+
+
+DAILY_METRIC_KEYS: Tuple[str, ...] = (
+    # common batch/runtime metrics
+    "duration_ms",
+    "avg_reward",
+    "avg_score",
+    "avg_return",
+    "avg_found",
+    "avg_ticks",
+    "avg_score_A",
+    "avg_score_B",
+    "avg_moves",
+    "avg_turns",
+    "avg_steps",
+    # Flappy professional runner metrics
+    "high_score",
+    "high_steps",
+    "death_world",
+    "death_pipe",
+    "death_max_steps",
+    "max_steps",
+    # Snake professional runner metrics
+    "avg_food",
+    "high_food",
+    # Snake3D template-transfer telemetry
+    "pos_items",
+    "neg_items",
+    "draw_items",
+    "danger_z_rate",
+    "food_up_signal_rate",
+    "vertical_action_rate",
+    "template_fit_score",
+    "avg_length_end",
+    "wins_by_length",
+    "death_wall",
+    "death_self",
+    "policy_guarded",
+    "steps",
+    "avg_commands",
+    "games",
+    # outcome conventions used by the current and legacy daily runners
+    "wins",
+    "wins_x",
+    "wins_o",
+    "wins_p1",
+    "wins_p2",
+    "wins_oroma",
+    "wins_human",
+    "wins_white",
+    "wins_black",
+    "draws",
+    "draws_by_cap",
+    "unique_lines",
+    "unique_openings",
+    "unique_final_boards",
+    # Memory / MemoryMaze
+    "avg_pairs_left_end",
+    "avg_pairs_cleared",
+    "avg_reveals",
+    "avg_claims",
+    "avg_second_reveals",
+    "avg_matches",
+    "avg_mismatches",
+    "avg_claim_timeouts",
+    "avg_pit_hits",
+    "avg_p3_contacts",
+    "wins_by_pairs",
+    "wins_by_strikes",
+    "wins_by_length",
+    "death_wall",
+    "death_self",
+    "policy_used",
+    "policy_fallback",
+    "policy_q_rejected",
+    "policy_seen",
+    "policy_accepted",
+    "policy_miss",
+    "policy_epsilon",
+    "policy_min_n",
+    "policy_min_q",
+    "policy_rejected_n",
+    "policy_rejected_q",
+    "policy_rejected_quality",
+    "policy_rejected_unsafe",
+    "policy_guarded",
+    "avg_strikes_p1",
+    "avg_strikes_p2",
+    "avg_strikes_p3",
+    # Tetris
+    "avg_score_end",
+    "high_score_end",
+    "avg_lines_end",
+    "high_lines_end",
+    "avg_level_end",
+    "avg_pieces",
+    "high_pieces",
+    "line_credit_items",
+    "improve_credit_items",
+    "risk_credit_items",
+    "topout_credit_items",
+    "topouts",
+    "policy_score_delta_avg",
+    "policy_accept_q_min",
+    "policy_accept_min_n",
+    "policy_max_score_gap",
+    "policy_dbw_chunk",
+    "sim_duration_ms",
+    "learn_duration_ms",
+    "avg_final_holes",
+    "avg_final_height",
+    "avg_final_bumpiness",
+    # PTZ domains
+    "avg_dist",
+    "lock_rate",
+    "coverage_rate",
+    "coverage_unique_cells",
+    "avg_motion",
+    "avg_sharp",
+    # ChessPro decision-learning telemetry
+    "plies",
+    "score_cp",
+    "nodes",
+    "qnodes",
+    "total_nodes",
+    "search_ms",
+    "nps",
+    "depth_target",
+    "depth_reached_max",
+    "depth_reached_avg",
+    "tt_hits",
+    "cutoffs",
+    "timed_out_moves",
+    "game_budget_hit",
+    "game_budget_sec",
+    "repetition_guard_moves",
+    "repetition_penalty_abs_cp",
+    "api_guard_ok",
+    "push_failures",
+    "pop_failures",
+    "rule_hits",
+    "learn_items",
+    "learned_items",
+    "policy_learn_ok",
+    "sim_duration_ms",
+    "learn_duration_ms",
+    "policy_dbw_chunk",
+    "effective_games",
+    "requested_games",
+    "explore_complete",
+    "no_more_explore",
+    "solver_states_total",
+    "solver_rules_total",
+    "solver_items_total",
+    "solver_best_items",
+    "solver_blunder_items",
+    "solver_safe_draw_items",
+    "solver_forced_loss_best_items",
+    "solver_states_known",
+    "solver_rules_known",
+    "solver_states_missing",
+    "solver_rules_missing",
+    "solver_value_win_states",
+    "solver_value_draw_states",
+    "solver_value_loss_states",
+    "unique_lines",
+    "unique_openings",
+    "unique_final_boards",
+    "learn_items_pos",
+    "learn_items_neg",
+    "learn_items_draw",
+    "shaped_pos",
+    "shaped_neg",
+    "shaped_draw",
+    "snapchain_steps",
+)
+
+
+SUM_METRIC_KEYS = {
+    "games",
+    "wins",
+    "wins_x",
+    "wins_o",
+    "wins_p1",
+    "wins_p2",
+    "wins_oroma",
+    "wins_human",
+    "wins_white",
+    "wins_black",
+    "draws",
+    "draws_by_cap",
+    "unique_lines",
+    "unique_openings",
+    "unique_final_boards",
+    "death_world",
+    "death_pipe",
+    "death_max_steps",
+    "policy_guarded",
+    "pos_items",
+    "neg_items",
+    "draw_items",
+    "learn_items",
+    "learned_items",
+    "policy_seen",
+    "policy_accepted",
+    "policy_fallback",
+    "policy_miss",
+    "policy_epsilon",
+    "policy_rejected_n",
+    "policy_rejected_q",
+    "solver_best_items",
+    "solver_blunder_items",
+    "solver_safe_draw_items",
+    "solver_forced_loss_best_items",
+    "wins_by_pairs",
+    "wins_by_strikes",
+    "policy_used",
+    "policy_fallback",
+    "policy_q_rejected",
+    "policy_seen",
+    "policy_accepted",
+    "policy_rejected_n",
+    "policy_rejected_q",
+    "policy_rejected_quality",
+    "policy_rejected_unsafe",
+    "line_credit_items",
+    "improve_credit_items",
+    "risk_credit_items",
+    "topout_credit_items",
+    "topouts",
+    "nodes",
+    "qnodes",
+    "total_nodes",
+    "search_ms",
+    "tt_hits",
+    "cutoffs",
+    "timed_out_moves",
+    "game_budget_hit",
+    "repetition_guard_moves",
+    "repetition_penalty_abs_cp",
+    "push_failures",
+    "pop_failures",
+    "rule_hits",
+    "learn_items",
+    "learn_items_pos",
+    "learn_items_neg",
+    "learn_items_draw",
+    "shaped_pos",
+    "shaped_neg",
+    "shaped_draw",
+    "snapchain_steps",
+    "coverage_unique_cells",
+}
+
+
+AVG_METRIC_KEYS = tuple(k for k in DAILY_METRIC_KEYS if k not in SUM_METRIC_KEYS)
+
+
+def _metric_avg(agg_row: Dict[str, Any], metric_key: str) -> Optional[float]:
+    n = int(agg_row.get(f"{metric_key}_n") or 0)
+    if n <= 0:
+        return None
+    return float(agg_row.get(f"{metric_key}_sum") or 0.0) / float(n)
+
+
+def _metric_sum(agg_row: Dict[str, Any], metric_key: str) -> Optional[float]:
+    if int(agg_row.get(f"{metric_key}_seen") or 0) <= 0:
+        return None
+    return float(agg_row.get(f"{metric_key}_sum") or 0.0)
+
+
+def _normalise_outcome_counts(game: str, variant: str, metrics: Dict[str, Any]) -> Tuple[float, float, float, str]:
+    """Return (wins, losses, draws, source) for heterogeneous game runners.
+
+    The old UI only understood wins_p1/wins_p2 and wins_oroma/wins_human.
+    Most board/arcade runners write wins_x/wins_o instead. ChessPro writes
+    wins_white/wins_black because every run has a focus side variant. This
+    function keeps those conventions explicit instead of silently discarding
+    real outcomes.
+    """
+    draws = float(metrics.get("draws") or 0.0) + float(metrics.get("draws_by_cap") or 0.0)
+
+    if game == "chess_pro":
+        ww = float(metrics.get("wins_white") or 0.0)
+        wb = float(metrics.get("wins_black") or 0.0)
+        v = (variant or "").lower()
+        if v == "white":
+            return ww, wb, draws, "wins_white/wins_black:focus_white"
+        if v == "black":
+            return wb, ww, draws, "wins_white/wins_black:focus_black"
+        return float(metrics.get("wins") or (ww + wb)), 0.0, draws, "wins_white/wins_black"
+
+    if metrics.get("wins_p1") is not None or metrics.get("wins_p2") is not None:
+        return float(metrics.get("wins_p1") or 0.0), float(metrics.get("wins_p2") or 0.0), draws, "wins_p1/wins_p2"
+
+    if metrics.get("wins_oroma") is not None or metrics.get("wins_human") is not None:
+        return float(metrics.get("wins_oroma") or 0.0), float(metrics.get("wins_human") or 0.0), draws, "wins_oroma/wins_human"
+
+    if metrics.get("wins_x") is not None or metrics.get("wins_o") is not None:
+        return float(metrics.get("wins_x") or 0.0), float(metrics.get("wins_o") or 0.0), draws, "wins_x/wins_o"
+
+    if metrics.get("wins_white") is not None or metrics.get("wins_black") is not None:
+        return float(metrics.get("wins_white") or 0.0), float(metrics.get("wins_black") or 0.0), draws, "wins_white/wins_black"
+
+    if metrics.get("wins") is not None:
+        return float(metrics.get("wins") or 0.0), 0.0, draws, "wins"
+
+    return 0.0, 0.0, draws, ""
+
+
+def _compact_kpi(game: str, variant: str, out_row: Dict[str, Any]) -> str:
+    """Human-readable, compact per-game KPI string for the existing table.
+
+    This intentionally avoids a dashboard redesign. It gives games with special
+    metrics (especially ChessPro, Tetris and PTZ) one compact explanation cell.
+    """
+    def v(name: str) -> str:
+        raw = out_row.get(name)
+        if raw is None:
+            return ""
+        if isinstance(raw, float):
+            if abs(raw - round(raw)) < 1e-9:
+                return str(int(round(raw)))
+            return f"{raw:.3f}".rstrip("0").rstrip(".")
+        return str(raw)
+
+    def join_parts(parts: List[str]) -> str:
+        return " · ".join([p for p in parts if p and not p.endswith("=")])
+
+    g = (game or "").lower()
+    if g == "chess_pro":
+        depth_avg = v("depth_reached_avg_avg")
+        depth_max = v("depth_reached_max_avg")
+        shape_pos = v("shaped_pos_sum")
+        shape_neg = v("shaped_neg_sum")
+        shape_draw = v("shaped_draw_sum")
+        return join_parts([
+            f"cp={v('score_cp_avg')}" if v("score_cp_avg") else "",
+            f"plies={v('plies_avg')}" if v("plies_avg") else "",
+            f"depth={depth_avg}/{depth_max}" if (depth_avg or depth_max) else "",
+            f"nps={v('nps_avg')}" if v("nps_avg") else "",
+            f"rules={v('rule_hits_sum')}" if v("rule_hits_sum") else "",
+            f"learn={v('learn_items_sum')}" if v("learn_items_sum") else "",
+            f"shape={shape_pos}/{shape_neg}/{shape_draw}" if (shape_pos or shape_neg or shape_draw) else "",
+        ])
+    if g == "tetris":
+        return join_parts([
+            f"score={v('avg_score_end_avg')}" if v("avg_score_end_avg") else "",
+            f"high={v('high_score_end_avg')}" if v("high_score_end_avg") else "",
+            f"lines={v('avg_lines_end_avg')}" if v("avg_lines_end_avg") else "",
+            f"high_lines={v('high_lines_end_avg')}" if v("high_lines_end_avg") else "",
+            f"pieces={v('avg_pieces_avg')}" if v("avg_pieces_avg") else "",
+            f"learn={v('learn_items_sum')}" if v("learn_items_sum") else "",
+            f"credit={v('line_credit_items_sum')}/{v('risk_credit_items_sum')}/{v('topout_credit_items_sum')}" if (v("line_credit_items_sum") or v("risk_credit_items_sum") or v("topout_credit_items_sum")) else "",
+            f"pol={v('policy_used_sum')}/{v('policy_fallback_sum')}" if (v("policy_used_sum") or v("policy_fallback_sum")) else "",
+            f"acc={v('policy_accepted_sum')}/{v('policy_seen_sum')}" if (v("policy_accepted_sum") or v("policy_seen_sum")) else "",
+            f"rej={v('policy_rejected_n_sum')}/{v('policy_rejected_q_sum')}/{v('policy_rejected_quality_sum')}/{v('policy_rejected_unsafe_sum')}" if (v("policy_rejected_n_sum") or v("policy_rejected_q_sum") or v("policy_rejected_quality_sum") or v("policy_rejected_unsafe_sum")) else "",
+            f"qrej={v('policy_q_rejected_sum')}" if v("policy_q_rejected_sum") else "",
+            f"Δ={v('policy_score_delta_avg_avg')}" if v("policy_score_delta_avg_avg") else "",
+            f"gate={v('policy_accept_q_min_avg')}/{v('policy_accept_min_n_avg')}/{v('policy_max_score_gap_avg')}" if (v("policy_accept_q_min_avg") or v("policy_accept_min_n_avg") or v("policy_max_score_gap_avg")) else "",
+            f"ms={v('sim_duration_ms_avg')}/{v('learn_duration_ms_avg')}" if (v("sim_duration_ms_avg") or v("learn_duration_ms_avg")) else "",
+            f"dbw={v('policy_dbw_chunk_avg')}" if v("policy_dbw_chunk_avg") else "",
+            f"holes={v('avg_final_holes_avg')}" if v("avg_final_holes_avg") else "",
+        ])
+    if g == "ptz_target":
+        return join_parts([
+            f"lock={v('lock_rate_avg')}" if v("lock_rate_avg") else "",
+            f"dist={v('avg_dist_avg')}" if v("avg_dist_avg") else "",
+            f"motion={v('avg_motion_avg')}" if v("avg_motion_avg") else "",
+            f"sharp={v('avg_sharp_avg')}" if v("avg_sharp_avg") else "",
+        ])
+    if g == "ptz_coverage":
+        return join_parts([
+            f"coverage={v('coverage_rate_avg')}" if v("coverage_rate_avg") else "",
+            f"cells={v('coverage_unique_cells_sum')}" if v("coverage_unique_cells_sum") else "",
+            f"reward={v('avg_reward')}" if v("avg_reward") else "",
+        ])
+    if g == "tictactoe":
+        solved = ""
+        if v("solver_states_known_avg") or v("solver_states_total_avg"):
+            solved = f"states={v('solver_states_known_avg')}/{v('solver_states_total_avg')}"
+        return join_parts([
+            f"moves={v('avg_moves_avg')}" if v("avg_moves_avg") else "",
+            f"uniq={v('unique_lines_sum')}/{v('unique_openings_sum')}/{v('unique_final_boards_sum')}" if (v("unique_lines_sum") or v("unique_openings_sum") or v("unique_final_boards_sum")) else "",
+            solved,
+            f"missing={v('solver_states_missing_avg')}" if v("solver_states_missing_avg") else "",
+            f"safe={v('solver_safe_draw_items_avg')}" if v("solver_safe_draw_items_avg") else "",
+            f"blunder={v('solver_blunder_items_avg')}" if v("solver_blunder_items_avg") else "",
+            f"learn={v('learned_items_sum')}/{v('learn_items_sum')}" if (v("learned_items_sum") or v("learn_items_sum")) else "",
+            f"done={v('no_more_explore_avg')}" if v("no_more_explore_avg") else "",
+            f"pol={v('policy_accepted_sum')}/{v('policy_seen_sum')}/{v('policy_fallback_sum')}" if (v("policy_accepted_sum") or v("policy_seen_sum") or v("policy_fallback_sum")) else "",
+            f"rej={v('policy_rejected_n_sum')}/{v('policy_rejected_q_sum')}" if (v("policy_rejected_n_sum") or v("policy_rejected_q_sum")) else "",
+            f"ms={v('sim_duration_ms_avg')}/{v('learn_duration_ms_avg')}" if (v("sim_duration_ms_avg") or v("learn_duration_ms_avg")) else "",
+        ])
+    if g == "connect4":
+        return join_parts([
+            f"moves={v('avg_moves_avg')}" if v("avg_moves_avg") else "",
+            f"threat={v('own_win_available_sum')}/{v('opp_win_available_sum')}" if (v("own_win_available_sum") or v("opp_win_available_sum")) else "",
+            f"play={v('win_moves_played_sum')}/{v('blocks_played_sum')}/{v('missed_blocks_sum')}" if (v("win_moves_played_sum") or v("blocks_played_sum") or v("missed_blocks_sum")) else "",
+            f"learn={v('learned_items_sum')}/{v('learn_items_sum')}" if (v("learned_items_sum") or v("learn_items_sum")) else "",
+            f"credit={v('win_move_credit_items_sum')}/{v('block_credit_items_sum')}/{v('missed_block_credit_items_sum')}/{v('terminal_credit_items_sum')}" if (v("win_move_credit_items_sum") or v("block_credit_items_sum") or v("missed_block_credit_items_sum") or v("terminal_credit_items_sum")) else "",
+            f"pol={v('policy_accepted_sum')}/{v('policy_seen_sum')}/{v('policy_fallback_sum')}" if (v("policy_accepted_sum") or v("policy_seen_sum") or v("policy_fallback_sum")) else "",
+            f"rej={v('policy_rejected_n_sum')}/{v('policy_rejected_q_sum')}/{v('policy_rejected_unsafe_sum')}" if (v("policy_rejected_n_sum") or v("policy_rejected_q_sum") or v("policy_rejected_unsafe_sum")) else "",
+            f"cov={v('pro_rules_known_avg')}/{v('pro_samples_known_avg')}" if (v("pro_rules_known_avg") or v("pro_samples_known_avg")) else "",
+            f"ms={v('sim_duration_ms_avg')}/{v('learn_duration_ms_avg')}" if (v("sim_duration_ms_avg") or v("learn_duration_ms_avg")) else "",
+        ])
+    if g in {"chess", "chess2"} or g.startswith("chess2"):
+        return join_parts([f"moves={v('avg_moves_avg')}" if v("avg_moves_avg") else ""])
+    if g == "sudoku":
+        return join_parts([
+            f"moves={v('avg_moves_avg')}" if v("avg_moves_avg") else "",
+            f"solve={v('solved_games_sum')}/{v('games_sum')}" if (v("solved_games_sum") or v("games_sum")) else "",
+            f"logic={v('avg_logic_moves_avg')}" if v("avg_logic_moves_avg") else "",
+            f"assist={v('avg_assist_moves_avg')}" if v("avg_assist_moves_avg") else "",
+            f"tech={v('naked_single_moves_sum')}/{v('hidden_row_moves_sum')}/{v('hidden_col_moves_sum')}/{v('hidden_box_moves_sum')}/{v('solution_guard_moves_sum')}" if (v("naked_single_moves_sum") or v("hidden_row_moves_sum") or v("hidden_col_moves_sum") or v("hidden_box_moves_sum") or v("solution_guard_moves_sum")) else "",
+            f"mech={v('mechanic_understood_avg')}" if v("mechanic_understood_avg") else "",
+            f"expl={v('explore_reduced_avg')}" if v("explore_reduced_avg") else "",
+            f"learn={v('learned_items_sum')}/{v('learn_items_sum')}" if (v("learned_items_sum") or v("learn_items_sum")) else "",
+            f"credit={v('logic_credit_items_sum')}/{v('assist_credit_items_sum')}/{v('terminal_credit_items_sum')}" if (v("logic_credit_items_sum") or v("assist_credit_items_sum") or v("terminal_credit_items_sum")) else "",
+            f"pol={v('policy_accepted_sum')}/{v('policy_seen_sum')}/{v('policy_fallback_sum')}" if (v("policy_accepted_sum") or v("policy_seen_sum") or v("policy_fallback_sum")) else "",
+            f"rej={v('policy_rejected_n_sum')}/{v('policy_rejected_q_sum')}/{v('policy_rejected_unsafe_sum')}" if (v("policy_rejected_n_sum") or v("policy_rejected_q_sum") or v("policy_rejected_unsafe_sum")) else "",
+            f"cov={v('pro_rules_known_avg')}/{v('pro_samples_known_avg')}" if (v("pro_rules_known_avg") or v("pro_samples_known_avg")) else "",
+            f"ms={v('sim_duration_ms_avg')}/{v('learn_duration_ms_avg')}" if (v("sim_duration_ms_avg") or v("learn_duration_ms_avg")) else "",
+        ])
+    if g == "memory":
+        return join_parts([
+            f"turns={v('avg_turns_avg')}" if v("avg_turns_avg") else "",
+            f"pairs_left={v('avg_pairs_left_end_avg') or v('avg_pairs_left_end')}" if (v("avg_pairs_left_end_avg") or v("avg_pairs_left_end")) else "",
+            f"known={v('avg_peak_known_positions_avg')}/{v('avg_peak_known_pairs_avg')}" if (v("avg_peak_known_positions_avg") or v("avg_peak_known_pairs_avg")) else "",
+            f"pair={v('pair_reuse_hits_sum')}" if v("pair_reuse_hits_sum") else "",
+            f"blind={v('blind_reveals_sum')}" if v("blind_reveals_sum") else "",
+            f"waste={v('repeat_waste_sum')}" if v("repeat_waste_sum") else "",
+            f"mech={v('mechanic_understood_avg')}" if v("mechanic_understood_avg") else "",
+            f"expl={v('explore_reduced_avg')}" if v("explore_reduced_avg") else "",
+            f"learn={v('learned_items_sum')}/{v('learn_items_sum')}" if (v("learned_items_sum") or v("learn_items_sum")) else "",
+            f"credit={v('pair_reuse_credit_items_sum')}/{v('info_gain_credit_items_sum')}/{v('repeat_waste_credit_items_sum')}/{v('terminal_credit_items_sum')}" if (v("pair_reuse_credit_items_sum") or v("info_gain_credit_items_sum") or v("repeat_waste_credit_items_sum") or v("terminal_credit_items_sum")) else "",
+            f"pol={v('policy_accepted_sum')}/{v('policy_seen_sum')}/{v('policy_fallback_sum')}" if (v("policy_accepted_sum") or v("policy_seen_sum") or v("policy_fallback_sum")) else "",
+            f"rej={v('policy_rejected_n_sum')}/{v('policy_rejected_q_sum')}/{v('policy_rejected_unsafe_sum')}" if (v("policy_rejected_n_sum") or v("policy_rejected_q_sum") or v("policy_rejected_unsafe_sum")) else "",
+            f"cov={v('pro_rules_known_avg')}/{v('pro_samples_known_avg')}" if (v("pro_rules_known_avg") or v("pro_samples_known_avg")) else "",
+            f"ms={v('sim_duration_ms_avg')}/{v('learn_duration_ms_avg')}" if (v("sim_duration_ms_avg") or v("learn_duration_ms_avg")) else "",
+        ])
+    if g == "memorymaze_hybrid":
+        return join_parts([
+            f"pairs_left={v('avg_pairs_left_end')}" if v("avg_pairs_left_end") else "",
+            f"cleared={v('avg_pairs_cleared_avg')}" if v("avg_pairs_cleared_avg") else "",
+            f"match={v('avg_matches_avg')}" if v("avg_matches_avg") else "",
+            f"claim={v('avg_claims_avg')}" if v("avg_claims_avg") else "",
+            f"pit={v('avg_pit_hits_avg')}" if v("avg_pit_hits_avg") else "",
+            f"learn={v('learn_items_sum')}" if v("learn_items_sum") else "",
+            f"pol={v('policy_used_sum')}/{v('policy_fallback_sum')}" if (v("policy_used_sum") or v("policy_fallback_sum")) else "",
+        ])
+    if g == "pong":
+        return join_parts([f"ticks={v('avg_ticks_avg')}" if v("avg_ticks_avg") else ""])
+    if g == "snake3d":
+        return join_parts([
+            f"food={v('avg_food_avg')}" if v("avg_food_avg") else "",
+            f"high={v('high_food_avg')}" if v("high_food_avg") else "",
+            f"len={v('avg_length_end_avg')}" if v("avg_length_end_avg") else "",
+            f"steps={v('avg_steps_avg')}" if v("avg_steps_avg") else "",
+            f"learn={v('learned_items_sum')}/{v('learn_items_sum')}" if (v("learned_items_sum") or v("learn_items_sum")) else "",
+            f"ev={v('pos_items_sum')}/{v('neg_items_sum')}/{v('draw_items_sum')}" if (v("pos_items_sum") or v("neg_items_sum") or v("draw_items_sum")) else "",
+            f"z={v('danger_z_rate_avg')}" if v("danger_z_rate_avg") else "",
+            f"food_z={v('food_up_signal_rate_avg')}" if v("food_up_signal_rate_avg") else "",
+            f"vert={v('vertical_action_rate_avg')}" if v("vertical_action_rate_avg") else "",
+            f"fit={v('template_fit_score_avg')}" if v("template_fit_score_avg") else "",
+            f"pol={v('policy_accepted_sum')}/{v('policy_seen_sum')}/{v('policy_fallback_sum')}" if (v("policy_accepted_sum") or v("policy_seen_sum") or v("policy_fallback_sum")) else "",
+            f"rej={v('policy_rejected_n_sum')}/{v('policy_rejected_q_sum')}/{v('policy_rejected_unsafe_sum')}" if (v("policy_rejected_n_sum") or v("policy_rejected_q_sum") or v("policy_rejected_unsafe_sum")) else "",
+            f"guard={v('policy_guarded_sum')}" if v("policy_guarded_sum") else "",
+            f"sc={v('snapchains_written_sum')}" if v("snapchains_written_sum") else "",
+            f"ms={v('sim_duration_ms_avg')}/{v('learn_duration_ms_avg')}" if (v("sim_duration_ms_avg") or v("learn_duration_ms_avg")) else "",
+        ])
+    if g == "snake":
+        deaths = ""
+        if v("death_wall_sum") or v("death_self_sum"):
+            deaths = f"death={v('death_wall_sum')}/{v('death_self_sum')}"
+        return join_parts([
+            f"food={v('avg_food_avg')}" if v("avg_food_avg") else "",
+            f"high={v('high_food_avg')}" if v("high_food_avg") else "",
+            f"len={v('avg_length_end_avg')}" if v("avg_length_end_avg") else "",
+            f"steps={v('avg_steps_avg')}" if v("avg_steps_avg") else "",
+            deaths,
+            f"learn={v('learn_items_sum')}" if v("learn_items_sum") else "",
+            f"pol={v('policy_used_sum')}/{v('policy_fallback_sum')}" if (v("policy_used_sum") or v("policy_fallback_sum")) else "",
+            f"guard={v('policy_guarded_sum')}" if v("policy_guarded_sum") else "",
+        ])
+    if g == "flappy":
+        deaths = ""
+        if v("death_world_sum") or v("death_pipe_sum") or v("death_max_steps_sum"):
+            deaths = f"death={v('death_world_sum')}/{v('death_pipe_sum')}/{v('death_max_steps_sum')}"
+        credit = ""
+        if v("pass_credit_items_sum") or v("death_credit_items_sum"):
+            credit = f"credit={v('pass_credit_items_sum')}/{v('death_credit_items_sum')}"
+        return join_parts([
+            f"score={v('avg_score_avg')}" if v("avg_score_avg") else "",
+            f"high={v('high_score_avg')}" if v("high_score_avg") else "",
+            f"steps={v('avg_steps_avg')}" if v("avg_steps_avg") else "",
+            f"high_steps={v('high_steps_avg')}" if v("high_steps_avg") else "",
+            f"pass={v('passes_sum')}" if v("passes_sum") else "",
+            deaths,
+            f"early_world={v('early_world_deaths_sum')}" if v("early_world_deaths_sum") else "",
+            f"learn={v('learn_items_sum')}" if v("learn_items_sum") else "",
+            credit,
+            f"pol={v('policy_used_sum')}/{v('policy_fallback_sum')}" if (v("policy_used_sum") or v("policy_fallback_sum")) else "",
+            f"guard={v('policy_guarded_sum')}" if v("policy_guarded_sum") else "",
+            f"qrej={v('policy_q_rejected_sum')}" if v("policy_q_rejected_sum") else "",
+        ])
+    if g == "ctf":
+        return join_parts([
+            f"score={v('avg_score_A_avg')}/{v('avg_score_B_avg')}" if (v("avg_score_A_avg") or v("avg_score_B_avg")) else "",
+            f"steps={v('avg_steps_avg')}" if v("avg_steps_avg") else "",
+            f"events=s{v('scores_A_sum')}/{v('scores_B_sum')}" if (v("scores_A_sum") or v("scores_B_sum")) else "",
+            f"carry={v('carries_A_sum')}/{v('carries_B_sum')}" if (v("carries_A_sum") or v("carries_B_sum")) else "",
+            f"drop={v('drops_A_sum')}/{v('drops_B_sum')}" if (v("drops_A_sum") or v("drops_B_sum")) else "",
+            f"learn={v('learn_items_sum')}" if v("learn_items_sum") else "",
+            f"credit={v('score_credit_items_sum')}/{v('carry_credit_items_sum')}/{v('tag_credit_items_sum')}/{v('terminal_credit_items_sum')}" if (v("score_credit_items_sum") or v("carry_credit_items_sum") or v("tag_credit_items_sum") or v("terminal_credit_items_sum")) else "",
+            f"ms={v('sim_duration_ms_avg')}/{v('learn_duration_ms_avg')}" if (v("sim_duration_ms_avg") or v("learn_duration_ms_avg")) else "",
+            f"win={v('score_credit_steps_avg')}/{v('carry_credit_steps_avg')}/{v('tag_credit_steps_avg')}/{v('terminal_credit_steps_avg')}" if (v("score_credit_steps_avg") or v("carry_credit_steps_avg") or v("tag_credit_steps_avg") or v("terminal_credit_steps_avg")) else "",
+            f"dbw={v('policy_dbw_chunk_avg')}" if v("policy_dbw_chunk_avg") else "",
+            f"pol={v('policy_accepted_sum')}/{v('policy_fallback_sum')}" if (v("policy_accepted_sum") or v("policy_fallback_sum")) else "",
+            f"seen={v('policy_seen_sum')}" if v("policy_seen_sum") else "",
+            f"rej={v('policy_rejected_n_sum')}/{v('policy_rejected_q_sum')}/{v('policy_rejected_unsafe_sum')}" if (v("policy_rejected_n_sum") or v("policy_rejected_q_sum") or v("policy_rejected_unsafe_sum")) else "",
+        ])
+    if g == "hideseek":
+        return join_parts([
+            f"steps={v('avg_steps_avg')}" if v("avg_steps_avg") else "",
+            f"found={v('avg_found_avg')}" if v("avg_found_avg") else "",
+            f"cap={v('captures_sum')}" if v("captures_sum") else "",
+            f"target={v('target_known_steps_sum')}" if v("target_known_steps_sum") else "",
+            f"path={v('path_moves_played_sum')}" if v("path_moves_played_sum") else "",
+            f"learn={v('learned_items_sum')}/{v('learn_items_sum')}" if (v("learned_items_sum") or v("learn_items_sum")) else "",
+            f"credit={v('capture_credit_items_sum')}/{v('path_credit_items_sum')}/{v('missed_path_credit_items_sum')}/{v('timeout_credit_items_sum')}/{v('terminal_credit_items_sum')}" if (v("capture_credit_items_sum") or v("path_credit_items_sum") or v("missed_path_credit_items_sum") or v("timeout_credit_items_sum") or v("terminal_credit_items_sum")) else "",
+            f"pol={v('policy_accepted_sum')}/{v('policy_seen_sum')}/{v('policy_fallback_sum')}" if (v("policy_accepted_sum") or v("policy_seen_sum") or v("policy_fallback_sum")) else "",
+            f"rej={v('policy_rejected_n_sum')}/{v('policy_rejected_q_sum')}/{v('policy_rejected_unsafe_sum')}" if (v("policy_rejected_n_sum") or v("policy_rejected_q_sum") or v("policy_rejected_unsafe_sum")) else "",
+            f"cov={v('pro_rules_known_avg')}/{v('pro_samples_known_avg')}" if (v("pro_rules_known_avg") or v("pro_samples_known_avg")) else "",
+            f"ms={v('sim_duration_ms_avg')}/{v('learn_duration_ms_avg')}" if (v("sim_duration_ms_avg") or v("learn_duration_ms_avg")) else "",
+        ])
+    return ""
+
+
+
 @games_bp.route("/api/daily_summary", methods=["GET"])
 def api_daily_summary():
     """Daily summary of game episodes for /games.
@@ -169,12 +1163,9 @@ def api_daily_summary():
       • Read-only aggregation; no schema changes.
       • Close DB connections deterministically (avoid locks).
       • Works across heterogeneous games by aggregating common metrics if present.
+      • Preserve game-specific learning signals without forcing every game into
+        the same outcome-only schema.
     """
-    # NOTE
-    #   This endpoint is intentionally read-only and must be stable even if
-    #   SQLite row factories differ (tuple vs sqlite3.Row vs dict-like).
-    #   Therefore we normalize rows using cursor.description and access values
-    #   by column name.
     from flask import request
 
     def _safe_div(a: Any, b: Any) -> Optional[float]:
@@ -215,12 +1206,18 @@ def api_daily_summary():
 
     ts_min = int(time.time()) - days * 86400
 
+    # Static allow-list: metric names are controlled by DAILY_METRIC_KEYS above,
+    # not by request parameters. This keeps the dynamic pivot SQL injection-safe.
+    metric_select_sql = ",\n                  ".join(
+        f"MAX(CASE WHEN m.key='{k}' THEN m.value END) AS {k}" for k in DAILY_METRIC_KEYS
+    )
+
     rows: List[Dict[str, Any]] = []
     try:
         with sql_manager.get_conn(None) as conn:
             cur = conn.cursor()
             cur.execute(
-                """
+                f"""
                 SELECT
                   e.id,
                   e.kind,
@@ -228,23 +1225,7 @@ def api_daily_summary():
                   e.ts_end,
                   date(e.ts_start,'unixepoch','localtime') AS day,
                   (e.ts_end - e.ts_start) AS dt_s,
-                  MAX(CASE WHEN m.key='duration_ms' THEN m.value END) AS duration_ms,
-                  MAX(CASE WHEN m.key='avg_reward' THEN m.value END) AS avg_reward,
-                  MAX(CASE WHEN m.key='avg_score' THEN m.value END) AS avg_score,
-        MAX(CASE WHEN m.key='avg_return' THEN m.value END) AS avg_return,
-        MAX(CASE WHEN m.key='avg_found' THEN m.value END) AS avg_found,
-        MAX(CASE WHEN m.key='avg_ticks' THEN m.value END) AS avg_ticks,
-        MAX(CASE WHEN m.key='avg_score_A' THEN m.value END) AS avg_score_A,
-        MAX(CASE WHEN m.key='avg_score_B' THEN m.value END) AS avg_score_B,
-MAX(CASE WHEN m.key='wins_p1' THEN m.value END) AS wins_p1,
-                  MAX(CASE WHEN m.key='wins_p2' THEN m.value END) AS wins_p2,
-                  MAX(CASE WHEN m.key='wins_oroma' THEN m.value END) AS wins_oroma,
-                  MAX(CASE WHEN m.key='wins_human' THEN m.value END) AS wins_human,
-                  MAX(CASE WHEN m.key='draws' THEN m.value END) AS draws,
-                  MAX(CASE WHEN m.key='avg_pairs_left_end' THEN m.value END) AS avg_pairs_left_end,
-                  MAX(CASE WHEN m.key='avg_strikes_p1' THEN m.value END) AS avg_strikes_p1,
-                  MAX(CASE WHEN m.key='avg_strikes_p2' THEN m.value END) AS avg_strikes_p2,
-                  MAX(CASE WHEN m.key='avg_strikes_p3' THEN m.value END) AS avg_strikes_p3
+                  {metric_select_sql}
                 FROM episodes e
                 LEFT JOIN episodic_metrics m ON m.episode_id = e.id
                 WHERE e.kind LIKE 'game:%'
@@ -274,33 +1255,16 @@ MAX(CASE WHEN m.key='wins_p1' THEN m.value END) AS wins_p1,
 
             for row in cur.fetchall():
                 m = _row_to_dict(row)
-                rows.append(
-                    {
-                        "kind": m.get("kind") or "",
-                        "ts_start": int(m.get("ts_start") or 0),
-                        "ts_end": int(m.get("ts_end") or 0),
-                        "day": m.get("day") or "",
-                        "dt_s": int(m.get("dt_s") or 0),
-                        "duration_ms": float(m["duration_ms"]) if m.get("duration_ms") is not None else None,
-                        "avg_reward": float(m["avg_reward"]) if m.get("avg_reward") is not None else None,
-                        # Raw score-like metrics (best-effort; used later for aggregation)
-                        "avg_score": float(m["avg_score"]) if m.get("avg_score") is not None else None,
-                        "avg_return": float(m["avg_return"]) if m.get("avg_return") is not None else None,
-                        "avg_found": float(m["avg_found"]) if m.get("avg_found") is not None else None,
-                        "avg_ticks": float(m["avg_ticks"]) if m.get("avg_ticks") is not None else None,
-                        "avg_score_A": float(m["avg_score_A"]) if m.get("avg_score_A") is not None else None,
-                        "avg_score_B": float(m["avg_score_B"]) if m.get("avg_score_B") is not None else None,
-                        "wins_p1": float(m["wins_p1"]) if m.get("wins_p1") is not None else None,
-                        "wins_p2": float(m["wins_p2"]) if m.get("wins_p2") is not None else None,
-                        "wins_oroma": float(m["wins_oroma"]) if m.get("wins_oroma") is not None else None,
-                        "wins_human": float(m["wins_human"]) if m.get("wins_human") is not None else None,
-                        "draws": float(m["draws"]) if m.get("draws") is not None else None,
-                        "avg_pairs_left_end": float(m["avg_pairs_left_end"]) if m.get("avg_pairs_left_end") is not None else None,
-                        "avg_strikes_p1": float(m["avg_strikes_p1"]) if m.get("avg_strikes_p1") is not None else None,
-                        "avg_strikes_p2": float(m["avg_strikes_p2"]) if m.get("avg_strikes_p2") is not None else None,
-                        "avg_strikes_p3": float(m["avg_strikes_p3"]) if m.get("avg_strikes_p3") is not None else None,
-                    }
-                )
+                item: Dict[str, Any] = {
+                    "kind": m.get("kind") or "",
+                    "ts_start": int(m.get("ts_start") or 0),
+                    "ts_end": int(m.get("ts_end") or 0),
+                    "day": m.get("day") or "",
+                    "dt_s": int(m.get("dt_s") or 0),
+                }
+                for mk in DAILY_METRIC_KEYS:
+                    item[mk] = _to_float(m.get(mk))
+                rows.append(item)
     except Exception as e:
         log.exception("/games/api/daily_summary failed")
         return jsonify({"ok": False, "err": f"{type(e).__name__}: {e}", "days": days, "rows": []})
@@ -328,26 +1292,14 @@ MAX(CASE WHEN m.key='wins_p1' THEN m.value END) AS wins_p1,
                 "variant": variant,
                 "policy_n": 0,
                 "explore_n": 0,
-                # best-effort local time window (for UI visibility)
                 "ts_start_min": 0,
                 "ts_end_max": 0,
                 "dt_s_sum": 0,
                 "dt_s_n": 0,
-                "duration_ms_sum": 0.0,
-                "duration_ms_n": 0,
-                "avg_reward_sum": 0.0,
-                "avg_reward_n": 0,
                 "wins": 0.0,
                 "losses": 0.0,
                 "draws": 0.0,
-                "avg_pairs_left_end_sum": 0.0,
-                "avg_pairs_left_end_n": 0,
-                "avg_strikes_p1_sum": 0.0,
-                "avg_strikes_p1_n": 0,
-                "avg_strikes_p2_sum": 0.0,
-                "avg_strikes_p2_n": 0,
-                "avg_strikes_p3_sum": 0.0,
-                "avg_strikes_p3_n": 0,
+                "wins_sources": {},
             }
             agg[key] = a
 
@@ -356,7 +1308,6 @@ MAX(CASE WHEN m.key='wins_p1' THEN m.value END) AS wins_p1,
         elif batch == "explore":
             a["explore_n"] += 1
 
-        # best-effort daily window (min start / max end)
         try:
             ts0 = int(r.get("ts_start") or 0)
             ts1 = int(r.get("ts_end") or 0)
@@ -375,119 +1326,121 @@ MAX(CASE WHEN m.key='wins_p1' THEN m.value END) AS wins_p1,
             a["dt_s_sum"] += dt_s
             a["dt_s_n"] += 1
 
-        dms = r.get("duration_ms")
-        if isinstance(dms, (int, float)) and dms >= 0:
-            a["duration_ms_sum"] += float(dms)
-            a["duration_ms_n"] += 1
+        # Aggregate every known metric into generic *_sum / *_n / *_seen buckets.
+        # Sum metrics keep totals. Average metrics preserve both sum and count so
+        # the frontend receives stable daily averages.
+        for mk in DAILY_METRIC_KEYS:
+            val = r.get(mk)
+            if not isinstance(val, (int, float)):
+                continue
+            a[f"{mk}_sum"] = float(a.get(f"{mk}_sum") or 0.0) + float(val)
+            a[f"{mk}_seen"] = int(a.get(f"{mk}_seen") or 0) + 1
+            if mk in AVG_METRIC_KEYS:
+                a[f"{mk}_n"] = int(a.get(f"{mk}_n") or 0) + 1
 
-        ar = r.get("avg_reward")
-        if isinstance(ar, (int, float)):
-            a["avg_reward_sum"] += float(ar)
-            a["avg_reward_n"] += 1
+        ow, ol, od, osrc = _normalise_outcome_counts(game, variant, r)
+        a["wins"] += ow
+        a["losses"] += ol
+        a["draws"] += od
+        if osrc:
+            sources = a.setdefault("wins_sources", {})
+            sources[osrc] = int(sources.get(osrc, 0) or 0) + 1
 
-
-        # --- Score/Performance metrics (best-effort, per game) ---
-        # Some games don't produce avg_reward. For UI/telemetry we also track a generic score_avg
-        # and a highscore (best episode value) based on whichever score-like metrics exist.
-        score_key = None
+        # Preserve the previous UI semantics: highscore means best episode score
+        # inside the day/game/variant bucket, not the daily average. The generic
+        # score_avg below remains the mean; highscore is the maximum comparable
+        # score-like value available for this runner.
         score_val = None
-
-        # Primary numeric score-like metrics
-        for _k in ("avg_score", "avg_return", "avg_found", "avg_ticks"):
-            _v = r.get(_k)
-            if isinstance(_v, (int, float)):
-                score_key = _k
-                score_val = float(_v)
+        for sk in ("score_cp", "high_score", "avg_score_end", "avg_score", "avg_return", "avg_found", "avg_ticks"):
+            rv = r.get(sk)
+            if isinstance(rv, (int, float)):
+                score_val = float(rv)
                 break
-
-        # CTF has two channels; we aggregate both for display and for comparisons (A+B).
-        scoreA = r.get("avg_score_A")
-        scoreB = r.get("avg_score_B")
-        if score_val is None and (isinstance(scoreA, (int, float)) or isinstance(scoreB, (int, float))):
-            score_key = "avg_score_A/B"
-            a_val = float(scoreA) if isinstance(scoreA, (int, float)) else 0.0
-            b_val = float(scoreB) if isinstance(scoreB, (int, float)) else 0.0
-            score_val = a_val + b_val
-            a.setdefault("scoreA_sum", 0.0); a.setdefault("scoreA_n", 0)
-            a.setdefault("scoreB_sum", 0.0); a.setdefault("scoreB_n", 0)
-            if isinstance(scoreA, (int, float)):
-                a["scoreA_sum"] += float(scoreA); a["scoreA_n"] += 1
-            if isinstance(scoreB, (int, float)):
-                a["scoreB_sum"] += float(scoreB); a["scoreB_n"] += 1
-
+        if score_val is None:
+            sa = r.get("avg_score_A")
+            sb = r.get("avg_score_B")
+            if isinstance(sa, (int, float)) or isinstance(sb, (int, float)):
+                score_val = float(sa or 0.0) + float(sb or 0.0)
         if score_val is not None:
-            a.setdefault("score_sum", 0.0); a.setdefault("score_n", 0)
-            a["score_sum"] += float(score_val); a["score_n"] += 1
-            a["score_key"] = score_key
-
-            # highscore = best episode score within the day+game+variant group
-            a.setdefault("highscore", None)
-            if a["highscore"] is None or score_val > float(a["highscore"]):
+            prev = a.get("highscore")
+            if prev is None or float(score_val) > float(prev):
                 a["highscore"] = float(score_val)
-
-        if r.get("wins_p1") is not None or r.get("wins_p2") is not None:
-            a["wins"] += float(r.get("wins_p1") or 0.0)
-            a["losses"] += float(r.get("wins_p2") or 0.0)
-        elif r.get("wins_oroma") is not None or r.get("wins_human") is not None:
-            a["wins"] += float(r.get("wins_oroma") or 0.0)
-            a["losses"] += float(r.get("wins_human") or 0.0)
-        a["draws"] += float(r.get("draws") or 0.0)
-
-        apl = r.get("avg_pairs_left_end")
-        if isinstance(apl, (int, float)):
-            a["avg_pairs_left_end_sum"] += float(apl)
-            a["avg_pairs_left_end_n"] += 1
-
-        s1 = r.get("avg_strikes_p1")
-        if isinstance(s1, (int, float)):
-            a["avg_strikes_p1_sum"] += float(s1)
-            a["avg_strikes_p1_n"] += 1
-        s2 = r.get("avg_strikes_p2")
-        if isinstance(s2, (int, float)):
-            a["avg_strikes_p2_sum"] += float(s2)
-            a["avg_strikes_p2_n"] += 1
-        s3 = r.get("avg_strikes_p3")
-        if isinstance(s3, (int, float)):
-            a["avg_strikes_p3_sum"] += float(s3)
-            a["avg_strikes_p3_n"] += 1
 
     out_rows: List[Dict[str, Any]] = []
     for a in agg.values():
         dt_s_avg = (a["dt_s_sum"] / a["dt_s_n"]) if a["dt_s_n"] else 0.0
-        dur_ms_avg = (a["duration_ms_sum"] / a["duration_ms_n"]) if a["duration_ms_n"] else None
-        ar_avg = (a["avg_reward_sum"] / a["avg_reward_n"]) if a["avg_reward_n"] else None
-        apl_avg = (a["avg_pairs_left_end_sum"] / a["avg_pairs_left_end_n"]) if a["avg_pairs_left_end_n"] else None
-        s1_avg = (a["avg_strikes_p1_sum"] / a["avg_strikes_p1_n"]) if a["avg_strikes_p1_n"] else None
-        s2_avg = (a["avg_strikes_p2_sum"] / a["avg_strikes_p2_n"]) if a["avg_strikes_p2_n"] else None
-        s3_avg = (a["avg_strikes_p3_sum"] / a["avg_strikes_p3_n"]) if a["avg_strikes_p3_n"] else None
-        out_rows.append(
-            {
-                "day": a["day"],
-                "game": a["game"],
-                "variant": a["variant"],
-                "policy_n": a["policy_n"],
-                "explore_n": a["explore_n"],
-                "n_total": int(a["policy_n"] + a["explore_n"]),
-                "start": _fmt_time_local(a.get("ts_start_min") or 0),
-                "end": _fmt_time_local(a.get("ts_end_max") or 0),
-                "dt_s_avg": round(dt_s_avg, 2),
-                "duration_ms_avg": round(dur_ms_avg, 2) if dur_ms_avg is not None else None,
-                "avg_reward": round(ar_avg, 6) if ar_avg is not None else None,
-                # Score-like metrics (best-effort)
-                "score_avg": _r6(_safe_div(a.get("score_sum"), a.get("score_n"))),
-                "score_key": a.get("score_key"),
-                "highscore": _r6(a.get("highscore")),
-                "scoreA_avg": _r6(_safe_div(a.get("scoreA_sum"), a.get("scoreA_n"))),
-                "scoreB_avg": _r6(_safe_div(a.get("scoreB_sum"), a.get("scoreB_n"))),
-                "wins": a["wins"],
-                "losses": a["losses"],
-                "draws": a["draws"],
-                "avg_pairs_left_end": round(apl_avg, 3) if apl_avg is not None else None,
-                "avg_strikes_p1": round(s1_avg, 3) if s1_avg is not None else None,
-                "avg_strikes_p2": round(s2_avg, 3) if s2_avg is not None else None,
-                "avg_strikes_p3": round(s3_avg, 3) if s3_avg is not None else None,
-            }
-        )
+
+        # Score/Performance metrics (best-effort, per game). The generic score
+        # column remains backwards compatible, but the compact KPI field below
+        # carries richer game-specific information.
+        score_key = None
+        score_avg = None
+        highscore = None
+        if a.get("score_cp_seen"):
+            score_key = "score_cp"
+            score_avg = _metric_avg(a, "score_cp")
+            highscore = score_avg
+        elif a.get("avg_score_end_seen"):
+            score_key = "avg_score_end"
+            score_avg = _metric_avg(a, "avg_score_end")
+            highscore = score_avg
+        else:
+            for sk in ("high_score", "avg_score", "avg_return", "avg_found", "avg_ticks"):
+                if a.get(f"{sk}_seen"):
+                    score_key = sk
+                    score_avg = _metric_avg(a, sk)
+                    highscore = score_avg
+                    break
+
+        scoreA_avg = _metric_avg(a, "avg_score_A")
+        scoreB_avg = _metric_avg(a, "avg_score_B")
+        if score_avg is None and (scoreA_avg is not None or scoreB_avg is not None):
+            score_key = "avg_score_A/B"
+            score_avg = float(scoreA_avg or 0.0) + float(scoreB_avg or 0.0)
+            highscore = score_avg
+
+        out: Dict[str, Any] = {
+            "day": a["day"],
+            "game": a["game"],
+            "variant": a["variant"],
+            "policy_n": a["policy_n"],
+            "explore_n": a["explore_n"],
+            "n_total": int(a["policy_n"] + a["explore_n"]),
+            "start": _fmt_time_local(a.get("ts_start_min") or 0),
+            "end": _fmt_time_local(a.get("ts_end_max") or 0),
+            "dt_s_avg": round(dt_s_avg, 2),
+            "duration_ms_avg": _r6(_metric_avg(a, "duration_ms")),
+            "avg_reward": _r6(_metric_avg(a, "avg_reward")),
+            "score_avg": _r6(score_avg),
+            "score_key": score_key,
+            "highscore": _r6(a.get("highscore")),
+            "scoreA_avg": _r6(scoreA_avg),
+            "scoreB_avg": _r6(scoreB_avg),
+            "wins": a["wins"],
+            "losses": a["losses"],
+            "draws": a["draws"],
+            "wins_source": ",".join(sorted((a.get("wins_sources") or {}).keys())),
+            "avg_pairs_left_end": _r6(_metric_avg(a, "avg_pairs_left_end")),
+            "avg_pairs_cleared": _r6(_metric_avg(a, "avg_pairs_cleared")),
+            "avg_strikes_p1": _r6(_metric_avg(a, "avg_strikes_p1")),
+            "avg_strikes_p2": _r6(_metric_avg(a, "avg_strikes_p2")),
+            "avg_strikes_p3": _r6(_metric_avg(a, "avg_strikes_p3")),
+        }
+
+        # Expose normalized metric details for API users and for the compact KPI
+        # table column. Sums and averages use explicit suffixes.
+        for mk in DAILY_METRIC_KEYS:
+            if mk in SUM_METRIC_KEYS:
+                v = _metric_sum(a, mk)
+                if v is not None:
+                    out[f"{mk}_sum"] = _r6(v)
+            else:
+                v = _metric_avg(a, mk)
+                if v is not None:
+                    out[f"{mk}_avg"] = _r6(v)
+
+        out["kpi"] = _compact_kpi(str(out.get("game") or ""), str(out.get("variant") or ""), out)
+        out_rows.append(out)
 
     out_rows.sort(key=lambda x: (x.get("day", ""), x.get("game", ""), x.get("variant", "")), reverse=True)
     return jsonify({
@@ -500,9 +1453,144 @@ MAX(CASE WHEN m.key='wins_p1' THEN m.value END) AS wins_p1,
     })
 
 
+@games_bp.route("/chesspro/", methods=["GET"])
+def chesspro_page() -> str:
+    """Small ChessPro status page under /games/chesspro/.
+
+    This is intentionally not a full board UI. ChessPro is headless and learns
+    from long-search decisions; therefore the useful UI is its latest episode,
+    policy_rules status and decision-learning telemetry.
+    """
+    summary: Dict[str, Any] = {"ok": True, "latest": None, "policy": {}, "err": ""}
+    try:
+        with sql_manager.get_conn(None) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, ts_start, ts_end, kind, label, meta_json
+                FROM episodes
+                WHERE kind LIKE 'game:chess_pro:%'
+                ORDER BY ts_start DESC
+                LIMIT 1
+                """
+            )
+            cols = [d[0] for d in (cur.description or [])]
+            row = cur.fetchone()
+            if row is not None:
+                try:
+                    latest = {k: row[k] for k in cols}
+                except Exception:
+                    latest = {cols[i]: row[i] for i in range(min(len(cols), len(row)))}
+                eid = int(latest.get("id") or 0)
+                cur.execute(
+                    "SELECT key, value FROM episodic_metrics WHERE episode_id=? ORDER BY key",
+                    (eid,),
+                )
+                metrics = {str(k): _to_float(v) for k, v in cur.fetchall()}
+                latest["start"] = _fmt_time_local(latest.get("ts_start") or 0)
+                latest["end"] = _fmt_time_local(latest.get("ts_end") or 0)
+                latest["metrics"] = metrics
+                summary["latest"] = latest
+
+            cur.execute(
+                """
+                SELECT
+                  COUNT(*) AS rules,
+                  COALESCE(SUM(n),0) AS n_sum,
+                  COALESCE(SUM(pos),0) AS pos_sum,
+                  COALESCE(SUM(neg),0) AS neg_sum,
+                  COALESCE(SUM(draw),0) AS draw_sum,
+                  COALESCE(AVG(q),0.0) AS q_avg,
+                  COALESCE(MIN(q),0.0) AS q_min,
+                  COALESCE(MAX(q),0.0) AS q_max,
+                  COALESCE(MAX(last_ts),0) AS last_ts
+                FROM policy_rules
+                WHERE namespace='game:chess_pro'
+                """
+            )
+            cols = [d[0] for d in (cur.description or [])]
+            prow = cur.fetchone()
+            if prow is not None:
+                try:
+                    policy = {k: prow[k] for k in cols}
+                except Exception:
+                    policy = {cols[i]: prow[i] for i in range(min(len(cols), len(prow)))}
+                policy["last_time"] = _fmt_time_local(policy.get("last_ts") or 0)
+                summary["policy"] = policy
+    except Exception as e:
+        log.exception("/games/chesspro failed")
+        summary = {"ok": False, "latest": None, "policy": {}, "err": f"{type(e).__name__}: {e}"}
+
+    return render_template_string(
+        """
+{% extends "base.html" %}
+{% block content %}
+<main style="padding:2rem; max-width:1100px; margin:auto;">
+  <h1>♟️ ORÓMA – ChessPro</h1>
+  <p class="text-muted">
+    Headless Long-Search-Schach aus <code>core/chess_pro/</code>. ChessPro wird hier als normales Spiel geführt;
+    entscheidend sind Positions-Trace, Centipawn-Bewertung, Rule-Hits und geformte Lernitems je Halbzug.
+  </p>
+  {% if not summary.ok %}
+    <div class="alert alert-danger">Fehler: {{ summary.err }}</div>
+  {% endif %}
+
+  <h3 class="mt-4">Letzter Lauf</h3>
+  {% if summary.latest %}
+    <table class="table table-dark table-striped table-sm">
+      <tbody>
+        <tr><th>Kind</th><td><code>{{ summary.latest.kind }}</code></td></tr>
+        <tr><th>Zeit</th><td>{{ summary.latest.start }} – {{ summary.latest.end }}</td></tr>
+        <tr><th>Label</th><td>{{ summary.latest.label or '–' }}</td></tr>
+      </tbody>
+    </table>
+
+    <h4 class="mt-4">Lern-/Suchmetriken</h4>
+    <table class="table table-dark table-striped table-sm">
+      <thead><tr><th>Metrik</th><th class="text-end">Wert</th></tr></thead>
+      <tbody>
+      {% for k in ['score_cp','plies','nodes','qnodes','total_nodes','search_ms','nps','depth_reached_avg','depth_reached_max','rule_hits','learn_items','learn_items_pos','learn_items_neg','learn_items_draw','shaped_pos','shaped_neg','shaped_draw','snapchain_steps','wins','wins_white','wins_black','draws'] %}
+        <tr><td><code>{{ k }}</code></td><td class="text-end">{{ summary.latest.metrics.get(k, '') }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="alert alert-warning">Noch kein ChessPro-Lauf in <code>episodes</code> gefunden.</div>
+  {% endif %}
+
+  <h3 class="mt-4">Policy Rules</h3>
+  <table class="table table-dark table-striped table-sm">
+    <tbody>
+      <tr><th>Namespace</th><td><code>game:chess_pro</code></td></tr>
+      <tr><th>Regeln</th><td>{{ summary.policy.rules or 0 }}</td></tr>
+      <tr><th>n_sum</th><td>{{ summary.policy.n_sum or 0 }}</td></tr>
+      <tr><th>pos / neg / draw</th><td>{{ summary.policy.pos_sum or 0 }} / {{ summary.policy.neg_sum or 0 }} / {{ summary.policy.draw_sum or 0 }}</td></tr>
+      <tr><th>q Ø / min / max</th><td>{{ summary.policy.q_avg or 0 }} / {{ summary.policy.q_min or 0 }} / {{ summary.policy.q_max or 0 }}</td></tr>
+      <tr><th>letztes Update</th><td>{{ summary.policy.last_time or '–' }}</td></tr>
+    </tbody>
+  </table>
+
+  <p><a class="btn btn-sm btn-outline-primary" href="/games/">← zurück zur Spieleliste</a></p>
+</main>
+{% endblock %}
+        """,
+        summary=summary,
+    )
+
+
 def register_games(app) -> None:
     ok = 0
     for g in GAMES:
+        if g.module == "__internal__":
+            # Internal status-only games live under games_bp. They are marked as
+            # available here, while games_bp itself is registered once below.
+            g.url = (g.url_hint or f"/games/{g.key}").rstrip("/") or "/"
+            g.registered_as = "games"
+            g.error = None
+            ok += 1
+            log.debug(f"Internes Spiel registriert: {g.title} @ {g.url}")
+            continue
+
         bp, err = _import_blueprint(g.module, g.attr_fallbacks)
         if bp is None:
             g.error = err

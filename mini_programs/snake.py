@@ -39,6 +39,7 @@ import hashlib
 from typing import List, Tuple, Optional
 import logging
 from core.log_guard import log_suppressed
+from core import execution_mode
 
 # pygame (GUI); bei headless notfalls nur Console-Loop nutzen
 try:
@@ -281,7 +282,7 @@ class UP:
         self.impl = None
         if _HAVE_UP and hasattr(upol, "Policy"):
             try:
-                self.impl = upol.Policy(namespace=self.namespace)  # type: ignore[attr-defined]
+                self.impl = upol.Policy(namespace=self.namespace, writer_id="writer:mini_programs.snake:legacy")  # type: ignore[attr-defined]
             except Exception:
                 self.impl = None
 
@@ -296,6 +297,15 @@ class UP:
         return None
 
     def learn_many(self, items: List[dict]):
+        decision = execution_mode.legacy_policy_training_allowed(
+            writer_id="writer:mini_programs.snake:legacy", namespace=self.namespace
+        )
+        if not decision.allowed:
+            print(
+                f"[mini_programs.snake] legacy policy learning blocked: "
+                f"mode={decision.execution_mode} namespace={decision.namespace} reason={decision.reason}"
+            )
+            return
         # Impl lernen lassen
         try:
             if self.impl and hasattr(self.impl, "learn"):

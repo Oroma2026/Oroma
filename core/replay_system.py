@@ -12,7 +12,7 @@
 #
 # ÜBERBLICK / ZWECK
 # ─────────────────
-# Dieses Modul implementiert das **produktive Replay-System** in ORÓMA.
+# Dieses Modul implementiert das historische Replay-System in ORÓMA.
 # Es spielt eine SnapChain (Sequenz von events/patterns) deterministisch ab und
 # kann dabei:
 #   - Replay starten (start)
@@ -22,6 +22,49 @@
 #
 # Der Replay-Lauf passiert in einem **dedizierten Thread** (daemon=True), damit
 # UI/AgentLoop nicht blockieren.
+#
+# ARCHITEKTURSTATUS / LEGACY-KOMPATIBILITÄT
+# ─────────────────────────────────────────
+# Status seit Replay-Konsolidierung 2026-06-25:
+#   Dieses Modul ist **nicht mehr die autoritative Replay-Core-Komponente**.
+#   Es bleibt bewusst als Legacy-Kompatibilitätsmodul im Projekt erhalten.
+#
+# Autoritative Replay-Core-Komponente:
+#   core/replay_manager.py
+#
+# Architekturentscheidung / Dokumentation:
+#   docs/REPLAY_CONSOLIDATION_PLAN.md
+#
+# Begründung für das Beibehalten dieser Datei:
+#   - ORÓMA ist historisch gewachsen; externe oder manuelle Aufrufer können
+#     weiterhin `core.replay_system` importieren.
+#   - Ein sofortiges Entfernen würde funktionierende Diagnose-, Test- oder
+#     Wartungspfade unnötig riskieren.
+#   - Die Konsolidierung soll nachvollziehbar, nicht-destruktiv und schrittweise
+#     erfolgen.
+#
+# Migrationsstand:
+#   - `ui/replay_ui.py` verwendet nach der Konsolidierung `core.replay_manager`.
+#   - `ui/replay_api.py` verwendet ebenfalls `core.replay_manager`.
+#   - In der Phase-2-Analyse wurden keine produktiven Python-Aufrufer dieses
+#     Moduls als autoritative Replay-Schicht identifiziert.
+#
+# Verbindliche Entwicklungsregel:
+#   - Neue Replay-Funktionalität wird ausschließlich in `core/replay_manager.py`
+#     entwickelt.
+#   - Dieses Modul erhält nur noch Kompatibilitäts-, Sicherheits- oder
+#     Diagnoseanpassungen, falls sie für Bestandsaufrufer notwendig sind.
+#   - Keine neuen Replay-Pipelines, neuen DB-Schreibpfade oder neuen UI-Verträge
+#     in dieser Datei einführen.
+#
+# Bedingungen für eine spätere Entfernung:
+#   Dieses Modul darf erst entfernt werden, wenn alle folgenden Punkte erfüllt
+#   und in der Architektur-Dokumentation festgehalten sind:
+#     1. Keine internen ORÓMA-Aufrufer importieren `core.replay_system`.
+#     2. Keine systemd-, Tool-, CLI-, UI- oder Testpfade benötigen dieses Modul.
+#     3. Externe/manuelle Kompatibilitätsaufrufe wurden ausreichend lange als
+#        ungenutzt bewertet oder durch einen Adapter ersetzt.
+#     4. Die Entfernung wurde separat dokumentiert und validiert.
 #
 # DESIGNZIEL (ORÓMA REALITÄT)
 # ───────────────────────────

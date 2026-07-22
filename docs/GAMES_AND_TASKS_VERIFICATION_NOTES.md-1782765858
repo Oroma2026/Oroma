@@ -1,0 +1,124 @@
+# ORÓMA – Games & Tasks Verification Notes
+
+**Baseline:** `oroma_20260627_142801_with_db.zip`  
+**Zugehöriges Dokument:** `docs/GAMES_AND_TASKS.md`
+
+---
+
+## 1. Zweck
+
+Diese Notizen dokumentieren, wie der konsolidierte Games-&-Tasks-Stand verifiziert wurde.
+
+Die alten Dateien `games_and_tasks_part01.md` und `games_and_tasks_part02.md` wurden nicht als Wahrheit übernommen, sondern nur als Hinweis auf frühere Themenfelder gelesen.
+
+---
+
+## 2. Geprüfte Quellen
+
+### Bestehende Dokumentation
+
+- `docs/games_and_tasks_part01.md`
+- `docs/games_and_tasks_part02.md`
+- `docs/history/games_and_tasks_part01.md`
+- `docs/history/games_and_tasks_part02.md`
+- `docs/CAPABILITY_MAP.md`
+- `docs/ARCHITECTURE.md`
+- `docs/CHANGELOG.md`
+- `docs/CHANGELOG_VERIFICATION_NOTES.md`
+- ausgewählte thematische MDs zu Chess/Chess2/Chess3, ChessPro und Curriculum
+
+### Code- und Projektstruktur
+
+Geprüft wurden insbesondere:
+
+- `mini_programs/`
+- `core/*calculator*`, `core/curriculum*`, `core/*chess*`, `core/*snake*`, `core/sudoku_game.py`, `core/tetris_engine.py`, `core/pong_arena.py`
+- `ui/*game*`, `ui/*calc*`, `ui/*chess*`, `ui/*connect4*`, `ui/*tictactoe*`, `ui/*snake*`, `ui/*pong*`, `ui/*memory*`, `ui/*maze*`, `ui/*ctf*`, `ui/*hideseek*`, `ui/*flappy*`, `ui/*tetris*`, `ui/*sudoku*`, `ui/*ptz*`
+- `tools/*daily_runner.py`
+- `core/chess_pro/` und `tools/chess_pro_daily_runner.py`
+- PTZ-nahe Runner und UIs
+
+---
+
+## 3. Verifikationsregel
+
+Eine Games-/Tasks-Capability wurde aufgenommen, wenn mindestens eine der folgenden Bedingungen erfüllt war:
+
+1. Core-/Mini-Programm und UI/Runner sind vorhanden.
+2. Core-/Mini-Programm enthält einen ausführlichen Header mit klarer Rolle und ist im Projekt strukturell eingebunden.
+3. Runner und UI bilden zusammen eine erkennbare produktive oder experimentelle Domäne.
+4. Eine Domäne ist in `CAPABILITY_MAP.md`, `ARCHITECTURE.md` oder anderen aktuellen Referenzen konsistent beschrieben und durch Code vorhanden.
+
+Historische Planungsinhalte ohne aktuellen Code-Nachweis wurden nicht übernommen.
+
+---
+
+## 4. Wichtige Einordnung
+
+- `mini_programs/connect4.py` ist als Legacy-/Baseline-/Minimax-Helfer eingeordnet, nicht als primärer Connect4-Lernpfad.
+- Chess2/Chess3 werden als verifizierte Evaluations-/Transferlinien eingeordnet, aber nicht als einfache Doppelung des klassischen Chess-Pfads.
+- ChessPro v0.1.1 wird als neuer produktiver Schach-Zielpfad eingeordnet: `game:chess_pro`, 2 Default-Partien pro Tag, Weiß-/Schwarz-Fokus im Wechsel, Headless-Betrieb und professionelle Bewertungsregeln als weiche Features.
+- `core/curriculum_math.py` ersetzt die alten Math-Task-Entwurfsnotizen als aktueller, verifizierter Math-Task-Pfad.
+- Backup-/Artefaktdateien mit Zeitstempel-Suffix wurden nicht als autoritative Komponenten gewertet.
+
+---
+
+## 5. Ergebnis
+
+Der konsolidierte Stand ist ausreichend verifiziert, um `docs/GAMES_AND_TASKS.md` als neue Referenz zu verwenden und die alten Split-Dateien zu entfernen, sofern keine separate Historienablage gewünscht ist.
+
+---
+
+## 7. ChessPro-v0.2.0-Long-Search-/Lernloop-Nachprüfung 2026-06-27
+
+Geprüft:
+
+- `core/chess_pro/search.py`: Iterative Deepening, Depth-/TT-/Cutoff-/Timeout-Telemetrie.
+- `core/chess_pro/episode_trace.py`: pro Zug `eval_before_cp`, `eval_after_cp`, `mover_delta_cp`, `learning_signal`.
+- `tools/chess_pro_daily_runner.py`: `--game-budget-sec`, Long-Search-Defaults, Lernitem-Zählung.
+- `tools/oroma_orchestrator.py`: weiterhin zwei Läufe pro Tag, aber mit Long-Search-Parametern und 28min-Partiebudget.
+
+Bewertung:
+
+- 🟢 Ressourcenregel bleibt erhalten: 2 Partien pro Tag, Weiß/Schwarz, 1 Stunde Abstand.
+- 🟢 Rechenzeit wurde kontrolliert erhöht: nicht ungebremst, sondern mit Zugbudget und hartem Partie-Budget.
+- 🟢 Lernloop wurde geschlossen: Lange Remis-/Budgetpartien erzeugen verwertbare positive/negative/neutral Signale statt nur terminale Draw-Nullen.
+- 🟡 Millionen-Knoten-Betrieb hängt weiter von realer Pi-Performance und Suchpositionen ab; v0.2.0 schafft die kontrollierte Grundlage, ist aber noch kein Bitboard-/Stockfish-Kern.
+
+## 6. ChessPro-v0.1.1-Nachprüfung 2026-06-27
+
+Baseline: `oroma_20260627_142801_with_db.zip`
+
+Geprüfte Komponenten:
+
+- `core/chess_pro/rules.py`
+- `core/chess_pro/professional_rules.py`
+- `core/chess_pro/evaluator.py`
+- `core/chess_pro/position_encoder.py`
+- `core/chess_pro/search.py`
+- `core/chess_pro/episode_trace.py`
+- `tools/chess_pro_daily_runner.py`
+- `tools/oroma_orchestrator.py`
+- `docs/current.md`
+- `docs/CHANGELOG.md`
+
+Ergebnis:
+
+- ChessPro ist als eigene Domäne `game:chess_pro` vorhanden und nicht nur eine Umbenennung von Chess2.
+- Der bestehende legale Schachregel-Unterbau wird isoliert geladen, ohne `mini_programs`-Discovery-Seiteneffekte.
+- Die Bewertungslogik kombiniert Material, Mobilität, professionelle Regelbeiträge und Terminalstatus in Centipawns.
+- Die Suche nutzt Alpha-Beta, Move Ordering, Quiescence-Light und einen v0.1.1 Anti-Repetition-Guard.
+- Der Private-API-Guard für Search-Push/Pop ist vorhanden und meldet Brüche sichtbar, ohne die Repetition-Historie der echten Partie durch Suchzüge zu mutieren.
+- Die Runner-Telemetrie enthält `nodes`, `qnodes`, `total_nodes`, `nps`, `rule_hits`, `api_guard_ok`, `push_failures`, `pop_failures`, `repetition_guard_moves` und `repetition_penalty_abs_cp`.
+- Der Orchestrator-Default ist auf zwei ChessPro-Partien pro Tag begrenzt: Weiß-Fokus um 03:55, Schwarz-Fokus um 04:55. Legacy-Großläufe bleiben per ENV reaktivierbar, sind aber nicht Default.
+
+Live-/Smoke-Nachweis vom Pi:
+
+- `python3 tools/chess_pro_daily_runner.py --no-db --no-learn --games 1 --side white --depth 1 --max-plies 8 --time-budget-ms 100 --eps 0 --seed 123` lieferte `ok: true`, `version: v0.1.1`, `api_guard_ok: true`, `push_failures: 0`, `pop_failures: 0`.
+- `python3 tools/chess_pro_daily_runner.py --no-db --no-learn --games 1 --side black --depth 2 --max-plies 40 --time-budget-ms 500 --eps 0.01 --seed 456` lieferte `ok: true`, `version: v0.1.1`, `api_guard_ok: true`, `total_nodes: 13101`, `nps: 603.54`, `terminal_reason: max_plies`.
+
+Bewertung:
+
+- 🟢 ChessPro v0.1.1 ist für den kontrollierten Tagesbetrieb produktionsreif.
+- 🟡 Performance ist bewusst Pi-/Python-konservativ; ChessPro ist aktuell strategischer Lern- und Trace-Kern, keine Hochleistungsengine auf Stockfish-Niveau.
+- 🧪 NMR-/Dream-Anschluss ist strukturell vorbereitet und muss nach realen Tagesläufen anhand gespeicherter Episoden-/Policy-/SnapChain-Daten bewertet werden.

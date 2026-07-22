@@ -34,6 +34,69 @@ Parallel dazu: **Roter Faden** hält einen minimalen Thread-Kontext und notiert 
 
 ---
 
+## DE – Policy-Architekturreview 2026-06-25 / Rollenklärung nach Replay-Konsolidierung
+
+### Anlass
+Nach der erfolgreichen Replay-Konsolidierung wurde die Policy-Domäne mit derselben
+Arbeitsweise geprüft: zuerst vorhandene Dokumentation lesen, dann Rollen anhand der
+tatsächlichen Dateien bestimmen, erst danach entscheiden, ob eine Konsolidierung
+notwendig ist.
+
+### Ergebnis
+Für die aktuell geprüfte ZIP ist **keine Replay-ähnliche technische Doppelstruktur**
+nachgewiesen. Die wichtigsten Policy-Dateien übernehmen unterschiedliche Rollen:
+
+| Datei | Aktuelle Rolle | Status |
+|---|---|---|
+| `core/universal_policy.py` | Laufzeitnahe, kleine UniversalPolicy für `choose`, `choose_vec`, `learn` und `learn_many` direkt auf `policy_rules` | aktiv / runtime-nah |
+| `core/policy_engine.py` | Batch-/Trainings-/Export-Engine für SnapChains, DB-/TMPFS-Training, Adapter-Kanonisierung und Archiv-Export | aktiv / training-nah |
+| `mini_programs/universal_policy/adapter_universal.py` | Domänenübergreifende Kanonisierung und Action-Mapping für PolicyEngine/UniversalPolicy-Pfade | aktiv / Adapter |
+| `mini_programs/universal_policy/ram_writer.py` | RAM-/tmpfs-Episodenpuffer und Promotion/Flush-Vorbereitung | aktiv / Puffer |
+| `mini_programs/universal_policy/ram_flush.py` | CLI-/Timer-Flush von RAM/tmpfs-Episoden über `PolicyEngine` | aktiv / Tool |
+| `mini_programs/universal_policy/ram_sched.py` | In-Process Scheduler für periodisches RAM→PolicyEngine→DB/Archiv | aktiv / Scheduler |
+| `core/decision_engine.py` | Entscheidungsschicht, die Regeln/Policy-Exports für konkrete Action-Wahl auswertet | aktiv / Entscheidung |
+
+### Architekturentscheidung
+Die Policy-Domäne wird aktuell **nicht konsolidiert wie Replay**.
+Stattdessen wird die vorhandene Rollentrennung als beabsichtigte Architektur behandelt:
+
+```text
+UniversalPolicy
+  = runtime-nahe, robuste State→Action-/Learn-Schicht
+
+PolicyEngine
+  = batch-/dream-/orchestrator-nahe Trainings- und Export-Schicht
+
+Adapter/RAM-Komponenten
+  = Zuführung, Kanonisierung und Entlastung der Policy-Schicht
+```
+
+### Verbindliche Arbeitsregel
+Neue Policy-Funktionen sollen zuerst einer bestehenden Rolle zugeordnet werden:
+
+- Runtime-Entscheidung / kleines Online-Lernen → `core/universal_policy.py`
+- SnapChain-/Batch-/Export-Training → `core/policy_engine.py`
+- Domänenkanonisierung / Action-Mapping → Adapter
+- temporäre Episodenpufferung → `mini_programs/universal_policy/ram_writer.py`
+- periodischer Flush/Scheduler → `ram_flush.py` / `ram_sched.py`
+
+Eine neue Policy-Pipeline wird nur eingeführt, wenn keine dieser Rollen passt und die
+Architekturentscheidung vorher dokumentiert wurde.
+
+### Nicht-Ziele dieses Reviews
+- keine Codeänderung
+- keine Änderung an `policy_rules`
+- keine Änderung am Regelarchiv `rules`
+- keine Änderung an Game-UIs oder Daily-Runnern
+- keine Zusammenlegung von `universal_policy.py` und `policy_engine.py`
+
+### Nächster sinnvoller Schritt
+Policy ist damit **nicht der nächste technische Konsolidierungskandidat**.
+Sinnvoll wäre höchstens, einzelne UI-/Daily-Runner-Shims später zu vereinheitlichen,
+aber erst nach gesonderter Analyse ihrer domänenspezifischen Unterschiede.
+
+---
+
 ## DE – UniversalPolicy (`core/universal_policy.py`)
 ### Kernidee
 Eine “kleine” Policy, die nur einen **String-Hash** kennt:

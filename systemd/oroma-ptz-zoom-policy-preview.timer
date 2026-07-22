@@ -1,0 +1,40 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-ptz-zoom-policy-preview.timer
+# Projekt:  ORÓMA (Offline-Realtime-Organic-Memory-AI)
+# Modul:    PTZ Zoom Policy Preview Timer – P3z1b Dry-Run Verlauf
+# Version:  v3.7.3+p3z1b-wide-observe-policy-preview-timer-v1.0
+# Stand:    2026-06-25
+# Autor:    ORÓMA · ChatGPT Patch-Gate
+# Lizenz:   MIT
+# =============================================================================
+#
+# ZWECK
+# ─────
+# Startet die Wide-Observe-Zoom-Policy-Preview periodisch. Die Preview ist
+# absichtlich häufiger als der echte Zoom-Context-Probe möglich, weil sie keine
+# Kamera steuert, sondern nur Motor-State + P3z0.1-Evidence liest.
+#
+# DESIGN
+# ──────
+# - OnBootSec: erst starten, wenn Orchestrator/DBWriter/PTZ-Worker stabil sind.
+# - OnUnitActiveSec: Default 10 Minuten, damit Preview-Entscheidungen genügend
+#   History für P3z1c sammeln.
+# - Persistent: verpasste Läufe werden nachgeholt.
+# - RandomizedDelaySec: entzerrt DBWriter-/Timer-Last.
+#
+# =============================================================================
+
+[Unit]
+Description=ORÓMA – PTZ Zoom Policy Preview Timer (P3z1b dry-run)
+Documentation=file:/opt/ai/oroma/docs/PTZ_MOTOR_WORKER.md
+
+[Timer]
+OnBootSec=900s
+OnUnitActiveSec=600s
+Persistent=true
+RandomizedDelaySec=60s
+AccuracySec=30s
+Unit=oroma-ptz-zoom-policy-preview.service
+
+[Install]
+WantedBy=timers.target

@@ -3,8 +3,8 @@
 """
 Pfad:    tools/synapses_bridge_probe.py
 Projekt: ORÓMA (Offline-Realtime-Organic-Memory-AI)
-Version: v3.7.x / v3.8 line-compatible
-Stand:   2026-05-06
+Version: v3.7.x / v3.8 line-compatible + idempotent-stats-v1.1
+Stand:   2026-06-16
 Autor:   Jörg Werner (public), ORÓMA · KI-JWG-X1 (intern)
 
 ZWECK
@@ -60,6 +60,8 @@ DB-/LOCK-DISZIPLIN
 - Reads: SQLite read-only URI auf `oroma.db`, alle Connections werden in
   `finally` geschlossen.
 - Writes: ausschließlich DBWriter nach `stats.db`.
+- Stats-Writes sind idempotent via UPSERT, damit Wiederholungsläufe mit
+  gleichem `src_uid` keine UNIQUE-Tracebacks erzeugen.
 - `OROMA_DBW_ENABLE=1` ist Pflicht.
 - Keine direkten SQLite-Writes, keine lokalen Fallbacks.
 
@@ -138,10 +140,25 @@ def _atomic_write_json(path: str, data: Dict[str, Any]) -> None:
 
 
 def _write_stat(ts: int, series: str, value: float, src_uid: str, meta: Optional[Dict[str, Any]] = None) -> None:
+    """Write one synapses.bridge.* stat point idempotently via DBWriter.
+
+    The stats schema enforces uniqueness on `(src_table, src_uid, series)`. The
+    orchestrator can repeat a measure-only probe after timeouts/restarts, so a
+    duplicate source UID should refresh the same logical point instead of
+    poisoning DBWriter `last_error` with a UNIQUE failure.
+    """
     db_writer_client.exec(
-        "INSERT INTO stats_points(ts, series, value, src_table, src_id, meta, src_uid) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        """
+        INSERT INTO stats_points(ts, series, value, src_table, src_id, meta, src_uid)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(src_table, src_uid, series) DO UPDATE SET
+          ts=excluded.ts,
+          value=excluded.value,
+          src_id=excluded.src_id,
+          meta=excluded.meta
+        """,
         [int(ts), str(series), float(value), "synapses_bridge_probe", 0, json.dumps(meta, ensure_ascii=False) if meta else None, str(src_uid)],
-        tag="synapses.bridge.probe",
+        tag="synapses.bridge.probe.upsert",
         priority="normal",
         timeout_ms=2000,
         expect="rowcount",

@@ -3,8 +3,8 @@
 # =============================================================================
 # Pfad:    /opt/ai/oroma/mini_programs/memorymaze_hybrid.py
 # Projekt: ORÓMA
-# Version: v1.0
-# Stand:   2026-02-22
+# Version: v1.5
+# Stand:   2026-06-27
 # Autor:   ORÓMA · KI-JWG-X1 + GPT-5.2 Thinking
 # =============================================================================
 #
@@ -43,7 +43,7 @@
 #     • Pro Spieler max 1 aktiver Claim.
 #     • Match: beide Blocker verschwinden + Speed-Bonus.
 #     • Mismatch: beide Claims lösen sich.
-#     • Timeout: CLAIM_TIMEOUT_STEPS = 60.
+#     • Timeout: CLAIM_TIMEOUT_STEPS = 240.
 #
 #   5) Items (Spawn-Limits pro Spiel)
 #     • A Trail-Blocker (temporär): max 2 spawns, 5 Blocker, 60s, Nutzer -5% temp.
@@ -74,6 +74,20 @@
 #
 #   Hinweis: Für ORÓMA-Policy werden States als JSON stabilisiert und in
 #   policy_rules unter namespace "game:memorymaze_hybrid" genutzt.
+#
+# Erweiterung v1.6
+# ----------------
+#   • Das Spielziel ist produktiv messbar: gelöste Memory-Paare setzen jetzt
+#     winner/winner_reason, wenn alle Paare entfernt wurden.
+#   • Reveal/Claim/Match/Mismatch/Pit/P3-Kontakt werden als Telemetrie gezählt.
+#   • Die Headless-KI spielt memory-fähig: nach dem ersten Claim sucht sie
+#     gezielt das zweite Objekt desselben Symbols und navigiert zu Reveal-Posen
+#     neben Blockern, statt am ersten Objekt hängen zu bleiben.
+#
+#   • Policy-Reuse-Fix: Die Headless-KI wiederholt einen bereits geclaimten
+#     ersten Blocker nicht mehr mit REVEAL, sondern sucht konsequent das
+#     zweite passende Symbol. Das verhindert deterministische Claim-Timeout-
+#     Schleifen in Policy-only-Läufen.
 #
 # DB / Locks
 # ----------
@@ -158,7 +172,7 @@ class HybridGame:
     + gleiche initiale Objektplatzierung" (soweit Random genutzt wird).
     """
 
-    CLAIM_TIMEOUT_STEPS = 60
+    CLAIM_TIMEOUT_STEPS = 240
 
     # Hard caps
     P3_SPEED_CAP = 2.0
@@ -204,6 +218,20 @@ class HybridGame:
 
         # claim per player
         self._claim_first: Dict[str, Optional[int]] = {"p1": None, "p2": None}
+
+        # scoring/telemetry for headless learning and UI diagnostics
+        self.pairs_cleared: Dict[str, int] = {"p1": 0, "p2": 0}
+        self.winner_reason: str = ""
+        self.telemetry: Dict[str, int] = {
+            "reveal_attempts": 0,
+            "claims": 0,
+            "second_reveals": 0,
+            "matches": 0,
+            "mismatches": 0,
+            "claim_timeouts": 0,
+            "pit_hits": 0,
+            "p3_contacts": 0,
+        }
 
         # game end
         self.winner: Optional[str] = None
@@ -269,6 +297,18 @@ class HybridGame:
         self._perm_blocks = set()
         self._trap_blocks = []
         self._claim_first = {"p1": None, "p2": None}
+        self.pairs_cleared = {"p1": 0, "p2": 0}
+        self.winner_reason = ""
+        self.telemetry = {
+            "reveal_attempts": 0,
+            "claims": 0,
+            "second_reveals": 0,
+            "matches": 0,
+            "mismatches": 0,
+            "claim_timeouts": 0,
+            "pit_hits": 0,
+            "p3_contacts": 0,
+        }
 
     def _walkable(self, pos: Coord) -> bool:
         r, c = pos
@@ -290,10 +330,139 @@ class HybridGame:
     def _ghost_blocker_allowed(self, who: str, pos: Coord) -> bool:
         # Speed+Ghost allows passing object blockers, trail blockers, perm blockers
         if self._speedghost_until.get(who, -1) >= self._step_i:
+            if pos[0] < 0 or pos[1] < 0 or pos[0] >= self.h or pos[1] >= self.w:
+                return False
             if self._grid[pos[0]][pos[1]] == '#':
                 return False
             return True
         return self._walkable(pos)
+
+    def _active_object_index_at(self, pos: Coord) -> Optional[int]:
+        for i, o in enumerate(self.objects):
+            if o.active and o.pos == pos:
+                return i
+        return None
+
+    def _object_ahead_index(self, who: str) -> Optional[int]:
+        fr, fc = self.face.get(who, (0, 1))
+        pr, pc = self.p1 if who == "p1" else self.p2 if who == "p2" else self.p3
+        return self._active_object_index_at((pr + fr, pc + fc))
+
+    def _adjacent_reveal_poses(self, idx: int) -> List[Tuple[Coord, str]]:
+        if idx < 0 or idx >= len(self.objects) or not self.objects[idx].active:
+            return []
+        r, c = self.objects[idx].pos
+        poses: List[Tuple[Coord, str]] = []
+        # action is the blocked direction used to turn toward the object once
+        # the player stands at the adjacent pose. Next tick REVEAL can fire.
+        for pos, face_action in (
+            ((r - 1, c), "D"),
+            ((r + 1, c), "U"),
+            ((r, c - 1), "R"),
+            ((r, c + 1), "L"),
+        ):
+            if self._walkable(pos):
+                poses.append((pos, face_action))
+        return poses
+
+    def _move_action_between(self, src: Coord, dst: Coord) -> str:
+        dr = dst[0] - src[0]
+        dc = dst[1] - src[1]
+        if dr < 0:
+            return "U"
+        if dr > 0:
+            return "D"
+        if dc < 0:
+            return "L"
+        if dc > 0:
+            return "R"
+        return ""
+
+    def _bfs_next_action(self, who: str, goals: List[Tuple[Coord, str]]) -> str:
+        if not goals:
+            return ""
+        start = self.p1 if who == "p1" else self.p2 if who == "p2" else self.p3
+        goal_map = {pos: face_action for pos, face_action in goals}
+        if start in goal_map:
+            return goal_map[start]
+
+        q: List[Coord] = [start]
+        prev: Dict[Coord, Optional[Coord]] = {start: None}
+        found: Optional[Coord] = None
+        while q:
+            cur = q.pop(0)
+            if cur in goal_map:
+                found = cur
+                break
+            for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nxt = (cur[0] + dr, cur[1] + dc)
+                if nxt in prev:
+                    continue
+                if who == "p3":
+                    ok = self._walkable(nxt) or nxt in (self.p1, self.p2)
+                else:
+                    ok = self._ghost_blocker_allowed(who, nxt)
+                if not ok:
+                    continue
+                prev[nxt] = cur
+                q.append(nxt)
+
+        if found is None:
+            return ""
+        cur = found
+        parent = prev.get(cur)
+        while parent is not None and parent != start:
+            cur = parent
+            parent = prev.get(cur)
+        return self._move_action_between(start, cur)
+
+    def _choose_memory_target_index(self, who: str) -> Optional[int]:
+        pid = 1 if who == "p1" else 2
+        idx_first = self._claim_first.get(who)
+        if idx_first is not None and 0 <= idx_first < len(self.objects):
+            first = self.objects[idx_first]
+            if first.active and first.claimed_by == pid:
+                candidates = [
+                    (i, o) for i, o in enumerate(self.objects)
+                    if i != idx_first and o.active and o.sym == first.sym and o.claimed_by in (0, pid)
+                ]
+                if candidates:
+                    me = self.p1 if who == "p1" else self.p2
+                    return min(candidates, key=lambda io: abs(io[1].pos[0] - me[0]) + abs(io[1].pos[1] - me[1]))[0]
+
+        me = self.p1 if who == "p1" else self.p2
+        candidates = [
+            (i, o) for i, o in enumerate(self.objects)
+            if o.active and o.claimed_by in (0, pid)
+        ]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda io: abs(io[1].pos[0] - me[0]) + abs(io[1].pos[1] - me[1]))[0]
+
+    def legal_actions(self, who: str) -> List[str]:
+        if self.winner is not None:
+            return []
+        if who == "p3":
+            me = self.p3
+            legal: List[str] = []
+            for act, d in (("U", (-1, 0)), ("D", (1, 0)), ("L", (0, -1)), ("R", (0, 1))):
+                nxt = (me[0] + d[0], me[1] + d[1])
+                if self._walkable(nxt) or nxt in (self.p1, self.p2):
+                    legal.append(act)
+            return legal or ["U", "D", "L", "R"]
+
+        me = self.p1 if who == "p1" else self.p2
+        legal = []
+        for act, d in (("U", (-1, 0)), ("D", (1, 0)), ("L", (0, -1)), ("R", (0, 1))):
+            nxt = (me[0] + d[0], me[1] + d[1])
+            # Moving into an active object is legal as a turn-in-place action:
+            # _move sets face before rejecting the blocked move, so REVEAL can
+            # happen on the next tick. This is essential for object-blocker play.
+            if self._ghost_blocker_allowed(who, nxt) or self._active_object_index_at(nxt) is not None:
+                legal.append(act)
+        if self._object_ahead_index(who) is not None:
+            legal.append("REVEAL")
+        return legal or ["U", "D", "L", "R"]
 
     def _place_pairs(self, pairs: int) -> List[_Obj]:
         syms = [chr(ord('A') + i) for i in range(pairs)]
@@ -334,7 +503,7 @@ class HybridGame:
         # Small probability per step, capped
         if len([p for p in self.pits if p.ttl_steps > 0]) >= 4:
             return
-        if self._rng.random() > 0.04:
+        if self._rng.random() > 0.001:
             return
         # choose a random walkable tile away from players
         tries = 0
@@ -372,9 +541,11 @@ class HybridGame:
 
     def _apply_pit(self, who: str, prev: Coord) -> None:
         # +1 strike, teleport back
+        self.telemetry["pit_hits"] = int(self.telemetry.get("pit_hits", 0)) + 1
         self.strikes[who] = int(self.strikes.get(who, 0)) + 1
         if who in ("p1", "p2") and self.strikes[who] >= 5:
             self.winner = "p2" if who == "p1" else "p1"
+            self.winner_reason = f"{who}_strikes"
         if who == "p3" and self.strikes[who] >= 50:
             # P3 removed (stays at spawn and disabled)
             self.hard_p3 = False
@@ -388,6 +559,7 @@ class HybridGame:
 
     def _reveal(self, who: str) -> None:
         # reveal in front cell
+        self.telemetry["reveal_attempts"] = int(self.telemetry.get("reveal_attempts", 0)) + 1
         fr, fc = self.face[who]
         if who == "p1":
             pr, pc = self.p1
@@ -396,30 +568,22 @@ class HybridGame:
             pr, pc = self.p2
             pid = 2
         tgt = (pr + fr, pc + fc)
-        # if object at tgt
         for i, o in enumerate(self.objects):
-            if not o.active:
+            if not o.active or o.pos != tgt:
                 continue
-            if o.pos != tgt:
-                continue
-            # claim rules
-            other = 2 if pid == 1 else 1
             if o.claimed_by not in (0, pid):
                 return
-            # per player 1 active claim
-            if self._claim_first[who] is not None and self._claim_first[who] != i:
+            idx_first = self._claim_first.get(who)
+            if idx_first is not None and idx_first != i:
+                self._resolve_claim_if_second(who, i)
                 return
             if o.claimed_by == 0:
                 o.claimed_by = pid
                 o.claimed_step = self._step_i
                 self._claim_first[who] = i
+                self.telemetry["claims"] = int(self.telemetry.get("claims", 0)) + 1
                 return
-            # already claimed by same player => treat as second reveal attempt? find second object
-            if self._claim_first[who] is not None and self._claim_first[who] != i:
-                return
-
-        # If player already has first claim, try to match by looking at any other claimed of same sym? we require second reveal via stepping in front.
-        return
+            return
 
     def _resolve_claim_if_second(self, who: str, idx_second: int) -> None:
         # second reveal called when player has a first claim and reveals another object
@@ -441,6 +605,7 @@ class HybridGame:
             return
         o2.claimed_by = pid
         o2.claimed_step = self._step_i
+        self.telemetry["second_reveals"] = int(self.telemetry.get("second_reveals", 0)) + 1
         # match?
         if o1.sym == o2.sym:
             o1.active = False
@@ -448,10 +613,16 @@ class HybridGame:
             o1.claimed_by = 0
             o2.claimed_by = 0
             self._claim_first[who] = None
+            self.telemetry["matches"] = int(self.telemetry.get("matches", 0)) + 1
+            self.pairs_cleared[who] = int(self.pairs_cleared.get(who, 0)) + 1
             # speed bonus
             self.speed[who] = float(self.speed.get(who, 1.0)) * 1.10
+            if not any(o.active for o in self.objects):
+                self.winner = who
+                self.winner_reason = "pairs_cleared"
         else:
             # mismatch reset claims
+            self.telemetry["mismatches"] = int(self.telemetry.get("mismatches", 0)) + 1
             o1.claimed_by = 0
             o2.claimed_by = 0
             self._claim_first[who] = None
@@ -463,6 +634,7 @@ class HybridGame:
                 continue
             o = self.objects[idx]
             if o.claimed_step >= 0 and (self._step_i - o.claimed_step) > self.CLAIM_TIMEOUT_STEPS:
+                self.telemetry["claim_timeouts"] = int(self.telemetry.get("claim_timeouts", 0)) + 1
                 o.claimed_by = 0
                 o.claimed_step = -1
                 self._claim_first[who] = None
@@ -566,10 +738,12 @@ class HybridGame:
             return
         if self.p3 == self.p1:
             # P3 hits P1
+            self.telemetry["p3_contacts"] = int(self.telemetry.get("p3_contacts", 0)) + 1
             self.speed["p3"] = _clamp(self.speed["p3"] * 1.10, 1.0, self.P3_SPEED_CAP)
             self.speed["p1"] = _clamp(self.speed["p1"] * 0.90, self.PLAYER_SPEED_FLOOR, 10.0)
             self._p3_contact_cd = self.CONTACT_COOLDOWN_STEPS
         elif self.p3 == self.p2:
+            self.telemetry["p3_contacts"] = int(self.telemetry.get("p3_contacts", 0)) + 1
             self.speed["p3"] = _clamp(self.speed["p3"] * 1.10, 1.0, self.P3_SPEED_CAP)
             self.speed["p2"] = _clamp(self.speed["p2"] * 0.90, self.PLAYER_SPEED_FLOOR, 10.0)
             self._p3_contact_cd = self.CONTACT_COOLDOWN_STEPS
@@ -625,7 +799,6 @@ class HybridGame:
                 self._move("p3", 0, 1)
         self._p3_contact()
 
-        # win by objects cleared? (optional) currently only by strikes.
         return self.state()
 
     # ---------------------------------------------------------------------
@@ -634,47 +807,40 @@ class HybridGame:
     def ai_action(self, who: str, eps: float = 0.1) -> str:
         if self.winner is not None:
             return ""
+        legal = self.legal_actions(who)
         if who == "p3":
-            # chase nearest player
-            target = self.p1 if (abs(self.p3[0]-self.p1[0]) + abs(self.p3[1]-self.p1[1]) <= abs(self.p3[0]-self.p2[0]) + abs(self.p3[1]-self.p2[1])) else self.p2
-            dr = _sign(target[0] - self.p3[0])
-            dc = _sign(target[1] - self.p3[1])
-            # try primary axis then secondary
-            if dr != 0 and self._walkable((self.p3[0] + dr, self.p3[1])):
-                return "D" if dr > 0 else "U"
-            if dc != 0 and self._walkable((self.p3[0], self.p3[1] + dc)):
-                return "R" if dc > 0 else "L"
-            return self._rng.choice(["U", "D", "L", "R"])
-
-        # P1/P2: occasionally reveal if object ahead
-        if self._rng.random() < 0.15:
-            fr, fc = self.face[who]
-            pr, pc = (self.p1 if who == "p1" else self.p2)
-            tgt = (pr + fr, pc + fc)
-            if any(o.active and o.pos == tgt for o in self.objects):
-                return "REVEAL"
+            # Hard-P3 uses BFS chase. The old greedy axis chase often bounced at
+            # walls and generated weak pressure; BFS makes the hard variant real.
+            d1 = abs(self.p3[0] - self.p1[0]) + abs(self.p3[1] - self.p1[1])
+            d2 = abs(self.p3[0] - self.p2[0]) + abs(self.p3[1] - self.p2[1])
+            target = self.p1 if d1 <= d2 else self.p2
+            act = self._bfs_next_action("p3", [(target, "")])
+            if act in legal:
+                return act
+            return self._rng.choice(legal or ["U", "D", "L", "R"])
 
         if self._rng.random() < eps:
-            return self._rng.choice(["U", "D", "L", "R"])
-        # greedy: move towards nearest active object
-        me = self.p1 if who == "p1" else self.p2
-        objs = [o.pos for o in self.objects if o.active]
-        if not objs:
-            return self._rng.choice(["U", "D", "L", "R"])
-        tgt = min(objs, key=lambda p: abs(p[0]-me[0]) + abs(p[1]-me[1]))
-        dr = _sign(tgt[0] - me[0])
-        dc = _sign(tgt[1] - me[1])
-        # pick a direction that is walkable (with ghost if active)
-        candidates: List[Tuple[str, Coord]] = []
-        if dr != 0:
-            candidates.append(("D" if dr > 0 else "U", (me[0] + dr, me[1])))
-        if dc != 0:
-            candidates.append(("R" if dc > 0 else "L", (me[0], me[1] + dc)))
-        self._rng.shuffle(candidates)
-        for act, p in candidates:
-            if self._ghost_blocker_allowed(who, p):
+            return self._rng.choice(legal)
+
+        idx_ahead = self._object_ahead_index(who)
+        idx_first = self._claim_first.get(who)
+        if idx_ahead is not None and "REVEAL" in legal:
+            # Do not repeatedly reveal the already-claimed first card. The old
+            # deterministic policy/fallback loop could stand next to its first
+            # claim and fire REVEAL until the claim timed out. Once a first
+            # claim exists, REVEAL is useful only if the object ahead is a
+            # different active blocker, so the second reveal can resolve a
+            # match/mismatch.
+            if idx_first is None or idx_ahead != idx_first:
+                return "REVEAL"
+
+        idx_target = self._choose_memory_target_index(who)
+        if idx_target is not None:
+            act = self._bfs_next_action(who, self._adjacent_reveal_poses(idx_target))
+            if act:
                 return act
-        return self._rng.choice(["U", "D", "L", "R"])
+
+        return self._rng.choice(legal)
 
     # ---------------------------------------------------------------------
     # State
@@ -718,7 +884,10 @@ class HybridGame:
             "step": int(self._step_i),
             "mode": "hard_p3" if self.hard_p3 else "normal",
             "winner": self.winner,
+            "winner_reason": str(self.winner_reason or ""),
             "pairs_left": int(pairs_left),
+            "pairs_cleared": {k: int(v) for k, v in self.pairs_cleared.items()},
+            "telemetry": {k: int(v) for k, v in self.telemetry.items()},
             "speed": {k: float(v) for k, v in self.speed.items()},
             "strikes": {k: int(v) for k, v in self.strikes.items()},
             "p1": {"r": self.p1[0], "c": self.p1[1], "face": list(self.face["p1"])},

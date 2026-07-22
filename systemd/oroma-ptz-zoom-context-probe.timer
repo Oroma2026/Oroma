@@ -1,0 +1,40 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-ptz-zoom-context-probe.timer
+# Projekt:  ORÓMA (Offline-Realtime-Organic-Memory-AI)
+# Modul:    PTZ Zoom Context Probe Timer – P3z0 Evidence Verlauf
+# Version:  v3.7.3+p3z0-zoom-context-timer-v1.0
+# Stand:    2026-06-16
+# Autor:    ORÓMA · ChatGPT Patch-Gate
+# Lizenz:   MIT
+# =============================================================================
+#
+# ZWECK
+# ─────
+# Startet den Zoom-Kontextvergleich periodisch. Der Lauf ist absichtlich viel
+# seltener als die P3a-Strukturprobe, weil er den Zoom kurz auf Wide stellt und
+# danach wieder zurücksetzt. Die Entscheidung `wide_zoom_helpful` soll über
+# mehrere Tageszeiten entstehen, nicht aus einem Einzel-Schnappschuss.
+#
+# DESIGN
+# ──────
+# - OnBootSec: erst starten, wenn Kamera/DBWriter/Orchestrator stabil sind.
+# - OnUnitActiveSec: Default 1 Stunde.
+# - Persistent: verpasster Lauf wird nachgeholt.
+# - RandomizedDelaySec: entzerrt DBWriter-/Kamera-Last.
+#
+# =============================================================================
+
+[Unit]
+Description=ORÓMA – PTZ Zoom Context Probe Timer (hourly)
+Documentation=file:/opt/ai/oroma/docs/PTZ_MOTOR_WORKER.md
+
+[Timer]
+OnBootSec=600s
+OnUnitActiveSec=3600s
+Persistent=true
+RandomizedDelaySec=120s
+AccuracySec=60s
+Unit=oroma-ptz-zoom-context-probe.service
+
+[Install]
+WantedBy=timers.target

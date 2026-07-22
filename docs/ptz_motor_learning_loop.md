@@ -1,8 +1,9 @@
 # ORÓMA PTZ Motor Learning Loop – Architektur, Datenfluss und Betriebslogik
 ## Status und Zweck dieses Dokuments
-Dieses Dokument beschreibt den vollständigen PTZ-Motor-Lernloop in ORÓMA auf Basis des aktuell geprüften Projektstands. Ziel ist eine saubere technische Beschreibung des mehrstufigen Lernpfads zwischen schneller Reflexmotorik, verzögerter Reward-Erzeugung, Dream-basierter Policy-Verdichtung und einem späteren geplanten Policy-Rückfluss in den Worker.
+Dieses Dokument beschreibt den vollständigen PTZ-Motor-Lernloop in ORÓMA auf Basis des aktuell geprüften Projektstands. Ziel ist eine saubere technische Beschreibung des mehrstufigen Lernpfads zwischen schneller Reflexmotorik, verzögerter Reward-Erzeugung, Dream-basierter Policy-Verdichtung und dem inzwischen implementierten, vorsichtig begrenzten Policy-Rückfluss in den Worker.
+
 Wichtig:
-Der Loop ist im aktuellen Stand bis zur Offline-Verdichtung funktional vorhanden. Der Rückfluss der verdichteten `ptz_motor`-Policy in den Online-Worker ist derzeit noch nicht aktiv.
+Seit **PTZ Phase 5b** ist der Loop nicht mehr nur bis zur Offline-Verdichtung vorhanden. `tools/ptz_motor_worker.py` kann die verdichtete `ptz_motor`-Policy jetzt optional als **weichen, ENV-gesteuerten Policy-Bias** aus `policy_rules namespace='ptz_motor'` lesen. Dieser Bias ersetzt die Reflexlogik nicht, überschreibt keine Safety-Gates und wird seit Phase 5b evidenzgewichtet über `SUM(q*n)/SUM(n)` geladen.
 ---
 ## Kurzfassung
 Der PTZ-Motor-Lernloop besteht aktuell aus vier logisch getrennten Schichten:
@@ -19,8 +20,9 @@ Der PTZ-Motor-Lernloop besteht aktuell aus vier logisch getrennten Schichten:
    - aggregiert Reward-Signale zu `policy_rules`
    - Fortschritt wird in `dream_state` gespeichert
 4. **Policy-Rückfluss in den Worker**
-   - konzeptionell vorgesehen
-   - im aktuellen Stand noch nicht aktiv
+   - seit PTZ Phase 5a implementiert, seit Phase 5b evidenzgewichtet
+   - optionaler, read-only geladener Policy-Bias aus `policy_rules namespace='ptz_motor'`
+   - standardmäßig per ENV abschaltbar und sicherheitsbegrenzt
 ---
 ## Grafisches Gesamtbild
 ```text
@@ -45,10 +47,11 @@ Kamera / Target / Face / Eye / Motion
       policy_rules namespace='ptz_motor'
               │
               ▼
-   [4] geplanter zukünftiger Policy-Bias
+   [4] PTZ Phase 5b gewichteter Policy-Bias
               │
               ▼
-      weicher Rückfluss in den Worker
+      weicher, optionaler Rückfluss in den Worker
+```
 
 ⸻
 
@@ -232,11 +235,11 @@ Die Dream-Verdichtung funktioniert grundsätzlich.
 
 ⸻
 
-Schicht 4 – geplanter Policy-Rückfluss in den Worker
+Schicht 4 – Policy-Rückfluss in den Worker (PTZ Phase 5a)
 
 Zielbild
 
-Langfristig soll der Worker die verdichteten policy_rules namespace='ptz_motor' wieder als weichen Bias nutzen.
+Der Worker kann die verdichteten `policy_rules namespace='ptz_motor'` seit PTZ Phase 5a wieder als weichen Bias nutzen.
 
 Beispielhafte Idee:
 
@@ -247,26 +250,26 @@ Beispielhafte Idee:
 
 Aktueller Stand
 
-Dieser Rückkanal ist im aktuellen Code noch nicht aktiv.
+Der Rückkanal ist seit PTZ Phase 5a im Code vorhanden, aber bewusst konservativ gebaut:
 
-Das bedeutet:
-
-* policy_rules werden gelernt
-* aber der Worker liest sie noch nicht aktiv zurück
-* der Loop ist deshalb noch nicht vollständig geschlossen
+* `policy_rules namespace='ptz_motor'` werden read-only geladen
+* der Worker erzeugt daraus einen kleinen Aktions-Bias
+* die Aktivierung erfolgt über `OROMA_PTZ_MOTOR_POLICY_BIAS_ENABLE`
+* Default bleibt sicher: Bias ist aus, solange ENV nicht aktiviert wird
+* Safety-/Reflexlogik bleibt führend
 
 Konsequenz
 
-Der aktuelle PTZ-Lernloop ist funktional eher:
+Der aktuelle PTZ-Lernloop ist funktional jetzt:
 
 * Reflex
 * Reward
 * Dream-Verdichtung
-* noch kein Online-Policy-Rückfluss
+* optionaler Online-Policy-Bias
 
-Deshalb ist die treffende Einordnung:
+Die treffende Einordnung seit Phase 5a lautet:
 
-Im aktuellen Stand ist der PTZ-Lernloop bis zur Offline-Verdichtung vorhanden, aber der online wirksame Policy-Rückkanal ist noch offen.
+Im aktuellen Stand ist der PTZ-Lernloop end-to-end geschlossen, aber nur als **weicher, abschaltbarer Policy-Bias**. Er ist kein harter Policy-Controller.
 
 ⸻
 
@@ -404,6 +407,7 @@ Datenfluss
 4. DreamWorker verarbeitet neue Reward-IDs
 5. DreamWorker schreibt policy_rules namespace='ptz_motor'
 6. Checkpoint wandert in dream_state
+7. Worker kann `policy_rules namespace='ptz_motor'` als optionalen Policy-Bias zurücklesen
 
 ⸻
 
@@ -479,34 +483,40 @@ SQL:
 SELECT
   action,
   SUM(n) AS total_n,
-  ROUND(AVG(q),6) AS avg_q,
+  ROUND(SUM(q*n) / NULLIF(SUM(n),0),6) AS weighted_q,
+  ROUND(AVG(q),6) AS plain_avg_q,
   ROUND(MIN(q),6) AS min_q,
   ROUND(MAX(q),6) AS max_q,
   COUNT(*) AS rule_count,
   datetime(MAX(last_ts),'unixepoch','localtime') AS last_seen
 FROM policy_rules
 WHERE namespace='ptz_motor'
+  AND n >= 3
 GROUP BY action
-ORDER BY avg_q DESC;
+HAVING SUM(n) >= 10
+ORDER BY weighted_q DESC;
 
 ⸻
 
-Was der Lernloop aktuell noch nicht leistet
+Was der Lernloop aktuell bewusst begrenzt
 
-Kein Online-Policy-Rückfluss
+Kein harter Online-Policy-Controller
 
-Die verdichtete ptz_motor-Policy beeinflusst den Worker derzeit noch nicht direkt.
+Die verdichtete `ptz_motor`-Policy darf den Worker seit PTZ Phase 5a nur als weicher Bias beeinflussen. Sie ersetzt nicht die Reflexlogik.
 
-Kein vollständig geschlossener End-to-End-Adaptionskreis
+End-to-End-Adaptionskreis mit Sicherheitsbegrenzung
 
-Es gibt zwar:
+Es gibt jetzt:
 
 * Reward-Erzeugung
 * Dream-Verdichtung
+* optionalen Policy-Bias in der Online-Motorik
 
-aber noch keinen live wirksamen:
+aber weiterhin keinen:
 
-* Policy-Bias in der Online-Motorik
+* direkten Policy-Zwang
+* Überschreiben von Safety-Gates
+* DB-Schreibzugriff im Hot-Loop
 
 Reward-Verteilung derzeit noch schmal
 
@@ -546,31 +556,102 @@ Das ist stabiler als ein monolithischer Online-Loop, in dem alles gleichzeitig p
 
 Präzise Einordnung des aktuellen Reifegrads
 
-Die treffendste Formulierung für den aktuellen Stand ist:
+Die treffendste Formulierung für den Stand **2026-06-07** ist:
 
-Der ORÓMA PTZ-Motor-Lernloop ist bis zur Offline-Verdichtung real und funktionsfähig.
-Online-Reflex, separate Reward-Erzeugung und Dream-basierte Policy-Verdichtung sind implementiert und im Live-Betrieb nachweisbar.
-Der Rückfluss der gelernten ptz_motor-Policy in den Online-Worker ist derzeit noch nicht aktiviert.
+Der ORÓMA PTZ-Motor-Lernloop ist bis zur Dream-Verdichtung und bis zum optionalen Online-Rückkanal technisch geschlossen. Online-Reflex, separate Reward-Erzeugung, Dream-basierte Policy-Verdichtung und ein read-only geladener, evidenzgewichteter Policy-Bias sind implementiert und im Live-Betrieb nachweisbar.
+
+Wichtig bleibt die Sicherheitsgrenze:
+
+* Der Policy-Bias ist kein harter Controller.
+* Der Standarddienst startet weiterhin mit deaktiviertem Bias.
+* Safety-/Reflex-Gates bleiben führend.
+* Eine dauerhafte Aktivierung erfolgt erst nach längerer Stabilitätsbeobachtung.
 
 Oder kürzer:
 
-Der PTZ-Lernloop ist aktuell ein 3,5-stufiger Loop: Reflex, Reward und Dream-Verdichtung sind real; der Policy-Rückkanal ist noch offen.
+Der PTZ-Lernloop ist aktuell ein **4-stufiger, sicherheitsbegrenzter Loop**: Reflex, Reward, Dream-Verdichtung und optionaler gewichteter Policy-Bias sind real; der dauerhafte Produktiv-Bias bleibt bewusst ausgeschaltet.
 
 ⸻
 
-Empfohlene nächste Ausbaustufe
+Live-validierter Fix-Stand 2026-06-06/2026-06-07
 
-Wenn der Loop später weiterentwickelt wird, ist die nächste saubere Stufe:
+### Patch 1 – DreamWorker-Checkpoint
 
-1. policy_rules namespace='ptz_motor' im Worker lesbar machen
-2. pro state_hash einen weichen Aktionsbias ableiten
-3. Bias nur ergänzend, nicht dominierend einsetzen
-4. Logging sichtbar machen:
-    * Policy-Bias aktiv ja/nein
-    * Einflussstärke
-    * Quelle / state_hash / action
+Problem:
 
-Dann wäre der PTZ-Lernloop erstmals wirklich geschlossen.
+* `sql_manager.get_conn()` liefert Dict-Rows.
+* `core/dream_worker.py` las den Checkpoint mit `row[0]`.
+* Dadurch konnte `ptz_motor_policy:last_reward_id` still falsch gelesen werden und der DreamWorker wiederholt alte Fenster verarbeiten.
+
+Fix:
+
+* Dict-/Tuple-sicherer Checkpoint-Leser.
+* sichtbares Logging mit `start_id`, `fetched`, `updated`, `skipped`, `no_action`, `last_id`.
+
+Live-Nachweis:
+
+```text
+checkpoint wanderte von 1224928 bis 1434710
+max ptz_motor reward id: 1434710
+backlog: 0
+policy_rules namespace='ptz_motor': 523+
+```
+
+### Patch 2 – Reward Collector `policy_action`-Guard
+
+Problem:
+
+* Beobachtungsrewards wie `ptz_motor/target_conf_gain` konnten eine `policy_action` tragen.
+* Dadurch hätten reine Wahrnehmungsänderungen fälschlich zu Motor-Policy-Regeln werden können.
+
+Fix:
+
+* `policy_action` wird nur noch bei motorisch zuordenbaren Rewards behalten:
+  * `ptz_motor/center_gain`
+  * `ptz_motor/wasted_motion_penalty`
+* Beobachtungs- und Diagnose-Rewards verlieren vor dem Emit Aktionsfelder.
+
+Live-Nachweis:
+
+```text
+with_policy_action: 19
+motor_with_action: 19
+unexpected_non_motor_with_action: []
+```
+
+### Patch 3 – Worker Weighted Policy Bias
+
+Problem:
+
+* `AVG(q)` bewertet Einzelregeln mit `n=1` genauso stark wie belastbare Regeln mit hohem `n`.
+
+Fix:
+
+* Worker-Aggregation auf `SUM(q*n)/SUM(n)` umgestellt.
+* Mindestfilter:
+  * `n >= 3`
+  * `SUM(n) >= 10`
+* Bias bleibt per Default aus.
+
+Live-Nachweis gewichteter Kandidaten:
+
+```text
+up     total_n=433  weighted_q=0.061893  → Gate 0.05 bestanden
+down   total_n=159  weighted_q=0.054167  → Gate 0.05 bestanden
+right  total_n=87   weighted_q=0.007183  → Gate nicht bestanden
+left   total_n=79   weighted_q=0.004254  → Gate nicht bestanden
+```
+
+Temporärer Bias-Test:
+
+```text
+policy_bias_enabled: True
+policy_bias_active:  True
+policy_bias:         {'down': 0.002167, 'up': 0.002476}
+aggregation:         weighted_q=sum(q*n)/sum(n)
+```
+
+Der Test bestätigt den Rückkanal, aber die dauerhafte Aktivierung bleibt aus.
 
 ⸻
 
@@ -581,13 +662,212 @@ Der PTZ-Motor-Lernloop in ORÓMA ist architektonisch sauber in mehrere Zeitskale
 * schnelle Motorik
 * separate Reward-Attribution
 * Dream-basierte Policy-Konsolidierung
+* optionaler, gewichteter und abschaltbarer Policy-Bias
 
 Die reale Betriebsanalyse zeigt:
 
 * Worker kann stabil laufen
-* Reward-Erzeugung hängt am Collector
-* Dream-Verdichtung hängt an DREAM-Phase und Collector-Daten
-* die Policy-Verdichtung funktioniert
-* der Rückkanal in den Worker fehlt noch
+* Collector erzeugt motorisch verwertbare Rewards
+* DreamWorker verarbeitet inkrementell und holt Backlog auf 0
+* `policy_rules namespace='ptz_motor'` wachsen
+* der gewichtete Rückkanal funktioniert im temporären Test
 
-Damit ist der Loop bereits deutlich weiter als ein bloßer Reflexpfad, aber noch nicht vollständig zum selbstverstärkenden Online-Lernkreis geschlossen.
+Damit ist der Loop nicht mehr nur Reflex + Offline-Lernen, sondern ein kontrolliert geschlossener Lernkreis mit bewusst deaktivierter Dauer-Rückkopplung.
+
+---
+
+## PTZ Phase 5a/5b – implementierter und gewichteter Policy-Bias-Rückfluss
+
+**Stand:** 2026-06-07  
+**Status:** Code-Pfad, gewichtete Aggregation und temporärer Live-Bias-Test erfolgreich validiert; dauerhafte Aktivierung bleibt aus.
+
+### Zweck
+
+Phase 5a schloss den bisher offenen Rückkanal zwischen Dream-verdichteter PTZ-Motor-Policy und Online-Worker. Phase 5b macht diesen Rückkanal statistisch belastbarer: Der Worker darf die gelernte Policy weiterhin nur als kleinen Bias verwenden, lädt Action-Kandidaten aber evidenzgewichtet über `SUM(q*n)/SUM(n)`.
+
+```text
+rewards_log ptz_motor/*
+→ DreamWorker
+→ policy_rules namespace='ptz_motor'
+→ tools/ptz_motor_worker.py
+→ optionaler Aktions-Bias
+```
+
+### Aktivierungsmodell
+
+Der Bias ist ENV-gesteuert und sicher deaktivierbar:
+
+```text
+OROMA_PTZ_MOTOR_POLICY_BIAS_ENABLE=0|1
+OROMA_PTZ_MOTOR_POLICY_NS=ptz_motor
+OROMA_PTZ_MOTOR_POLICY_BIAS_WEIGHT=0.08
+OROMA_PTZ_MOTOR_POLICY_BIAS_MIN_N=10
+OROMA_PTZ_MOTOR_POLICY_BIAS_MIN_RULE_N=3
+OROMA_PTZ_MOTOR_POLICY_BIAS_MIN_ABS_Q=0.05
+OROMA_PTZ_MOTOR_POLICY_BIAS_REFRESH_SEC=60
+OROMA_PTZ_MOTOR_POLICY_BIAS_MAX_ABS=0.20
+```
+
+### Sicherheitsregeln
+
+Der Policy-Bias darf nicht überschreiben:
+
+```text
+deadzone
+energy_low
+micro_guard
+cooldown
+axis_lock
+reversal_guard
+cmd_fail handling
+max-step / PTZ command safety
+```
+
+Er darf nur dort helfen, wo der Worker ohnehin eine plausible Bewegung erwägt. Die Reflexlogik bleibt primär.
+
+### Live-Tests
+
+Der erste Starttest nach Phase 5a war erfolgreich:
+
+```text
+python3 -m py_compile tools/ptz_motor_worker.py  → OK
+oroma-ptz-motor-worker.service                  → active (running)
+fail                                            → 0
+ok                                              → steigend
+```
+
+Im Startlog wird die neue Policy-Konfiguration sichtbar:
+
+```text
+policy_bias=0
+policy_ns=ptz_motor
+policy_w=0.080
+policy_min_total_n=10
+policy_min_rule_n=3
+policy_min_q=0.050
+policy_refresh=60.0s
+```
+
+Damit war bestätigt: Der Codepfad startet stabil. Der spätere Phase-5b-Test bestätigte zusätzlich die gewichtete Aggregation und das Gate-Verhalten: `up` und `down` wurden als schwache Bias-Kandidaten geladen, `left` und `right` blieben wegen zu kleinem `weighted_q` außen vor. Die Daueraktivierung bleibt weiterhin aus.
+
+### Erfolgskriterium für Aktivierung
+
+Ein aktiver Test mit `OROMA_PTZ_MOTOR_POLICY_BIAS_ENABLE=1` gilt nur dann als erfolgreich, wenn:
+
+```text
+Worker bleibt active (running)
+fail bleibt 0
+moves steigen nicht unkontrolliert
+State/Log zeigt policy_bias_* sichtbar
+wasted_motion_penalty sinkt oder bleibt stabil
+target_stability / center_gain verbessern sich über längere Beobachtung
+```
+
+
+## Stand 2026-06-13 – Positive Position Marker / Stage-A Evidence
+
+- `tools/ptz_motor_worker.py` speichert konservative Positive Position Marker in `data/state/ptz_positive_position_markers.json`.
+- v1.6d blockiert `motion_diff_upper` und Motion-only-Kandidaten standardmäßig (`OROMA_PTZ_MOTOR_POS_MARKER_ALLOW_MOTION_ONLY=0`, `OROMA_PTZ_MOTOR_POS_MARKER_ALLOW_UPPER_MOTION=0`).
+- Der Marker ist reine Evidenz: keine Identität, keine automatische Steuerung, keine direkte Policy-Materialisierung.
+- Ceiling-Recovery schützt gegen langes Decken-/Leerlauf-Schauen, ist aber durch Start-Grace und Cooldown rate-limitiert.
+- `tools/ptz_positive_position_probe.py` ist die Stage-A-Messbrücke: Marker zählen, Top-Zellen und Guard-Status sichtbar machen und optional via DBWriter nach `stats.db.stats_points` schreiben.
+- Produktiver Bias bleibt aus, bis Learning-Evidence eindeutig positive Wirkung belegt.
+
+### Stage-A Evidence Timer (P1b, Stand 2026-06-13)
+
+Die Positive-Position-Probe kann jetzt regelmäßig als systemd-Timer laufen:
+
+```text
+systemd/oroma-ptz-positive-position-probe.service
+systemd/oroma-ptz-positive-position-probe.timer
+```
+
+Der Timer führt alle 5 Minuten aus:
+
+```text
+tools/ptz_positive_position_probe.py --once --write-stats --verbose
+```
+
+Architekturregeln:
+
+- reine Stage-A-Messung; keine PTZ-Motorsteuerung
+- keine Policy-Aktivierung
+- keine Materialisierung in `object_nodes` oder `object_relations`
+- Stats-Writes nur über DBWriter (`OROMA_DBW_ENABLE=1`)
+- Verlaufsspur in `stats.db.stats_points` über `ptz.marker.*`-Serien
+
+Damit werden wiederkehrende interessante PTZ-Bildpositionen nicht sofort als
+Verhalten genutzt, sondern zuerst über Zeit messbar gemacht. Das entspricht der
+Core-Regel: messen → Evidenz sammeln → später Dream/Binding entscheiden lassen.
+
+
+## P2 – Evidence Report für Positive Position Marker (Stand 2026-06-13)
+
+Mit `tools/ptz_positive_position_evidence_report.py` ist der Positive-Position-Marker-Pfad nicht nur messend persistent, sondern auch read-only auswertbar. Das Tool analysiert die vom Probe-Timer erzeugten `ptz.marker.*`-Serien in `stats.db.stats_points`.
+
+Es beantwortet unter anderem:
+
+- wächst `positive_count`?
+- entsteht `repeat_ge_5`?
+- bleibt `motion_guard_blocked` hoch?
+- wird `ceiling_active` seltener?
+- bleibt ein `top_key` stabil oder springt die Aufmerksamkeit?
+
+Wichtig: Diese Auswertung steuert nichts. Sie ist Stage-A Evidence, keine Policy und keine Materialisierung.
+
+```bash
+cd /opt/ai/oroma; python3 tools/ptz_positive_position_evidence_report.py --text --verbose
+```
+
+## P2.5 – PTZ Policy Atomicity / DBWriter Hygiene (Stand 2026-06-14)
+
+Dieser Stand ist ein reiner Stabilitäts- und Wartbarkeits-Patch. Die Lernsemantik wird bewusst nicht vereinheitlicht:
+
+- `universal_policy.learn_many()` nutzt weiterhin eine diskrete Bilanz-Semantik für Spiel-/Universal-Namespace-Regeln: `q=(pos-neg)/n`.
+- PTZ-Policy-Namespace(s) behalten die kontinuierliche Reward-Mittelwert-Semantik: `q=((q*n)+r)/(n+1)`.
+- Im DBWriter-Betrieb werden die PTZ-Policy-Updates jetzt als atomare DBWriter-Transaction ausgeführt: `INSERT OR IGNORE` und `UPDATE` bleiben logisch identisch, laufen aber nicht mehr als zwei getrennte Queue-Operationen.
+- In `core/sql_manager.py` wurde eine tote doppelte `_dbw_enabled()`-Definition entfernt; die aktive ENV-basierte Implementierung bleibt erhalten.
+- Keine Policy-Bias-Aktivierung, keine Motorsteuerung, keine Materialisierung und kein lokaler SQLite-Fallback wurden hinzugefügt.
+
+## P2.6 – Idempotente Stage-A Stats-Writes (Stand 2026-06-16)
+
+Live-Befund nach mehrtägigem Timer-Betrieb: Die PTZ Positive Position Evidence
+wuchs fachlich korrekt (`positive_count=19`, `repeat_ge_5=17`, stabile Top-Zelle
+`g6:x2:y3`), aber einzelne Wiederholungsläufe konnten in `stats_points` einen
+`UNIQUE constraint failed: stats_points.src_table, stats_points.src_uid, stats_points.series`
+auslösen.
+
+Korrektur: `tools/ptz_positive_position_probe.py` und
+`tools/synapses_bridge_probe.py` schreiben ihre Measure-only-Stats weiterhin
+ausschließlich via DBWriter, aber nun idempotent per `ON CONFLICT ... DO UPDATE`.
+Das ändert keine Lernsemantik, keine Markerlogik, keine Motorsteuerung und keine
+Materialisierung. Es verhindert nur, dass doppelte Sekunden-Snapshots oder
+Orchestrator-Wiederholungsläufe als harte Fehler im Timer/DBWriter erscheinen.
+
+
+## P3a – Regional Temporal Motion Signature Evidence (Stand 2026-06-16)
+
+P3a ist keine neue Steuerung, sondern ein zusätzlicher Stage-A-Evidence-Pfad. Der bisherige Motor-Policy-Lernloop bleibt unverändert. Der Positive-Position-Marker-Pfad bleibt Eye/Face-gated. P3a misst ausschließlich, ob andere interessante Bewegungen – insbesondere kleine, gerichtete Bewegungsobjekte wie Menschen/Autos auf der Straße – vom System getrennt von TV-/Display-/Fensterartefakten erkannt werden können.
+
+Getrennte Zeitskalen:
+
+- kurzfristig pro Lauf: mehrere Frames/Samples in kurzer Folge, Default 12 × 0,35 s
+- langfristig im State: langsame EMA-Baseline pro Rasterzelle
+
+Getrennte Klassen:
+
+```text
+structured_blob_motion
+fixed_fast_change_region
+fixed_low_change_display_region
+dark_static_region
+slow_drift_region
+```
+
+Wichtige Invariante: P3a schreibt nur `ptz.motion.*`-Stats und bewegt keinen Motor. Erst wenn über mehrere Tageszeiten stabil gezeigt wird, dass `structured_blob_motion` von `fixed_fast_change_region` und `fixed_low_change_display_region` getrennt bleibt, darf später ein Dream-Candidate diskutiert werden.
+
+## P3z0 – Zoom Context vor ViewMap Sweep (Stand 2026-06-16)
+
+Der PTZ-Lernpfad priorisiert nach dem Live-Befund zuerst die billigste Hypothese: zu enger Zoom. Bei Zoom 130 fand der Motor-Worker keinen qualifizierten Zielvektor (`deadzone`, `confidence=0.0`), während bei Zoom 100 Außen-/Straßenkontext sichtbar wurde. P3z0 prüft diesen Effekt wiederholt und measure-only, bevor P3b0/P3b1 mit Pan/Tilt-Sweep oder Anchor-Curiosity gebaut werden.
+
+Entscheidungsregel: Ein Einzellauf reicht nicht. `ptz.zoom_context.wide_helpful_sample`, `ptz.zoom_context.score.delta` und `ptz.zoom_context.structured.delta` müssen über mehrere Fenster (1h/6h/24h) betrachtet werden. Wenn Wide-Zoom häufig hilfreich ist, ist zuerst eine einfache Zoom-Policy sinnvoll: Suche/Orientierung bei Zoom 100, Detailbeobachtung erst nach Treffer. Wenn Wide-Zoom nicht reicht, folgt der begrenzte PTZ-ViewMap-Sweep mit Boundary-Erkennung.

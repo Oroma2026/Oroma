@@ -3,9 +3,9 @@
 # =============================================================================
 # Pfad:      /opt/ai/oroma/tools/nmr_binding_probe.py
 # Projekt:   ORÓMA (Offline-Realtime-Organic-Memory-AI)
-# Modul:     NMR Phase 2.0a – Binding-Probe, messend / nicht materialisierend
-# Version:   v1.1.0
-# Stand:     2026-05-27
+# Modul:     NMR Phase 2.0a/2.0b – Binding-Probe + History-Review, messend / nicht materialisierend
+# Version:   v1.3.0
+# Stand:     2026-06-07
 # Autor:     ORÓMA · Jörg Werner + OpenAI GPT-5.5 Thinking
 # Lizenz:    MIT
 # =============================================================================
@@ -91,6 +91,18 @@
 #      nmr:binding_probe:history_seen_before_top
 #      nmr:binding_probe:history_recurring_weak_top
 #
+# 4) optionaler Review-State für Phase 2.0b:
+#      /opt/ai/oroma/data/state/nmr_binding_probe_review_state.json
+#
+#    Review-Metriken:
+#      nmr:binding_probe_review:history_lines
+#      nmr:binding_probe_review:pair_count
+#      nmr:binding_probe_review:stable_candidates
+#      nmr:binding_probe_review:recurring_weak_candidates
+#      nmr:binding_probe_review:max_seen_count
+#      nmr:binding_probe_review:max_score
+#      nmr:binding_probe_review:materialized
+#
 # DB-/LOCK-DISZIPLIN
 # ──────────────────
 # - Reads: SQLite read-only URI auf oroma.db, Connections werden immer geschlossen.
@@ -116,6 +128,8 @@
 #   OROMA_NMR_BINDING_PROBE_TOPK                Default: 25
 #   OROMA_NMR_BINDING_PROBE_HISTORY_ENABLE      Default: 1
 #   OROMA_NMR_BINDING_PROBE_HISTORY_MAX_LINES   Default: 1000
+#   OROMA_NMR_BINDING_REVIEW_MIN_SEEN            Default: 3
+#   OROMA_NMR_BINDING_REVIEW_TOPK                Default: $TOPK
 #
 # RUN
 # ───
@@ -261,6 +275,10 @@ def _state_path() -> str:
 
 def _history_path() -> str:
     return os.path.join(_data_dir(), "state", "nmr_binding_probe_history.jsonl")
+
+
+def _review_state_path() -> str:
+    return os.path.join(_data_dir(), "state", "nmr_binding_probe_review_state.json")
 
 
 def _clamp01(x: Any, default: float = 0.0) -> float:
@@ -923,6 +941,418 @@ def run_probe(args: argparse.Namespace) -> Dict[str, Any]:
     return state
 
 
+
+# -----------------------------------------------------------------------------
+# Phase 2.0b: History Review / Stabilitätsauswertung
+# -----------------------------------------------------------------------------
+
+
+def _load_history_entries(path: str, max_lines: int = 1000) -> List[Dict[str, Any]]:
+    """Lädt die letzten History-Einträge robust und read-only.
+
+    Die History-Datei ist bewusst JSONL, damit periodische Probe-Läufe ohne neue
+    Tabellen und ohne Schema-Änderungen einen Verlauf hinterlassen. Fehlerhafte
+    oder unvollständige Zeilen werden sichtbar übersprungen, aber nicht gelöscht.
+    """
+    entries: List[Dict[str, Any]] = []
+    try:
+        if not os.path.exists(path):
+            return entries
+        tail: Deque[str] = deque(maxlen=max(1, int(max_lines)))
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    tail.append(line)
+        for line in tail:
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(row, dict):
+                entries.append(row)
+    except Exception:
+        return entries
+    return entries
+
+
+def _history_candidate_key(candidate: Dict[str, Any]) -> str:
+    pid = str(candidate.get("pair_id") or "").strip()
+    if pid:
+        return pid
+    return _candidate_pair_id(str(candidate.get("a_ref") or ""), str(candidate.get("b_ref") or ""))
+
+
+def _origin_modality(origin: Any, ref: Any = "", namespace: Any = "") -> str:
+    """Ordnet einen Kandidaten-Anker einer groben Modalitätsklasse zu.
+
+    Diese Klassifikation ist absichtlich konservativ und explainable. Sie dient
+    nur dem Review-Modus, damit audio-dominierte Kandidaten nicht die gesamte
+    Top-Liste verdecken. Sie erzeugt keine Hypothesen und keine Relationen.
+    """
+    text = " ".join(str(x or "").lower() for x in (origin, ref, namespace))
+    if "ptz" in text or "pan" in text or "tilt" in text or "zoom" in text:
+        return "ptz"
+    if "vision" in text or "camera" in text or "cam_token" in text or "image" in text:
+        return "vision"
+    if "audio" in text or "mic" in text or "sound" in text or "speech" in text:
+        return "audio"
+    if "game:" in text or "chess" in text or "tictactoe" in text or "connect4" in text or "snake" in text:
+        return "game"
+    if (
+        "curriculum" in text
+        or "calc" in text
+        or "calculator" in text
+        or "runtime" in text
+        or "self" in text
+        or "transfer" in text
+        or "policy" in text
+    ):
+        return "internal"
+    return "unknown"
+
+
+def _pair_modality_class(a_modality: str, b_modality: str) -> str:
+    """Kanonische Klasse für Review-Kandidaten.
+
+    Die Klasse ist nicht semantisch endgültig. Sie ist eine Diagnose-Sicht:
+    audio↔audio wird bewusst separat gehalten, während crossmodale und
+    vision-/PTZ-nahe Paare sichtbar werden.
+    """
+    pair = sorted([str(a_modality or "unknown"), str(b_modality or "unknown")])
+    a, b = pair[0], pair[1]
+    if a == b == "audio":
+        return "audio_audio"
+    if a == b == "vision":
+        return "vision_vision"
+    if a == b == "ptz":
+        return "ptz_ptz"
+    if a == b == "game" or set(pair) <= {"game", "internal"}:
+        return "game_internal"
+    if pair == ["audio", "vision"]:
+        return "audio_vision"
+    if pair == ["ptz", "vision"]:
+        return "ptz_vision"
+    if pair == ["audio", "game"]:
+        return "audio_game"
+    if pair == ["game", "vision"]:
+        return "game_vision"
+    if pair == ["audio", "ptz"]:
+        return "audio_ptz"
+    if pair == ["internal", "vision"]:
+        return "internal_vision"
+    if pair == ["internal", "audio"]:
+        return "audio_internal"
+    if a != b:
+        return "crossmodal_other"
+    return f"{a}_{b}"
+
+
+def _is_crossmodal_class(modality_class: str) -> bool:
+    return modality_class in {
+        "audio_vision",
+        "ptz_vision",
+        "audio_game",
+        "game_vision",
+        "audio_ptz",
+        "internal_vision",
+        "audio_internal",
+        "crossmodal_other",
+    }
+
+
+def _is_vision_relevant_class(modality_class: str) -> bool:
+    return modality_class in {"vision_vision", "audio_vision", "ptz_vision", "game_vision", "internal_vision"}
+
+
+def _hypothesis_readiness(
+    modality_class: str,
+    seen: int,
+    weak_seen: int,
+    strong_seen: int,
+    max_score: float,
+    stability_score: float,
+    min_seen: int,
+    weak_score: float,
+) -> Tuple[bool, str]:
+    """Konservative Review-only Einschätzung für spätere Hypothesenfähigkeit.
+
+    Hypothesis-ready bedeutet hier ausdrücklich NICHT, dass core/hypothesis.py
+    beschrieben werden soll. Es ist nur ein Filter für Kandidaten, die in einer
+    späteren Phase manuell/gezielt geprüft werden könnten.
+    """
+    if seen < min_seen:
+        return False, "too_few_seen"
+    if weak_seen < min_seen:
+        return False, "too_few_weak_confirmations"
+    if modality_class == "audio_audio":
+        return False, "audio_audio_review_only"
+    if modality_class in {"audio_game", "audio_internal"}:
+        return False, "audio_internal_or_game_needs_separate_review"
+    if modality_class in {"ptz_vision", "vision_vision", "audio_vision", "game_vision", "internal_vision"}:
+        if stability_score >= 0.65 and (max_score >= max(0.60, weak_score) or strong_seen > 0):
+            return True, "candidate_for_later_manual_hypothesis_review"
+        return False, "vision_related_but_below_review_threshold"
+    return False, "not_in_initial_hypothesis_class"
+
+
+def _review_history(args: argparse.Namespace) -> Dict[str, Any]:
+    """Aggregiert wiederkehrende Top-Kandidaten über mehrere Probe-Läufe.
+
+    Diese Auswertung ist Phase 2.0b: Sie prüft Stabilität über Zeit, erzeugt aber
+    keine Hypothesen und materialisiert keine object_relations. Der Zweck ist,
+    nach der Beobachtungsphase zu entscheiden, welche Kandidaten überhaupt für
+    einen späteren Hypothesis-Emit-Modus geeignet wären.
+    """
+    started = time.time()
+    history_path = str(getattr(args, "history_path", _history_path()))
+    max_lines = int(getattr(args, "history_max_lines", 1000))
+    entries = _load_history_entries(history_path, max_lines=max_lines)
+    min_seen = max(1, int(getattr(args, "review_min_seen", 3)))
+    review_topk = max(1, int(getattr(args, "review_topk", getattr(args, "topk", 25))))
+    weak_score = float(getattr(args, "weak_score", 0.45))
+    strong_score = float(getattr(args, "strong_score", 0.65))
+
+    agg: Dict[str, Dict[str, Any]] = {}
+    run_ts_values: List[int] = []
+    malformed_candidate_count = 0
+
+    for entry_idx, entry in enumerate(entries):
+        try:
+            run_ts = int(entry.get("ts") or 0)
+        except Exception:
+            run_ts = 0
+        if run_ts > 0:
+            run_ts_values.append(run_ts)
+        for c in entry.get("top_candidates", []) or []:
+            if not isinstance(c, dict):
+                malformed_candidate_count += 1
+                continue
+            key = _history_candidate_key(c)
+            if not key:
+                malformed_candidate_count += 1
+                continue
+            row = agg.get(key)
+            if row is None:
+                row = {
+                    "pair_id": key,
+                    "a_ref": c.get("a_ref"),
+                    "b_ref": c.get("b_ref"),
+                    "a_origin": c.get("a_origin"),
+                    "b_origin": c.get("b_origin"),
+                    "seen_count": 0,
+                    "weak_seen_count": 0,
+                    "strong_seen_count": 0,
+                    "score_sum": 0.0,
+                    "repeat_sum": 0.0,
+                    "max_score": 0.0,
+                    "last_score": 0.0,
+                    "first_seen_ts": run_ts,
+                    "last_seen_ts": run_ts,
+                    "run_indices": [],
+                    "decisions": {},
+                }
+                agg[key] = row
+            score = _safe_float(c.get("binding_score"), 0.0)
+            repeat = _safe_float(c.get("repeat_count"), 0.0)
+            decision = str(c.get("decision") or "unknown")
+            row["seen_count"] = int(row.get("seen_count") or 0) + 1
+            row["score_sum"] = float(row.get("score_sum") or 0.0) + score
+            row["repeat_sum"] = float(row.get("repeat_sum") or 0.0) + repeat
+            row["max_score"] = max(float(row.get("max_score") or 0.0), score)
+            row["last_score"] = score
+            if score >= weak_score:
+                row["weak_seen_count"] = int(row.get("weak_seen_count") or 0) + 1
+            if score >= strong_score:
+                row["strong_seen_count"] = int(row.get("strong_seen_count") or 0) + 1
+            if run_ts > 0:
+                first = int(row.get("first_seen_ts") or run_ts)
+                last = int(row.get("last_seen_ts") or run_ts)
+                row["first_seen_ts"] = min(first, run_ts)
+                row["last_seen_ts"] = max(last, run_ts)
+            row.setdefault("run_indices", []).append(int(entry_idx))
+            decisions = row.setdefault("decisions", {})
+            decisions[decision] = int(decisions.get(decision, 0)) + 1
+
+    candidates: List[Dict[str, Any]] = []
+    for row in agg.values():
+        seen = max(1, int(row.get("seen_count") or 0))
+        weak_seen = int(row.get("weak_seen_count") or 0)
+        strong_seen = int(row.get("strong_seen_count") or 0)
+        avg_score = float(row.get("score_sum") or 0.0) / float(seen)
+        avg_repeat = float(row.get("repeat_sum") or 0.0) / float(seen)
+        # Stabilität ist absichtlich konservativ: Wiederkehr zählt stärker als
+        # ein einzelner hoher Score. Strong bleibt nur Hinweis, kein Write-Signal.
+        stability_score = _clamp01(
+            min(1.0, seen / max(1.0, float(min_seen) * 2.0)) * 0.35
+            + min(1.0, weak_seen / max(1.0, float(min_seen))) * 0.30
+            + _clamp01(avg_score) * 0.25
+            + min(1.0, avg_repeat / 8.0) * 0.10
+        )
+        a_modality = _origin_modality(row.get("a_origin"), row.get("a_ref"))
+        b_modality = _origin_modality(row.get("b_origin"), row.get("b_ref"))
+        modality_class = _pair_modality_class(a_modality, b_modality)
+        hyp_ready, hyp_reason = _hypothesis_readiness(
+            modality_class=modality_class,
+            seen=int(seen),
+            weak_seen=int(weak_seen),
+            strong_seen=int(strong_seen),
+            max_score=float(row.get("max_score") or 0.0),
+            stability_score=float(stability_score),
+            min_seen=int(min_seen),
+            weak_score=float(weak_score),
+        )
+        base_review_decision = (
+            "stable_weak_candidate_review_only" if weak_seen >= min_seen else
+            "seen_before_review_only" if seen >= min_seen else
+            "insufficient_history_review_only"
+        )
+        if modality_class == "audio_audio" and weak_seen >= min_seen:
+            base_review_decision = "stable_audio_audio_review_only"
+        elif hyp_ready:
+            base_review_decision = "hypothesis_ready_review_only"
+        candidates.append({
+            "pair_id": row.get("pair_id"),
+            "a_ref": row.get("a_ref"),
+            "b_ref": row.get("b_ref"),
+            "a_origin": row.get("a_origin"),
+            "b_origin": row.get("b_origin"),
+            "a_modality": a_modality,
+            "b_modality": b_modality,
+            "modality_pair_class": modality_class,
+            "is_crossmodal": bool(_is_crossmodal_class(modality_class)),
+            "is_vision_relevant": bool(_is_vision_relevant_class(modality_class)),
+            "hypothesis_ready": bool(hyp_ready),
+            "hypothesis_ready_reason": hyp_reason,
+            "seen_count": int(seen),
+            "weak_seen_count": int(weak_seen),
+            "strong_seen_count": int(strong_seen),
+            "avg_score": round(avg_score, 6),
+            "max_score": round(float(row.get("max_score") or 0.0), 6),
+            "last_score": round(float(row.get("last_score") or 0.0), 6),
+            "avg_repeat_count": round(avg_repeat, 3),
+            "first_seen_ts": int(row.get("first_seen_ts") or 0),
+            "last_seen_ts": int(row.get("last_seen_ts") or 0),
+            "stability_score": round(stability_score, 6),
+            "decisions": row.get("decisions") or {},
+            "review_decision": base_review_decision,
+        })
+
+    candidates.sort(
+        key=lambda c: (
+            float(c.get("stability_score") or 0.0),
+            int(c.get("weak_seen_count") or 0),
+            float(c.get("max_score") or 0.0),
+            int(c.get("seen_count") or 0),
+        ),
+        reverse=True,
+    )
+
+    stable_candidates = sum(1 for c in candidates if int(c.get("seen_count") or 0) >= min_seen)
+    recurring_weak_candidates = sum(1 for c in candidates if int(c.get("weak_seen_count") or 0) >= min_seen)
+    recurring_strong_candidates = sum(1 for c in candidates if int(c.get("strong_seen_count") or 0) >= min_seen)
+    modality_class_summary: Dict[str, Dict[str, int]] = {}
+    for c in candidates:
+        cls = str(c.get("modality_pair_class") or "unknown_unknown")
+        bucket = modality_class_summary.setdefault(cls, {"total": 0, "stable": 0, "weak": 0, "strong": 0, "hypothesis_ready": 0})
+        bucket["total"] += 1
+        if int(c.get("seen_count") or 0) >= min_seen:
+            bucket["stable"] += 1
+        if int(c.get("weak_seen_count") or 0) >= min_seen:
+            bucket["weak"] += 1
+        if int(c.get("strong_seen_count") or 0) >= min_seen:
+            bucket["strong"] += 1
+        if bool(c.get("hypothesis_ready")):
+            bucket["hypothesis_ready"] += 1
+    audio_audio_candidates = int(modality_class_summary.get("audio_audio", {}).get("total", 0))
+    crossmodal_candidates = sum(1 for c in candidates if bool(c.get("is_crossmodal")))
+    vision_relevant_candidates = sum(1 for c in candidates if bool(c.get("is_vision_relevant")))
+    ptz_vision_candidates = int(modality_class_summary.get("ptz_vision", {}).get("total", 0))
+    game_internal_candidates = int(modality_class_summary.get("game_internal", {}).get("total", 0))
+    hypothesis_ready_candidates = sum(1 for c in candidates if bool(c.get("hypothesis_ready")))
+    max_seen_count = max((int(c.get("seen_count") or 0) for c in candidates), default=0)
+    max_score = max((float(c.get("max_score") or 0.0) for c in candidates), default=0.0)
+    max_stability = max((float(c.get("stability_score") or 0.0) for c in candidates), default=0.0)
+
+    warning: Optional[str] = None
+    if not entries:
+        warning = "history_missing_or_empty"
+    elif len(entries) < min_seen:
+        warning = "too_few_history_runs_for_stability_review"
+    elif stable_candidates <= 0:
+        warning = "no_stable_candidates_seen_enough_times"
+    elif recurring_weak_candidates <= 0:
+        warning = "stable_candidates_exist_but_not_weak_enough"
+
+    state: Dict[str, Any] = {
+        "ok": True,
+        "ts": _now_ts(),
+        "runtime_sec": round(time.time() - started, 6),
+        "mode": "history_review_only",
+        "source": "tools/nmr_binding_probe.py --review-history",
+        "materialized_count": 0,
+        "history_path": history_path,
+        "review_state_path": str(getattr(args, "review_state_path", _review_state_path())),
+        "history": {
+            "lines_loaded": int(len(entries)),
+            "max_lines": int(max_lines),
+            "first_ts": min(run_ts_values) if run_ts_values else 0,
+            "last_ts": max(run_ts_values) if run_ts_values else 0,
+            "malformed_candidate_count": int(malformed_candidate_count),
+        },
+        "thresholds": {
+            "review_min_seen": int(min_seen),
+            "weak_score": float(weak_score),
+            "strong_score": float(strong_score),
+        },
+        "pair_count": int(len(candidates)),
+        "stable_candidate_count": int(stable_candidates),
+        "recurring_weak_candidate_count": int(recurring_weak_candidates),
+        "recurring_strong_candidate_count": int(recurring_strong_candidates),
+        "modality_class_summary": modality_class_summary,
+        "audio_audio_candidate_count": int(audio_audio_candidates),
+        "crossmodal_candidate_count": int(crossmodal_candidates),
+        "vision_relevant_candidate_count": int(vision_relevant_candidates),
+        "ptz_vision_candidate_count": int(ptz_vision_candidates),
+        "game_internal_candidate_count": int(game_internal_candidates),
+        "hypothesis_ready_candidate_count": int(hypothesis_ready_candidates),
+        "max_seen_count": int(max_seen_count),
+        "max_score": round(float(max_score), 6),
+        "max_stability_score": round(float(max_stability), 6),
+        "warning": warning,
+        "top_review_candidates": candidates[:review_topk],
+        "top_hypothesis_ready_candidates": [c for c in candidates if bool(c.get("hypothesis_ready"))][:review_topk],
+        "top_crossmodal_candidates": [c for c in candidates if bool(c.get("is_crossmodal"))][:review_topk],
+        "top_vision_relevant_candidates": [c for c in candidates if bool(c.get("is_vision_relevant"))][:review_topk],
+        "top_audio_audio_candidates": [c for c in candidates if c.get("modality_pair_class") == "audio_audio"][:review_topk],
+    }
+    return state
+
+
+def _write_review_metrics(state: Dict[str, Any]) -> None:
+    ts = int(state.get("ts") or _now_ts())
+    history = state.get("history") or {}
+    metrics = {
+        "history_lines": float(history.get("lines_loaded") or 0),
+        "pair_count": float(state.get("pair_count") or 0),
+        "stable_candidates": float(state.get("stable_candidate_count") or 0),
+        "recurring_weak_candidates": float(state.get("recurring_weak_candidate_count") or 0),
+        "recurring_strong_candidates": float(state.get("recurring_strong_candidate_count") or 0),
+        "audio_audio_candidates": float(state.get("audio_audio_candidate_count") or 0),
+        "crossmodal_candidates": float(state.get("crossmodal_candidate_count") or 0),
+        "vision_relevant_candidates": float(state.get("vision_relevant_candidate_count") or 0),
+        "ptz_vision_candidates": float(state.get("ptz_vision_candidate_count") or 0),
+        "game_internal_candidates": float(state.get("game_internal_candidate_count") or 0),
+        "hypothesis_ready_candidates": float(state.get("hypothesis_ready_candidate_count") or 0),
+        "max_seen_count": float(state.get("max_seen_count") or 0),
+        "max_score": float(state.get("max_score") or 0.0),
+        "max_stability_score": float(state.get("max_stability_score") or 0.0),
+        "materialized": float(state.get("materialized_count") or 0),
+    }
+    for suffix, value in metrics.items():
+        _write_metric(f"nmr:binding_probe_review:{suffix}", float(value), ts)
+
+
 def _write_probe_metrics(state: Dict[str, Any]) -> None:
     ts = int(state.get("ts") or _now_ts())
     metrics = {
@@ -965,6 +1395,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--history-path", type=str, default=_history_path())
     p.add_argument("--history-enable", action=argparse.BooleanOptionalAction, default=_env_bool("OROMA_NMR_BINDING_PROBE_HISTORY_ENABLE", True))
     p.add_argument("--history-max-lines", type=int, default=_env_int("OROMA_NMR_BINDING_PROBE_HISTORY_MAX_LINES", 1000))
+    p.add_argument("--review-history", action="store_true", help="Phase 2.0b: review nmr_binding_probe_history.jsonl only; no live DB observation scan.")
+    p.add_argument("--review-state-path", type=str, default=_review_state_path())
+    p.add_argument("--review-min-seen", type=int, default=_env_int("OROMA_NMR_BINDING_REVIEW_MIN_SEEN", 3))
+    p.add_argument("--review-topk", type=int, default=_env_int("OROMA_NMR_BINDING_REVIEW_TOPK", _env_int("OROMA_NMR_BINDING_PROBE_TOPK", 25)))
     p.add_argument("--no-db-writes", action="store_true", help="Do not write DB metrics; still writes state JSON. Useful for local smoke tests.")
     p.add_argument("--print-json", action="store_true", help="Print full state JSON to stdout.")
     p.add_argument("--verbose", action="store_true")
@@ -979,6 +1413,38 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         raise SystemExit("--max-snapchains must be > 0")
     if int(args.pair_window_sec) <= 0:
         raise SystemExit("--pair-window-sec must be > 0")
+
+    if bool(getattr(args, "review_history", False)):
+        state = _review_history(args)
+        _atomic_write_json(str(args.review_state_path), state)
+        if not args.no_db_writes:
+            _write_review_metrics(state)
+        if args.print_json:
+            print(json.dumps(state, ensure_ascii=False, sort_keys=True, indent=2))
+        else:
+            print(json.dumps({
+                "ok": state.get("ok"),
+                "mode": state.get("mode"),
+                "history_lines": (state.get("history") or {}).get("lines_loaded"),
+                "pair_count": state.get("pair_count"),
+                "stable_candidate_count": state.get("stable_candidate_count"),
+                "recurring_weak_candidate_count": state.get("recurring_weak_candidate_count"),
+                "recurring_strong_candidate_count": state.get("recurring_strong_candidate_count"),
+                "audio_audio_candidate_count": state.get("audio_audio_candidate_count"),
+                "crossmodal_candidate_count": state.get("crossmodal_candidate_count"),
+                "vision_relevant_candidate_count": state.get("vision_relevant_candidate_count"),
+                "ptz_vision_candidate_count": state.get("ptz_vision_candidate_count"),
+                "game_internal_candidate_count": state.get("game_internal_candidate_count"),
+                "hypothesis_ready_candidate_count": state.get("hypothesis_ready_candidate_count"),
+                "max_seen_count": state.get("max_seen_count"),
+                "max_score": state.get("max_score"),
+                "max_stability_score": state.get("max_stability_score"),
+                "materialized_count": state.get("materialized_count"),
+                "warning": state.get("warning"),
+                "review_state_path": str(args.review_state_path),
+                "db_writes": not args.no_db_writes,
+            }, ensure_ascii=False, sort_keys=True))
+        return 0
 
     state = run_probe(args)
     _atomic_write_json(str(args.state_path), state)

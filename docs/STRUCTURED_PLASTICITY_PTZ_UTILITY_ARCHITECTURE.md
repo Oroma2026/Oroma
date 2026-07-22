@@ -4,9 +4,9 @@
 **Projekt:** ORÓMA – Offline-Realtime-Organic-Memory-AI  
 **Kurzbeschreibung:** An offline-first adaptive edge intelligence architecture  
 **Dokumenttyp:** Architektur-, Zielbild- und Implementierungsdokumentation  
-**Stand:** 2026-05-17  
-**Baseline-ZIP:** `/mnt/data/oroma_20260517_215029_with_db.zip`  
-**Status:** Implementierter Meilenstein – PTZ-Motorik besitzt einen geschlossenen Utility-zu-Dream-zu-Policy-Lernpfad  
+**Stand:** 2026-05-29  
+**Baseline-ZIP:** `/mnt/data/oroma_20260529_081410_with_db.zip`  
+**Status:** Implementierter Meilenstein – PTZ-Motorik besitzt einen geschlossenen Utility-zu-Dream-zu-Policy-Lernpfad plus PTZ Phase 5a Policy-Bias-Rückfluss  
 **Autor/Owner:** ORÓMA-Projekt  
 
 ---
@@ -582,33 +582,43 @@ Das ist der erste praktisch bestätigte Structured-Plasticity-Lernpfad für PTZ-
 
 ## 11. Was bewusst noch nicht umgesetzt wurde
 
-Noch nicht umgesetzt:
+Noch nicht umgesetzt bzw. weiterhin bewusst begrenzt:
 
 ```text
-Policy-Rückkopplung in tools/ptz_motor_worker.py
-Automatischer systemd-Collector-Timer
 UI-Dashboard für ptz_motor-policy_rules
 Pruning anhand ptz_motor-Utility
 Vision-/Audio-/Crossmodal-Utility-Collector
-Direkte Nutzung von policy_rules zur PTZ-Entscheidung
+Harte Policy-Steuerung der PTZ-Motorik
+Direktes Überschreiben von Safety-Gates durch Policy
 ```
 
-Warum keine direkte Rückkopplung in den Worker:
+Seit PTZ Phase 5a umgesetzt:
+
+```text
+Policy-Rückkopplung in tools/ptz_motor_worker.py
+Read-only Laden von policy_rules namespace='ptz_motor'
+Weicher, ENV-gesteuerter Aktions-Bias
+Kein DB-Schreibzugriff im Worker-Hot-Loop
+Kein Ersatz der Reflexlogik
+```
+
+Warum nur ein weicher Bias zulässig ist:
 
 ```text
 Der PTZ-Motor-Worker ist der Hot-Loop.
 Er muss stabil, schnell und sicher bleiben.
-Die neue Policy enthält erst wenige Daten.
-Eine zu frühe Rückkopplung könnte gutes Reflexverhalten verschlechtern.
+Die Policy enthält echte, aber noch junge Evidenz.
+Eine harte Rückkopplung könnte gutes Reflexverhalten verschlechtern.
 ```
 
-Der sichere Zwischenzustand ist daher:
+Der sichere Zwischenzustand seit Phase 5a ist daher:
 
 ```text
 Motor bleibt reflexbasiert.
 Utility bewertet lokal.
 Dream verdichtet offline.
 Policy speichert Erfahrung.
+Worker nutzt Policy nur optional als kleinen Bias.
 ```
 
 ---
@@ -640,9 +650,9 @@ Collector nutzt core.utility.
 DreamWorker verdichtet separat.
 ```
 
-### 12.3 Policy-Rückkopplung erst später
+### 12.3 Policy-Rückkopplung seit PTZ Phase 5a
 
-Eine spätere Rückkopplung in den PTZ-Motor-Worker sollte nur als weicher Bias erfolgen:
+Die Rückkopplung in den PTZ-Motor-Worker ist seit PTZ Phase 5a als weicher Bias implementiert:
 
 ```text
 nicht als harte Motorsteuerung,
@@ -651,7 +661,7 @@ nur wenn n und q ausreichend belastbar sind,
 nur bei gleichwertigen Kandidaten oder weichen Tuning-Entscheidungen.
 ```
 
-Beispiel für spätere Nutzung:
+Beispiel für die implementierte Nutzung:
 
 ```text
 Wenn mehrere plausible Richtungen existieren,
@@ -809,7 +819,71 @@ Der aktuelle produktive Zustand bleibt bewusst konservativ:
 
 ```text
 lernen ja,
-rücksteuern noch nicht.
+rücksteuern ja – aber nur als abschaltbarer, weicher Policy-Bias.
 ```
 
-Das ist für ORÓMA der richtige nächste stabile Zwischenstand.
+Das ist für ORÓMA der richtige nächste stabile Zwischenstand: Der Loop ist geschlossen, ohne die Reflex-/Safety-Architektur aufzugeben.
+
+
+---
+
+## 16. PTZ Phase 5a – Policy-Bias-Rückfluss im Worker
+
+**Stand:** 2026-05-29  
+**Implementierte Datei:** `tools/ptz_motor_worker.py`  
+**Rolle:** Schließt den Rückkanal von `policy_rules namespace='ptz_motor'` in die Online-Motorik.
+
+### Datenlage vor Aktivierung
+
+Live-SQL zeigte bereits echte PTZ-Motor-Lerndaten:
+
+```text
+ptz_motor/target_conf_gain       8776 Rewards
+ptz_motor/wasted_motion_penalty   161 Rewards
+ptz_motor/center_gain              58 Rewards
+ptz_motor/target_stability         28 Rewards
+ptz_motor/cmd_fail_penalty          1 Reward
+
+policy_rules namespace='ptz_motor':
+rows=14, SUM(n)=314, avg(q)=0.058, max(q)=0.5755, min(q)=-0.5755
+```
+
+Damit war der Offline-Lernpfad ausreichend belegt, um einen vorsichtigen Rückfluss zu testen.
+
+### Umsetzungsprinzip
+
+Der Worker liest `policy_rules` read-only, verdichtet Regeln pro Aktion und erzeugt daraus einen kleinen Bias.
+
+```text
+SELECT action, SUM(n), AVG(q), MAX(last_ts)
+FROM policy_rules
+WHERE namespace='ptz_motor'
+GROUP BY action
+```
+
+Filter und Begrenzungen:
+
+```text
+n >= OROMA_PTZ_MOTOR_POLICY_BIAS_MIN_N
+abs(q) >= OROMA_PTZ_MOTOR_POLICY_BIAS_MIN_ABS_Q
+abs(bias) <= OROMA_PTZ_MOTOR_POLICY_BIAS_MAX_ABS
+```
+
+### Starttest
+
+Der erste Live-Test nach Einbau war erfolgreich:
+
+```text
+py_compile OK
+oroma-ptz-motor-worker.service active (running)
+ok stieg von 169 auf 214
+fail blieb 0
+```
+
+Die Startzeile zeigte die neuen Parameter:
+
+```text
+policy_bias=0 policy_ns=ptz_motor policy_w=0.080 policy_min_n=5 policy_min_q=0.050 policy_refresh=60.0s
+```
+
+Der Bias war im ersten Test bewusst noch deaktiviert. Damit ist der Codepfad startstabil, aber der aktive Lernrückfluss muss separat mit `OROMA_PTZ_MOTOR_POLICY_BIAS_ENABLE=1` beobachtet werden.

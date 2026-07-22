@@ -2,9 +2,9 @@
 
 **Pfad:** `/opt/ai/oroma/docs/PTZ_MOTOR_WORKER.md`  
 **Projekt:** ORÓMA – Offline-Realtime-Organic-Memory-AI  
-**Version:** v3.8.0+ptz-motor-worker-v1.5c  
-**Stand:** 2026-05-16  
-**Status:** Phase 3a/3b – manueller systemd-Worker, Video-UI read-only, Target-Hold + Candidate/Axis-Lock + Eye-Pair-Salience mit False-Positive-Gates + Eye/Head-Hold-Bias + Expected-Face-Region/Head-Context + Face-assisted Motion-Radius
+**Version:** v3.8.0+ptz-motor-worker-v1.6b-weighted-policy-bias  
+**Stand:** 2026-06-07  
+**Status:** Phase 5b – manueller systemd-Worker, Video-UI read-only, Target-Hold + Candidate/Axis-Lock + Eye-Pair-Salience + Face-assisted Motion-Radius + optionaler gewichteter `ptz_motor` Policy-Bias
 
 ---
 
@@ -599,4 +599,413 @@ face_radius_boost_min
 ```
 
 Ziel: `motion_too_far` soll bei plausiblen Kopf-/Gesichts-Kandidaten seltener werden; `eye_pair_selected` und gelegentlich `candidate_winner=eye_face_salience` sollen steigen, ohne `moves` wieder in den hektischen Bereich zu treiben.
+
+
+
+## v1.6 / PTZ Phase 5a – optionaler `ptz_motor` Policy-Bias
+
+Seit 2026-05-29 kann der Worker die im Dream verdichteten Regeln aus `policy_rules namespace='ptz_motor'` optional read-only als weichen Aktions-Bias laden.
+
+### Ziel
+
+Der bisherige Lernpfad wird geschlossen:
+
+```text
+ptz_motor_state.json
+→ ptz_motor_reward_collector.py
+→ rewards_log source LIKE 'ptz_motor/%'
+→ dream_worker.py / ptz_policy_motor
+→ policy_rules namespace='ptz_motor'
+→ ptz_motor_worker.py Policy-Bias
+```
+
+### Sicherheitsmodell
+
+Der Bias ist kein Controller und ersetzt keine Reflexlogik. Er darf nur leichte Tendenzen geben und keine Safety-Gates überschreiben.
+
+Nicht überschreibbar bleiben:
+
+```text
+deadzone
+energy_low
+micro_guard
+cooldown
+axis_lock
+reversal_guard
+cmd_fail handling
+PTZ command safety
+```
+
+### ENV-Parameter
+
+```bash
+OROMA_PTZ_MOTOR_POLICY_BIAS_ENABLE=0
+OROMA_PTZ_MOTOR_POLICY_NS=ptz_motor
+OROMA_PTZ_MOTOR_POLICY_BIAS_WEIGHT=0.08
+OROMA_PTZ_MOTOR_POLICY_BIAS_MIN_N=10
+OROMA_PTZ_MOTOR_POLICY_BIAS_MIN_RULE_N=3
+OROMA_PTZ_MOTOR_POLICY_BIAS_MIN_ABS_Q=0.05
+OROMA_PTZ_MOTOR_POLICY_BIAS_REFRESH_SEC=60
+OROMA_PTZ_MOTOR_POLICY_BIAS_MAX_ABS=0.20
+```
+
+### Erster Live-Test
+
+Der erste Starttest nach Einbau war erfolgreich:
+
+```text
+python3 -m py_compile tools/ptz_motor_worker.py  → OK
+systemd service                                  → active (running)
+ok                                               → steigend
+fail                                             → 0
+```
+
+Die Startzeile zeigte:
+
+```text
+policy_bias=0 policy_ns=ptz_motor policy_w=0.080 policy_min_total_n=10 policy_min_rule_n=3 policy_min_q=0.050 policy_refresh=60.0s
+```
+
+Damit ist der Codepfad stabil eingebaut. Ein echter aktiver Policy-Bias-Test beginnt erst mit `OROMA_PTZ_MOTOR_POLICY_BIAS_ENABLE=1`.
+
+## v1.6b / PTZ Phase 5b – gewichtete Policy-Aggregation und validierter Kurztest
+
+**Stand:** 2026-06-07  
+**Status:** Live validiert, aber dauerhaftes systemd-Gate weiterhin nicht aktiviert.
+
+### Anlass
+
+Nach dem ersten Policy-Bias-Pfad zeigte die Live-Analyse, dass ein einfacher Durchschnitt `AVG(q)` statistisch zu grob ist. Eine Regel mit `n=1` darf nicht genauso stark wirken wie eine wiederholt bestätigte Regel mit `n=38` oder höher. Deshalb wurde der Ladepfad des Workers auf eine evidenzgewichtete Aggregation umgestellt.
+
+### Neue Aggregationslogik
+
+Der Worker bewertet Action-Kandidaten aus `policy_rules namespace='ptz_motor'` mit:
+
+```sql
+SUM(q * n) / SUM(n)
+```
+
+Zusätzlich werden Einzelbeobachtungen gefiltert:
+
+```sql
+WHERE namespace = 'ptz_motor'
+  AND n >= OROMA_PTZ_MOTOR_POLICY_BIAS_MIN_RULE_N
+GROUP BY action
+HAVING SUM(n) >= OROMA_PTZ_MOTOR_POLICY_BIAS_MIN_N
+```
+
+Produktive, konservative Defaults:
+
+```bash
+OROMA_PTZ_MOTOR_POLICY_BIAS_ENABLE=0
+OROMA_PTZ_MOTOR_POLICY_NS=ptz_motor
+OROMA_PTZ_MOTOR_POLICY_BIAS_WEIGHT=0.08
+OROMA_PTZ_MOTOR_POLICY_BIAS_MIN_N=10
+OROMA_PTZ_MOTOR_POLICY_BIAS_MIN_RULE_N=3
+OROMA_PTZ_MOTOR_POLICY_BIAS_MIN_ABS_Q=0.05
+OROMA_PTZ_MOTOR_POLICY_BIAS_REFRESH_SEC=60
+OROMA_PTZ_MOTOR_POLICY_BIAS_MAX_ABS=0.20
+```
+
+Wichtig: `OROMA_PTZ_MOTOR_POLICY_BIAS_ENABLE` bleibt standardmäßig aus. Phase 5b aktiviert keine dauerhafte Autonomie-Erweiterung, sondern macht die spätere Bias-Entscheidung belastbarer und sichtbarer.
+
+### Live-Nachweis vom 2026-06-07
+
+Nach Backlog-Abbau und Dream-Verdichtung lag der PTZ-Motor-Lernstand bei:
+
+```text
+policy_rules namespace='ptz_motor': 524
+sum(n): 1270
+backlog: 0
+```
+
+Gewichtete Kandidaten:
+
+```text
+up     total_n=433  weighted_q=0.061893  → Gate 0.05 bestanden
+down   total_n=159  weighted_q=0.054167  → Gate 0.05 bestanden
+right  total_n=87   weighted_q=0.007183  → Gate nicht bestanden
+left   total_n=79   weighted_q=0.004254  → Gate nicht bestanden
+```
+
+Ein temporärer `systemd-run`-Bias-Test mit `OROMA_PTZ_MOTOR_POLICY_BIAS_ENABLE=1` und `OROMA_PTZ_MOTOR_POLICY_BIAS_WEIGHT=0.04` bestätigte:
+
+```text
+policy_bias_enabled: true
+policy_bias_active:  true
+policy_bias:         {'down': 0.002167, 'up': 0.002476}
+raw_rule_count:      523
+eligible_rule_count: 59
+used_action_count:   2
+aggregation:         weighted_q=sum(q*n)/sum(n)
+```
+
+Die Werte sind korrekt skaliert:
+
+```text
+up    0.061893 * 0.04 = 0.002476
+down  0.054167 * 0.04 = 0.002167
+```
+
+### Betriebsentscheidung
+
+Der Test bestätigt den technischen Rückkanal, aber die dauerhafte Aktivierung bleibt bewusst aus. Die Policy ist noch jung; `up` und `down` liegen nur knapp über dem Gate. Empfohlen ist weiterer Normalbetrieb mit:
+
+```text
+Collector an
+Dream-Verarbeitung regelmäßig
+Policy-Bias im Standarddienst aus
+```
+
+Erst wenn `weighted_q`, `total_n` und die Reward-Bilanz über mehrere Tage stabil bleiben, sollte eine dauerhafte, schwach gewichtete Aktivierung über systemd geprüft werden.
+
+
+
+## Stand 2026-06-13 – Positive Position Marker / Stage-A Evidence
+
+- `tools/ptz_motor_worker.py` speichert konservative Positive Position Marker in `data/state/ptz_positive_position_markers.json`.
+- v1.6d blockiert `motion_diff_upper` und Motion-only-Kandidaten standardmäßig (`OROMA_PTZ_MOTOR_POS_MARKER_ALLOW_MOTION_ONLY=0`, `OROMA_PTZ_MOTOR_POS_MARKER_ALLOW_UPPER_MOTION=0`).
+- Der Marker ist reine Evidenz: keine Identität, keine automatische Steuerung, keine direkte Policy-Materialisierung.
+- Ceiling-Recovery schützt gegen langes Decken-/Leerlauf-Schauen, ist aber durch Start-Grace und Cooldown rate-limitiert.
+- `tools/ptz_positive_position_probe.py` ist die Stage-A-Messbrücke: Marker zählen, Top-Zellen und Guard-Status sichtbar machen und optional via DBWriter nach `stats.db.stats_points` schreiben.
+- Produktiver Bias bleibt aus, bis Learning-Evidence eindeutig positive Wirkung belegt.
+
+### Stage-A Evidence Timer (P1b, Stand 2026-06-13)
+
+Die Positive-Position-Probe kann jetzt regelmäßig als systemd-Timer laufen:
+
+```text
+systemd/oroma-ptz-positive-position-probe.service
+systemd/oroma-ptz-positive-position-probe.timer
+```
+
+Der Timer führt alle 5 Minuten aus:
+
+```text
+tools/ptz_positive_position_probe.py --once --write-stats --verbose
+```
+
+Architekturregeln:
+
+- reine Stage-A-Messung; keine PTZ-Motorsteuerung
+- keine Policy-Aktivierung
+- keine Materialisierung in `object_nodes` oder `object_relations`
+- Stats-Writes nur über DBWriter (`OROMA_DBW_ENABLE=1`)
+- Verlaufsspur in `stats.db.stats_points` über `ptz.marker.*`-Serien
+
+Damit werden wiederkehrende interessante PTZ-Bildpositionen nicht sofort als
+Verhalten genutzt, sondern zuerst über Zeit messbar gemacht. Das entspricht der
+Core-Regel: messen → Evidenz sammeln → später Dream/Binding entscheiden lassen.
+
+
+## P2 – PTZ Positive Position Evidence Report (Stand 2026-06-13)
+
+`tools/ptz_positive_position_evidence_report.py` ergänzt die Stage-A-Probe um eine reine Read-only-Trendanalyse. Während der Timer `oroma-ptz-positive-position-probe.timer` alle fünf Minuten Messpunkte schreibt, wertet der Report diese Punkte über Zeitfenster aus.
+
+Eigenschaften:
+
+- liest `data/stats.db.stats_points` mit `series LIKE 'ptz.marker.%'`
+- liest optional den aktuellen Marker-/Worker-State
+- schreibt nichts
+- bewegt keinen Motor
+- aktiviert keine Policy
+- materialisiert keine `object_nodes` oder `object_relations`
+- gibt JSON für UI/Audit oder Text für die Konsole aus
+
+Standardfenster:
+
+- 60 Minuten
+- 360 Minuten
+- 1440 Minuten
+
+Beispiel:
+
+```bash
+cd /opt/ai/oroma; python3 tools/ptz_positive_position_evidence_report.py --json --verbose
+```
+
+Wichtige Kennzahlen:
+
+- `positive_count_last`
+- `repeat_ge_3_last`
+- `repeat_ge_5_last`
+- `motion_guard_rate`
+- `ceiling_active_rate`
+- `ceiling_marker_stale_rate`
+- `top_key_stability`
+
+Der Report ist bewusst kein Entscheidungsmodul. Er liefert nur Evidence, damit Dream/Binding später auf stabilere Fakten zugreifen kann.
+
+## P2.5 – PTZ Policy Atomicity / DBWriter Hygiene (Stand 2026-06-14)
+
+Dieser Stand ist ein reiner Stabilitäts- und Wartbarkeits-Patch. Die Lernsemantik wird bewusst nicht vereinheitlicht:
+
+- `universal_policy.learn_many()` nutzt weiterhin eine diskrete Bilanz-Semantik für Spiel-/Universal-Namespace-Regeln: `q=(pos-neg)/n`.
+- PTZ-Policy-Namespace(s) behalten die kontinuierliche Reward-Mittelwert-Semantik: `q=((q*n)+r)/(n+1)`.
+- Im DBWriter-Betrieb werden die PTZ-Policy-Updates jetzt als atomare DBWriter-Transaction ausgeführt: `INSERT OR IGNORE` und `UPDATE` bleiben logisch identisch, laufen aber nicht mehr als zwei getrennte Queue-Operationen.
+- In `core/sql_manager.py` wurde eine tote doppelte `_dbw_enabled()`-Definition entfernt; die aktive ENV-basierte Implementierung bleibt erhalten.
+- Keine Policy-Bias-Aktivierung, keine Motorsteuerung, keine Materialisierung und kein lokaler SQLite-Fallback wurden hinzugefügt.
+
+## P2.6 – Idempotente Stage-A Stats-Writes (Stand 2026-06-16)
+
+Live-Befund nach mehrtägigem Timer-Betrieb: Die PTZ Positive Position Evidence
+wuchs fachlich korrekt (`positive_count=19`, `repeat_ge_5=17`, stabile Top-Zelle
+`g6:x2:y3`), aber einzelne Wiederholungsläufe konnten in `stats_points` einen
+`UNIQUE constraint failed: stats_points.src_table, stats_points.src_uid, stats_points.series`
+auslösen.
+
+Korrektur: `tools/ptz_positive_position_probe.py` und
+`tools/synapses_bridge_probe.py` schreiben ihre Measure-only-Stats weiterhin
+ausschließlich via DBWriter, aber nun idempotent per `ON CONFLICT ... DO UPDATE`.
+Das ändert keine Lernsemantik, keine Markerlogik, keine Motorsteuerung und keine
+Materialisierung. Es verhindert nur, dass doppelte Sekunden-Snapshots oder
+Orchestrator-Wiederholungsläufe als harte Fehler im Timer/DBWriter erscheinen.
+
+
+## P3a – Regional Temporal Motion Signature Evidence (Stand 2026-06-16)
+
+Der bestehende PTZ Positive-Position-Pfad ist konservativ Eye/Face-gated. Das ist richtig, weil Motion-only zuvor Decke, Lichtwechsel oder Grundrauschen hätte positiv markieren können. In der Live-Situation kann die Kamera jedoch auch kleine Menschen/Autos auf der Straße sehen, die keine erkennbaren Eye/Face-Signale erzeugen. Dafür ergänzt P3a einen separaten, strikt messenden Pfad.
+
+Neue Komponenten:
+
+```text
+tools/ptz_structured_motion_probe.py
+tools/ptz_structured_motion_evidence_report.py
+systemd/oroma-ptz-structured-motion-probe.service
+systemd/oroma-ptz-structured-motion-probe.timer
+```
+
+Architekturregeln:
+
+- eigener Namespace: `ptz.motion.*`
+- eigener State: `data/state/ptz_structured_motion_state.json`
+- keine Änderung am Eye/Face-/`ptz.marker.*`-Pfad
+- keine PTZ-Motorbefehle
+- keine Policy-Aktivierung
+- keine object_nodes/object_relations-Materialisierung
+- Stats-Writes nur via DBWriter nach `stats.db.stats_points`
+- echte historische `top_key`-Werte stehen in `stats_points.meta`, numerische Scores in `value`
+
+P3a klassifiziert pro Rasterzelle regionale Zeitsignaturen:
+
+- `structured_blob_motion`: kleine wandernde Blobs, Straße/Menschen/Autos-artig
+- `fixed_fast_change_region`: schnelle feste Flächenänderung, TV-/Stream-artig
+- `fixed_low_change_display_region`: ruhiges festes Display, z. B. Alexa Show mit Uhrzeit/Hintergrund
+- `dark_static_region`: dunkle statische Fläche, z. B. ausgeschalteter TV
+- `slow_drift_region`: langsame Helligkeitsdrift, z. B. Fenster/Tag-Nacht-Baseline
+
+Eine Alexa-Show-Zelle darf bei seltenem Streaming zeitweise von `fixed_low_change_display_region` zu `fixed_fast_change_region` wechseln und später zurück. Das ist korrektes Verhalten und soll im Report sichtbar bleiben.
+
+## P3a.1 / P3z0/P3z0.1 – Low-Change-Korrektur und Zoom-Kontext (Stand 2026-06-21)
+
+P3a.1 korrigiert die erste P3a-Klassifikation: `low_change_region` wird von `fixed_low_change_display_candidate` getrennt. Ein kurzer ruhiger Messlauf darf nicht alle 36 Rasterzellen als Display-artig zählen. Display-Kandidaten werden erst sichtbar, wenn eine ruhige Region über mehrere Läufe stabil bleibt. Die bisherigen `ptz.motion.low_change_display.*`-Serien bleiben kompatibel, tragen aber nun die Kandidatenanzahl und nicht mehr alle ruhigen Zellen.
+
+P3z0 beantwortet die Zoom-Frage vor jedem größeren Pan/Tilt-Sweep. Die EMEET PIXY meldete live Zoom 130/150; bei Zoom 100 war Außen-/Straßenbereich sichtbar. `tools/ptz_zoom_context_probe.py` vergleicht daher aktuellen Zoom und Wide-Zoom (Default 100), nutzt P3a.1-Klassen-Signaturen, schreibt `ptz.zoom_context.*` über DBWriter und stellt den alten Zoom zuverlässig zurück. P3z0.1 ergänzt nicht-semantische Wide-FOV-/Edge-/Bottom-Right-Kontextmetriken, damit zusätzlicher Rand-/Außenkontext nicht nur bei aktueller Bewegung sichtbar wird. Der stündliche Timer `oroma-ptz-zoom-context-probe.timer` sammelt wiederholte Evidenz über Tageszeiten. Erst wenn Wide-Zoom wiederholt hilfreich ist, sollte eine Wide-Observe-Policy diskutiert werden; Pan/Tilt-ViewMap-Sweep bleibt nachgelagert.
+
+
+## P3z1b – Wide-Observe-Zoom-Policy Preview / Dry-Run (Stand 2026-06-25)
+
+P3z1b führt noch keine produktive Zoom-Steuerung ein. Das neue Tool
+`tools/ptz_zoom_policy_preview.py` berechnet nur, ob ORÓMA aktuell `zoom=100`
+als Such-/Orientierungszoom empfehlen würde. Es liest read-only den
+PTZ-Motor-State über `core.ptz_motor_state` und verwendet die realen Worker-
+Felder `reason`, `action`, `raw_action`, `target_conf`, `obs_conf`,
+`candidate.confidence` und `state_stale`.
+
+Wichtig: `confidence=0.0` allein ist kein Trigger. Eligible sind nur explizite
+Suchgründe wie `deadzone`, `stale_frame`, `no_frame` oder `energy_low`, und nur
+wenn P3z0.1 über das beste Evidenzfenster Wide-Zoom als hilfreich bewertet.
+
+Die Preview schreibt eigene DBWriter-Stats unter `ptz.zoom_policy.preview.*` und
+legt `data/state/ptz_zoom_policy_preview_state.json` ab. Diese History ist der
+Gate für eine spätere P3z1c-Auto-Zoom-Policy. Bis dahin bleiben `/video/` und
+der PTZ-Worker read-only bzw. manuell kontrolliert.
+
+## P3z1b Live-History und P3z1c Gate (Stand 2026-06-26)
+
+Nach rund einem Tag Preview-History ist P3z1b fachlich bestätigt. Der Live-Report
+zeigte 109 Samples mit `recommend_wide_count=20`. Die Empfehlungen traten nur bei
+Such-/Orientierungszuständen auf: `deadzone=19` und `stale_frame=1`. Gleichzeitig
+wurde bei aktiven oder potenziell aktiven Zielzuständen korrekt blockiert,
+insbesondere bei `move_cooldown`, `target_hold`, `down_hold`, `stability_wait`,
+`follow`, `micro_guard` und `energy_low` mit vorhandener `obs_conf`/
+`candidate_conf`.
+
+Damit ist die Preview nicht zu locker: Wide-Zoom-Evidence wird genutzt, aber
+laufendes Tracking wird nicht gestört. P3z1c ergänzt deshalb eine erste streng
+gegatete Auto-Zoom-Stufe: `tools/ptz_zoom_policy_apply.py`. Das Tool darf
+ausschließlich `zoom_absolute` setzen, niemals Pan/Tilt/Focus, und nur wenn
+P3z1b aktuell `recommend_wide_observe_zoom=true` liefert. Zusätzlich sind zwei
+Freigaben nötig: CLI-Gate `--apply` und `OROMA_PTZ_ZOOM_AUTO_APPLY_ENABLE=1`.
+Ohne beide Gates läuft P3z1c fail-closed und schreibt nur Apply-/No-op-Stats
+unter `ptz.zoom_policy.apply.*`.
+
+P3z1c bleibt dadurch reversibel und beobachtbar: State-Datei
+`data/state/ptz_zoom_policy_apply_state.json`, DBWriter-Stats, Rate-Limit und
+sichtbare Logs. Eine echte Auto-Zoom-Aktivierung darf erst nach manueller
+Freigabe erfolgen. P3b0 ViewMap Sweep bleibt weiterhin nachgelagert.
+
+
+## P3z1c Live-Apply und Zoom-100-Nachlauf (Stand 2026-06-29)
+
+Der erste echte P3z1c-Hardware-Apply wurde auf `oromaki` kontrolliert validiert.
+Ausgangspunkt war `zoom_absolute=130`; Ziel des Wide-Observe-Pfads war
+`target_zoom=100`. Der Apply wurde nicht dauerhaft aktiviert, sondern als
+begrenztes manuelles Doppel-Gate-Fenster ausgeführt:
+
+```text
+CLI-Gate: --apply
+ENV-Gate: OROMA_PTZ_ZOOM_AUTO_APPLY_ENABLE=1
+maximal 20 Versuche, 1 Versuch pro Minute
+Stop bei applied=True
+```
+
+Live-Befund:
+
+```text
+TRY 1: preview_recommend=False, apply_allowed=False, applied=False, current_zoom=130
+TRY 2: preview_recommend=True, apply_allowed=True, applied=True, current_zoom=100, target_zoom=100
+final_decision=applied_wide_observe_zoom
+reason=preview_recommend_wide:true;zoom_set_ok
+APPLIED_OK_STOP
+```
+
+Die Hardware wurde anschließend über `/video/api/ptz/status` bestätigt:
+
+```text
+zoom_absolute.value = 100
+```
+
+Der Nachlauf bei Zoom 100 bestätigte die Schutzlogik. P3z1c erkannte den
+bereits erreichten Zielzustand und wiederholte keine Zoom-Kommandos:
+
+```text
+already_at_target=True
+final_decision=already_at_wide_observe_zoom
+reason=preview_recommend_wide:true;env_apply_gate_closed;already_at_target_zoom
+```
+
+Gleichzeitig blieben unsichere/aktive Zustände gebremst:
+
+```text
+motor_reason=energy_low
+preview_recommend=False
+final_decision=hold_current_zoom
+```
+
+Die Observe-API zeigte später weiterhin `state=fail_closed`,
+`apply_allowed_count=0`, `applied_count=0`, aber `current_zoom=100`. Das ist
+konsistent mit dem manuellen Test: Der reale Apply wurde durch Tool-Log und
+PTZ-Status bewiesen; der Apply-Stats-Write im manuellen Run meldete
+`stats_write_error=timed out`. Dieser Timeout ist eine Observability-Lücke,
+kein Freibrief für lokale SQLite-Fallbacks.
+
+Bewertung:
+
+- P3z1c kann `zoom_absolute` real setzen.
+- P3z1c setzt nicht blind, sondern nur bei aktueller Preview-Freigabe.
+- Der systemd-Timer bleibt fail-closed, solange das ENV-Gate geschlossen ist.
+- Dauerhafte Auto-Zoom-Aktivierung ist weiterhin nicht freigegeben.
+- P3b0 ViewMap Sweep bleibt nachgelagert, solange der Zoom-Pfad ausreichend
+  Evidence liefert.
 

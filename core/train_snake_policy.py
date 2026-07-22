@@ -43,6 +43,8 @@ from __future__ import annotations
 import os, sys, argparse, logging
 from core.log_guard import log_suppressed
 import logging
+import json
+from core import execution_mode
 
 if "/opt/ai/oroma" not in sys.path:
     sys.path.append("/opt/ai/oroma")
@@ -235,6 +237,25 @@ def main():
     ap.add_argument("--no-preflight", action="store_true", help="Preflight-Diagnose vor dem Training deaktivieren")
     ap.add_argument("--verbose", action="store_true", help="Mehr Logging")
     args = ap.parse_args()
+    decision = execution_mode.legacy_policy_training_allowed(
+        writer_id="writer:core.train_snake_policy:legacy",
+        namespace=args.namespace,
+    )
+    if not decision.allowed:
+        LOG.warning(
+            "controlled_skip: mode=%s writer_id=%s namespace=%s reason=%s",
+            decision.execution_mode, decision.writer_id, decision.namespace, decision.reason,
+        )
+        print(json.dumps({
+            "ok": True,
+            "status": "controlled_skip",
+            "writer_id": decision.writer_id,
+            "namespace": decision.namespace,
+            "execution_mode": decision.execution_mode,
+            "reason": decision.reason,
+            "policy_writes": 0,
+        }, ensure_ascii=False))
+        return 0
     if args.verbose:
         LOG.setLevel(logging.DEBUG)
         for h in LOG.handlers:

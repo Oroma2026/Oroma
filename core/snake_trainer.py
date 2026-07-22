@@ -73,6 +73,7 @@ if "/opt/ai/oroma" not in sys.path:
     sys.path.append("/opt/ai/oroma")
 
 from core import sql_manager
+from core import execution_mode
 
 Vec = List[float]
 SHAPING_ENABLED = os.environ.get("OROMA_SNAKE_SHAPING", "1").lower() in ("1", "true", "yes")
@@ -260,6 +261,17 @@ def train_from_db(namespace: str = "game:snake",
                   since_sec: Optional[int] = None,
                   limit: Optional[int] = None,
                   verbose: bool = False) -> int:
+    decision = execution_mode.legacy_policy_training_allowed(
+        writer_id="writer:core.snake_trainer:legacy",
+        namespace=namespace,
+    )
+    if not decision.allowed:
+        print(
+            f"[snake_trainer] controlled_skip mode={decision.execution_mode} "
+            f"namespace={decision.namespace} reason={decision.reason}"
+        )
+        return 0
+
     sql_manager.ensure_schema()
     now = int(time.time())
     cutoff = None if since_sec is None else (now - int(since_sec))
@@ -459,6 +471,13 @@ def main():
     ap.add_argument("--majority-min-conf", type=float, default=0.20,
                     help="Fallback-Export: Mindestkonfidenz (nbest-nsecond)/ntotal")
     args = ap.parse_args()
+
+    decision = execution_mode.legacy_policy_training_allowed(
+        writer_id="writer:core.snake_trainer:legacy", namespace=args.namespace
+    )
+    if not decision.allowed:
+        print(json.dumps({"ok": True, "status": "controlled_skip", **decision.to_dict()}, ensure_ascii=False))
+        return 0
 
     if args.export_archive:
         export_archive(namespace=args.namespace,

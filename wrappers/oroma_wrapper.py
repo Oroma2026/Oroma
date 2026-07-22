@@ -746,8 +746,8 @@ class OromaWrapper:
     def tts_say(self, text: str) -> Dict[str, Any]:
         if _tts and hasattr(_tts, "speak"):
             try:
-                _tts.speak(text)
-                return {"ok": True}
+                res = _tts.speak(text)
+                return res if isinstance(res, dict) else {"ok": True}
             except Exception as e:
                 logger.warning("TTS Fehler: %s", e)
                 if not FAILOVER:

@@ -1,0 +1,109 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-ptz-zoom-policy-apply.service
+# Projekt:  ORÓMA (Offline-Realtime-Organic-Memory-AI)
+# Modul:    PTZ Zoom Policy Apply – P3z1c Gated Auto-Zoom
+# Version:  v3.7.3+p3z1c-wide-observe-auto-zoom-systemd-v1.0
+# Stand:    2026-06-26
+# Autor:    ORÓMA · ChatGPT Patch-Gate
+# Lizenz:   MIT
+# =============================================================================
+#
+# ZWECK
+# ─────
+# Führt `tools/ptz_zoom_policy_apply.py` als streng gegatete Auto-Zoom-Stufe
+# aus. Das Tool darf ausschließlich `zoom_absolute` setzen und nur dann, wenn
+# P3z1b eine Wide-Observe-Empfehlung liefert und beide Gates aktiv sind:
+#
+#   1) ExecStart enthält `--apply`.
+#   2) OROMA_PTZ_ZOOM_AUTO_APPLY_ENABLE=1 ist gesetzt.
+#
+# STANDARDZUSTAND
+# ───────────────
+# In dieser Unit steht OROMA_PTZ_ZOOM_AUTO_APPLY_ENABLE absichtlich auf 0.
+# Dadurch sammelt die Unit zunächst Apply-/No-op-Stats, steuert aber nichts.
+# Für echte Tests muss das ENV-Gate explizit überschrieben werden.
+#
+# INVARIANTEN
+# ───────────
+# - Nur Zoom, kein Pan/Tilt/Focus.
+# - Keine Policy-Aktivierung des Motor-Workers.
+# - Keine Materialisierung in ObjectGraph/SnapGraph.
+# - Keine Writes in oroma.db.
+# - Stats ausschließlich via DBWriter nach stats.db.stats_points.
+# - Rate-Limit schützt vor Zoom-Hot-Loops.
+#
+# LOGS
+# ────
+#   /opt/ai/oroma/logs/ptz_zoom_policy_apply.out.log
+#   /opt/ai/oroma/logs/ptz_zoom_policy_apply.err.log
+# =============================================================================
+
+[Unit]
+Description=ORÓMA – PTZ Zoom Policy Apply (P3z1c gated auto-zoom)
+Documentation=file:/opt/ai/oroma/docs/PTZ_MOTOR_WORKER.md
+After=oroma-db-writer.service oroma.service oroma-ptz-motor-worker.service
+Wants=oroma-db-writer.service
+ConditionPathExists=/opt/ai/oroma/.use_orchestrator
+ConditionPathExists=/opt/ai/oroma/tools/ptz_zoom_policy_apply.py
+
+[Service]
+Type=oneshot
+User=oroma
+Group=oroma
+UMask=002
+WorkingDirectory=/opt/ai/oroma
+SyslogIdentifier=oroma-ptz-zoom-policy-apply
+TimeoutStartSec=60
+
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=UTF-8
+Environment=TZ=Europe/Berlin
+Environment=PYTHONPATH=/opt/ai/oroma
+Environment=OROMA_BASE=/opt/ai/oroma
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=OROMA_LOG_DIR=/opt/ai/oroma/logs
+Environment=OROMA_DBW_ENABLE=1
+Environment=OROMA_DBW_SOCKET=/opt/ai/oroma/data/state/db_writer.sock
+Environment=OROMA_PTZ_DEVICE=/dev/v4l/by-id/usb-EMEET_EMEET_PIXY_A250607001103370-video-index0
+Environment=OROMA_PTZ_ZOOM_POLICY_TARGET_ZOOM=100
+Environment=OROMA_PTZ_ZOOM_AUTO_APPLY_ENABLE=0
+Environment=OROMA_PTZ_ZOOM_AUTO_MIN_INTERVAL_SEC=1800
+Environment=OROMA_PTZ_ZOOM_AUTO_MAX_PER_HOUR=2
+Environment=OROMA_PTZ_ZOOM_POLICY_WINDOWS_MIN=60,360,1440
+Environment=OROMA_PTZ_ZOOM_POLICY_MIN_HELPFUL_RATE=0.50
+Environment=OROMA_PTZ_ZOOM_POLICY_MIN_CONTEXT_GAIN_RATE=0.35
+Environment=OROMA_PTZ_ZOOM_POLICY_MIN_SAMPLE_COUNT=3
+Environment=OROMA_PTZ_ZOOM_POLICY_TARGET_CONF_MAX=0.060
+Environment=OROMA_PTZ_ZOOM_POLICY_OBS_CONF_MAX=0.080
+Environment=OROMA_PTZ_ZOOM_POLICY_CANDIDATE_CONF_MAX=0.080
+Environment=OROMA_PTZ_ZOOM_POLICY_ELIGIBLE_REASONS=deadzone,stale_frame,no_frame,energy_low
+Environment=OROMA_PTZ_ZOOM_POLICY_DBW_TIMEOUT_MS=10000
+
+ExecStartPre=+/usr/bin/env bash -lc 'mkdir -p /opt/ai/oroma/logs /opt/ai/oroma/data/state && touch /opt/ai/oroma/logs/ptz_zoom_policy_apply.out.log /opt/ai/oroma/logs/ptz_zoom_policy_apply.err.log && chown oroma:oroma /opt/ai/oroma/logs/ptz_zoom_policy_apply.out.log /opt/ai/oroma/logs/ptz_zoom_policy_apply.err.log && chown oroma:oroma /opt/ai/oroma/data/state'
+ExecStart=/usr/bin/python3 /opt/ai/oroma/tools/ptz_zoom_policy_apply.py --once --apply --write-stats --verbose
+
+StandardOutput=append:/opt/ai/oroma/logs/ptz_zoom_policy_apply.out.log
+StandardError=append:/opt/ai/oroma/logs/ptz_zoom_policy_apply.err.log
+
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ReadWritePaths=/opt/ai/oroma/logs /opt/ai/oroma/data
+
+[Install]
+WantedBy=multi-user.target

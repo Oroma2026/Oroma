@@ -1,0 +1,101 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-ptz-zoom-context-probe.service
+# Projekt:  ORÓMA (Offline-Realtime-Organic-Memory-AI)
+# Modul:    PTZ Zoom Context Probe – P3z0 Wide/Detail Evidence
+# Version:  v3.7.3+p3z0-zoom-context-systemd-v1.0
+# Stand:    2026-06-16
+# Autor:    ORÓMA · ChatGPT Patch-Gate
+# Lizenz:   MIT
+# =============================================================================
+#
+# ZWECK
+# ─────
+# Führt `tools/ptz_zoom_context_probe.py` als kurzlebigen systemd-Oneshot aus.
+# Die Probe vergleicht den aktuellen Zoom mit einem Wide-Zoom (Default 100),
+# nutzt dafür P3a.1-Klassen-Signaturen und stellt den ursprünglichen Zoom nach
+# jedem Lauf wieder her.
+#
+# INVARIANTEN
+# ───────────
+# - Keine Pan/Tilt-Bewegung.
+# - Keine Policy-Aktivierung.
+# - Keine Materialisierung.
+# - Keine Writes in `oroma.db`.
+# - Stats nur via DBWriter nach `stats.db.stats_points`.
+# - Kontrollierte Zoom-Rückstellung per finally-Pfad im Tool.
+#
+# LOGS
+# ────
+#   /opt/ai/oroma/logs/ptz_zoom_context_probe.out.log
+#   /opt/ai/oroma/logs/ptz_zoom_context_probe.err.log
+#
+# AKTIVIERUNG
+# ───────────
+#   sudo cp systemd/oroma-ptz-zoom-context-probe.service /etc/systemd/system/
+#   sudo cp systemd/oroma-ptz-zoom-context-probe.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now oroma-ptz-zoom-context-probe.timer
+#
+# =============================================================================
+
+[Unit]
+Description=ORÓMA – PTZ Zoom Context Probe (P3z0 Stage-A Evidence)
+Documentation=file:/opt/ai/oroma/docs/PTZ_MOTOR_WORKER.md
+After=oroma-db-writer.service oroma.service oroma-ptz-motor-worker.service
+Wants=oroma-db-writer.service
+ConditionPathExists=/opt/ai/oroma/.use_orchestrator
+ConditionPathExists=/opt/ai/oroma/tools/ptz_zoom_context_probe.py
+
+[Service]
+Type=oneshot
+User=oroma
+Group=oroma
+UMask=002
+WorkingDirectory=/opt/ai/oroma
+SyslogIdentifier=oroma-ptz-zoom-context-probe
+TimeoutStartSec=180
+
+EnvironmentFile=-/opt/ai/oroma/.env.systemd
+EnvironmentFile=-/opt/ai/oroma/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=UTF-8
+Environment=TZ=Europe/Berlin
+Environment=PYTHONPATH=/opt/ai/oroma
+Environment=OROMA_BASE=/opt/ai/oroma
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=OROMA_LOG_DIR=/opt/ai/oroma/logs
+Environment=OROMA_DBW_ENABLE=1
+Environment=OROMA_DBW_SOCKET=/opt/ai/oroma/data/state/db_writer.sock
+Environment=OROMA_PTZ_ZOOM_CONTEXT_WIDE_ZOOM=100
+Environment=OROMA_PTZ_ZOOM_CONTEXT_RESTORE=1
+Environment=OROMA_PTZ_ZOOM_CONTEXT_SETTLE_SEC=3.0
+Environment=OROMA_PTZ_ZOOM_CONTEXT_SAMPLES=24
+Environment=OROMA_PTZ_ZOOM_CONTEXT_SAMPLE_INTERVAL_SEC=0.25
+Environment=OROMA_PTZ_ZOOM_CONTEXT_DBW_TIMEOUT_MS=10000
+
+ExecStartPre=+/usr/bin/env bash -lc 'mkdir -p /opt/ai/oroma/logs /opt/ai/oroma/data/state && touch /opt/ai/oroma/logs/ptz_zoom_context_probe.out.log /opt/ai/oroma/logs/ptz_zoom_context_probe.err.log && chown oroma:oroma /opt/ai/oroma/logs/ptz_zoom_context_probe.out.log /opt/ai/oroma/logs/ptz_zoom_context_probe.err.log && chown oroma:oroma /opt/ai/oroma/data/state'
+ExecStart=/usr/bin/python3 /opt/ai/oroma/tools/ptz_zoom_context_probe.py --once --write-stats --verbose
+
+StandardOutput=append:/opt/ai/oroma/logs/ptz_zoom_context_probe.out.log
+StandardError=append:/opt/ai/oroma/logs/ptz_zoom_context_probe.err.log
+
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ReadWritePaths=/opt/ai/oroma/logs /opt/ai/oroma/data
+
+[Install]
+WantedBy=multi-user.target

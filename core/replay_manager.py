@@ -4,8 +4,8 @@
 # Pfad:      /opt/ai/oroma/core/replay_manager.py
 # Projekt:   ORÓMA (Offline-First · Headless · SQLite-First)
 # Modul:     ReplayManager – SnapChain Playback + Event-Bus + DB-Logging + optionales Replay-Lernen
-# Version:   v3.7.3
-# Stand:     2026-01-10
+# Version:   v3.7.4+replay-safe-policy-gate-v1
+# Stand:     2026-07-09
 # Autor:     ORÓMA · KI-JWG-X1
 # Lizenz:    MIT
 # =============================================================================
@@ -59,10 +59,15 @@
 #      - sql_manager.update_replay_log(log_id, ...)
 #
 # 5) Optional: Replay-Lernen (Policy-Update während Playback)
-#    - ENV-gesteuert: OROMA_REPLAY_LEARN=1
-#    - nutzt sql_manager.policy_upsert() (falls vorhanden) um policy_rules zu aktualisieren
-#    - Namespace/Parameter werden über ENV konfiguriert
-#    Hinweis: Lernlogik ist bewusst optional und darf Replay nicht destabilisieren.
+#    - OROMA_REPLAY_LEARN=1 markiert nur den Replay-Lernwunsch.
+#    - Produktive policy_rules-Writes sind zusätzlich hart gegatet über:
+#        OROMA_REPLAY_POLICY_UPSERT_ENABLE=1
+#        OROMA_REPLAY_POLICY_CONFIRM=REPLAY_POLICY_WRITE_REVIEWED
+#        OROMA_REPLAY_POLICY_NS_ALLOWLIST=<csv>
+#    - Writes laufen ausschließlich über core.db_writer_client / DBWriter.
+#    - Es gibt keinen lokalen SQLite-Fallback und kein blindes sql_manager.policy_upsert.
+#    - Fehlt eine belastbare Aktion/Credit-Zuordnung, bleibt Replay read-only.
+#    Hinweis: Replay ist mögliche Evidenz, aber kein Direct-Step-Credit-Ersatz.
 #
 # ROBUSTHEIT / SELBSTHEILUNG
 # ─────────────────────────
@@ -91,10 +96,16 @@
 #   OROMA_BASE=/opt/ai/oroma
 #   OROMA_REPLAY_LOGLEVEL=INFO|DEBUG|WARNING|ERROR
 #
-# Lernen (optional):
-#   OROMA_REPLAY_LEARN=1|0
-#   OROMA_REPLAY_NS=replay
-#   OROMA_REPLAY_ALPHA=0.1
+# Lernen (optional / sicher gegatet):
+#   OROMA_REPLAY_LEARN=1|0                       # Lernwunsch / Status sichtbar
+#   OROMA_REPLAY_NS=replay                       # Ziel-Namespace
+#   OROMA_REPLAY_POLICY_UPSERT_ENABLE=1|0        # produktiver Write-Gate, Default AUS
+#   OROMA_REPLAY_POLICY_CONFIRM=REPLAY_POLICY_WRITE_REVIEWED
+#   OROMA_REPLAY_POLICY_NS_ALLOWLIST=replay      # CSV-Allowlist
+#   OROMA_REPLAY_POLICY_ALLOW_GENERIC_ACTION=0   # action=step bleibt Default blockiert
+#   OROMA_REPLAY_POLICY_DBW_TIMEOUT_MS=5000
+#   OROMA_REPLAY_DBW_PING_TIMEOUT_MS=300
+#   OROMA_REPLAY_DBW_PING_CACHE_SEC=5.0
 #
 # Replay Timing:
 #   OROMA_REPLAY_MIN_SLEEP=0.05
@@ -170,7 +181,15 @@ try:
 except Exception:
     sql_manager = None  # type: ignore
     _HAS_SQL = False
-    LOG.info("sql_manager nicht verfügbar – Replay lernt nicht in policy_rules.")
+    LOG.info("sql_manager nicht verfügbar – Replay-Logging/Legacy-Helper bleiben eingeschränkt.")
+
+try:
+    from core import db_writer_client  # type: ignore
+    _HAS_DBW = True
+except Exception:
+    db_writer_client = None  # type: ignore
+    _HAS_DBW = False
+    LOG.info("db_writer_client nicht verfügbar – Replay-Policy-Writes bleiben gesperrt.")
 
 try:
     # DB-backed SnapChain loader (snapchains table)
@@ -213,6 +232,26 @@ _state: Dict[str, Any] = {
     "error": None,
     "log_id": None,
 }
+
+_REPLAY_LEARNING_LOCK = threading.Lock()
+_REPLAY_LEARNING_STATS: Dict[str, Any] = {
+    "events_seen": 0,
+    "events_requested": 0,
+    "writes_attempted": 0,
+    "writes_ok": 0,
+    "writes_blocked": 0,
+    "writes_skipped": 0,
+    "errors": 0,
+    "last_decision": "init",
+    "last_reason": None,
+    "last_namespace": None,
+    "last_action": None,
+    "last_ts": None,
+    "last_error": None,
+}
+_REPLAY_DBW_PING_LOCK = threading.Lock()
+_REPLAY_DBW_PING_CACHE: Dict[str, Any] = {"ts": 0.0, "ok": False}
+
 _thread: Optional[threading.Thread] = None
 _stop_flag = threading.Event()
 _pause_flag = threading.Event()
@@ -238,6 +277,221 @@ _REPLAY_NMR_ENABLE = _env_bool("OROMA_REPLAY_NMR_ENABLE", True)
 _REPLAY_NMR_REWARD_SCALE = max(0.0, _env_float("OROMA_REPLAY_NMR_REWARD_SCALE", 0.15))
 _REPLAY_NMR_STRUCT_BONUS = max(0.0, _env_float("OROMA_REPLAY_NMR_STRUCT_BONUS", 0.10))
 _REPLAY_NMR_CROSSMODAL_BONUS = max(0.0, _env_float("OROMA_REPLAY_NMR_CROSSMODAL_BONUS", 0.05))
+
+
+_REPLAY_POLICY_CONFIRM_TOKEN = "REPLAY_POLICY_WRITE_REVIEWED"
+
+
+def _env_csv_set(name: str, default: str = "") -> set:
+    raw = os.getenv(name, default) or ""
+    return {p.strip() for p in str(raw).split(",") if p.strip()}
+
+
+def _replay_learn_requested() -> bool:
+    return _env_bool("OROMA_REPLAY_LEARN", False)
+
+
+def _replay_dbwriter_configured() -> bool:
+    """True, wenn Replay lokale Writes nicht nutzen darf, weil DBWriter konfiguriert ist."""
+    try:
+        if not _HAS_DBW or db_writer_client is None:
+            return False
+        if str(os.getenv("OROMA_DBW_ENABLE", "0")).strip().lower() not in ("1", "true", "yes", "on"):
+            return False
+        return bool(getattr(db_writer_client, "enabled", lambda: False)())
+    except Exception:
+        return False
+
+
+def _replay_dbwriter_enabled() -> bool:
+    """True nur, wenn der zentrale DBWriter für Writes konfiguriert und erreichbar ist."""
+    try:
+        if not _replay_dbwriter_configured() or db_writer_client is None:
+            return False
+        if not hasattr(db_writer_client, "ping"):
+            return True
+        now = time.time()
+        ttl = max(0.25, _env_float("OROMA_REPLAY_DBW_PING_CACHE_SEC", 5.0))
+        with _REPLAY_DBW_PING_LOCK:
+            if (now - float(_REPLAY_DBW_PING_CACHE.get("ts", 0.0) or 0.0)) <= ttl:
+                return bool(_REPLAY_DBW_PING_CACHE.get("ok", False))
+        timeout_ms = max(100, int(float(os.getenv("OROMA_REPLAY_DBW_PING_TIMEOUT_MS", "300") or "300")))
+        ok = bool(db_writer_client.ping(timeout_ms=timeout_ms))  # type: ignore[attr-defined]
+        with _REPLAY_DBW_PING_LOCK:
+            _REPLAY_DBW_PING_CACHE["ts"] = now
+            _REPLAY_DBW_PING_CACHE["ok"] = ok
+        return ok
+    except Exception:
+        try:
+            with _REPLAY_DBW_PING_LOCK:
+                _REPLAY_DBW_PING_CACHE["ts"] = time.time()
+                _REPLAY_DBW_PING_CACHE["ok"] = False
+        except Exception:
+            pass
+        return False
+
+
+def _replay_policy_allow_generic_action() -> bool:
+    return _env_bool("OROMA_REPLAY_POLICY_ALLOW_GENERIC_ACTION", False)
+
+
+def _record_learning_decision(decision: str, reason: Optional[str] = None,
+                              namespace: Optional[str] = None,
+                              action: Optional[str] = None,
+                              error: Optional[str] = None) -> None:
+    """Aktualisiert sichtbare Replay-Learning-Zähler ohne harte Abhängigkeit zur UI."""
+    try:
+        with _REPLAY_LEARNING_LOCK:
+            _REPLAY_LEARNING_STATS["last_decision"] = str(decision)
+            _REPLAY_LEARNING_STATS["last_reason"] = reason
+            _REPLAY_LEARNING_STATS["last_namespace"] = namespace
+            _REPLAY_LEARNING_STATS["last_action"] = action
+            _REPLAY_LEARNING_STATS["last_ts"] = int(time.time())
+            if error is not None:
+                _REPLAY_LEARNING_STATS["last_error"] = str(error)
+            if decision == "seen":
+                _REPLAY_LEARNING_STATS["events_seen"] = int(_REPLAY_LEARNING_STATS.get("events_seen", 0)) + 1
+            elif decision == "requested":
+                _REPLAY_LEARNING_STATS["events_requested"] = int(_REPLAY_LEARNING_STATS.get("events_requested", 0)) + 1
+            elif decision == "attempted":
+                _REPLAY_LEARNING_STATS["writes_attempted"] = int(_REPLAY_LEARNING_STATS.get("writes_attempted", 0)) + 1
+            elif decision == "written":
+                _REPLAY_LEARNING_STATS["writes_ok"] = int(_REPLAY_LEARNING_STATS.get("writes_ok", 0)) + 1
+            elif decision == "blocked":
+                _REPLAY_LEARNING_STATS["writes_blocked"] = int(_REPLAY_LEARNING_STATS.get("writes_blocked", 0)) + 1
+            elif decision == "skipped":
+                _REPLAY_LEARNING_STATS["writes_skipped"] = int(_REPLAY_LEARNING_STATS.get("writes_skipped", 0)) + 1
+            elif decision == "error":
+                _REPLAY_LEARNING_STATS["errors"] = int(_REPLAY_LEARNING_STATS.get("errors", 0)) + 1
+    except Exception:
+        # Status-Zähler dürfen Replay niemals destabilisieren.
+        return
+
+
+def _replay_policy_gate_snapshot(namespace: Optional[str] = None,
+                                 action: Optional[str] = None) -> Dict[str, Any]:
+    """Liefert den aktuell wirksamen Safe-Gate-Zustand für Replay→Policy.
+
+    Der Gate ist absichtlich strenger als `OROMA_REPLAY_LEARN`: Replay-Lernen
+    darf im Betrieb als Wunsch/Analysepfad aktiv sein, produktive policy_rules-
+    Writes bleiben aber gesperrt, bis Review, Confirm-Token, Namespace-Allowlist,
+    DBWriter und belastbare Aktion gleichzeitig passen.
+    """
+    ns = str(namespace or os.getenv("OROMA_REPLAY_NS", "replay") or "replay")
+    action_txt = str(action or "")
+    allowlist = _env_csv_set("OROMA_REPLAY_POLICY_NS_ALLOWLIST", "replay")
+    learn_requested = _replay_learn_requested()
+    upsert_enabled = _env_bool("OROMA_REPLAY_POLICY_UPSERT_ENABLE", False)
+    confirm_value = str(os.getenv("OROMA_REPLAY_POLICY_CONFIRM", "") or "").strip()
+    confirm_ok = confirm_value == _REPLAY_POLICY_CONFIRM_TOKEN
+    dbwriter_ok = _replay_dbwriter_enabled()
+    namespace_allowed = bool(ns and ns in allowlist)
+    generic_allowed = _replay_policy_allow_generic_action()
+    action_safe = bool(action_txt and (generic_allowed or action_txt != "step"))
+
+    reason = None
+    if not learn_requested:
+        reason = "replay_learn_disabled"
+    elif not upsert_enabled:
+        reason = "policy_upsert_gate_disabled"
+    elif not confirm_ok:
+        reason = "policy_confirm_missing_or_invalid"
+    elif not namespace_allowed:
+        reason = "namespace_not_allowlisted"
+    elif not dbwriter_ok:
+        reason = "dbwriter_not_enabled_or_unavailable"
+    elif not action_safe:
+        reason = "missing_or_generic_action"
+
+    return {
+        "learn_requested": bool(learn_requested),
+        "policy_upsert_enable": bool(upsert_enabled),
+        "confirm_required": _REPLAY_POLICY_CONFIRM_TOKEN,
+        "confirm_ok": bool(confirm_ok),
+        "namespace": ns,
+        "namespace_allowlist": sorted(allowlist),
+        "namespace_allowed": bool(namespace_allowed),
+        "dbwriter_configured": bool(_replay_dbwriter_configured()),
+        "dbwriter_enabled": bool(dbwriter_ok),
+        "generic_action_allowed": bool(generic_allowed),
+        "action_safe": bool(action_safe),
+        "write_ready": reason is None,
+        "blocked_reason": reason,
+        "mode": "dbwriter_policy_upsert" if reason is None else "read_only_or_blocked",
+    }
+
+
+def _replay_learning_status() -> Dict[str, Any]:
+    """Statusobjekt für UI/API: macht Replay-Learning-Gates und Blockaden sichtbar."""
+    gate = _replay_policy_gate_snapshot()
+    with _REPLAY_LEARNING_LOCK:
+        stats = dict(_REPLAY_LEARNING_STATS)
+    out = dict(gate)
+    out.update(stats)
+    return out
+
+
+def _dbwriter_policy_upsert(namespace: str, state_hash: str, action: str,
+                            outcome: str, centroid: Optional[List[float]]) -> None:
+    """Schreibt einen einzelnen Replay→Policy-Upsert ausschließlich über DBWriter.
+
+    Kein lokaler SQLite-Fallback: Wenn DBWriter nicht aktiv ist, bleibt Replay
+    read-only. Replay-Evidenz ist generischer als Direct-Step-Credit und darf
+    deshalb nur durch diesen expliziten, überprüfbaren Pfad in `policy_rules`.
+    """
+    if not _replay_dbwriter_enabled() or db_writer_client is None:
+        raise RuntimeError("Replay policy upsert requires active DBWriter")
+
+    now = int(time.time())
+    outcome_txt = str(outcome).strip().lower()
+    pos_inc = 1 if outcome_txt in ("pos", "positive", "win", "success", "+1") else 0
+    neg_inc = 1 if outcome_txt in ("neg", "negative", "loss", "fail", "-1") else 0
+    draw_inc = 0 if (pos_inc or neg_inc) else 1
+    q_value = float(pos_inc - neg_inc)
+    cen_json = json.dumps(centroid, separators=(",", ":")) if centroid else None
+
+    db_writer_client.exec_write(
+        """
+        INSERT INTO policy_rules
+            (namespace,state_hash,action,n,pos,neg,draw,q,last_ts,centroid)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(namespace,state_hash,action) DO UPDATE SET
+            n       = policy_rules.n + 1,
+            pos     = policy_rules.pos + ?,
+            neg     = policy_rules.neg + ?,
+            draw    = policy_rules.draw + ?,
+            q       = CAST((policy_rules.pos + ?) - (policy_rules.neg + ?) AS REAL) / (policy_rules.n + 1),
+            last_ts = ?,
+            centroid= COALESCE(?, policy_rules.centroid)
+        """,
+        [
+            str(namespace), str(state_hash), str(action),
+            1, pos_inc, neg_inc, draw_inc, q_value, now, cen_json,
+            pos_inc, neg_inc, draw_inc, pos_inc, neg_inc, now, cen_json,
+        ],
+        tag="replay_manager.policy_rules.safe_upsert",
+        priority="low",
+        timeout_ms=max(500, int(float(os.getenv("OROMA_REPLAY_POLICY_DBW_TIMEOUT_MS", "5000") or "5000"))),
+        db="oroma",
+    )
+
+
+def _insert_replay_metric(key: str, value: float) -> None:
+    """Schreibt Replay-Metriken DBWriter-kompatibel; lokaler Fallback nur ohne DBWriter."""
+    if _replay_dbwriter_configured():
+        if not _replay_dbwriter_enabled() or db_writer_client is None:
+            raise RuntimeError("DBWriter configured but unavailable for replay metric")
+        db_writer_client.exec_lastrowid(
+            "INSERT INTO metrics (key, ts, value) VALUES (?, ?, ?)",
+            [str(key), int(time.time()), float(value)],
+            tag="replay_manager.metric",
+            priority="low",
+            timeout_ms=max(500, int(float(os.getenv("OROMA_REPLAY_POLICY_DBW_TIMEOUT_MS", "5000") or "5000"))),
+            db="oroma",
+        )
+        return
+    if _HAS_SQL and sql_manager is not None and hasattr(sql_manager, "insert_metric"):
+        sql_manager.insert_metric(str(key), float(value))  # type: ignore[attr-defined]
 
 
 def _get_nmr_output() -> Dict[str, Any]:
@@ -365,52 +619,72 @@ def _extract_base_vector(ev: Any) -> Tuple[Optional[List[float]], Optional[List[
 # =============================================================================
 
 def _learn_from_event(ev: Any, nmr_out: Optional[Dict[str, Any]] = None) -> None:
-    if not _HAS_SQL:
-        return
-    if os.getenv("OROMA_REPLAY_LEARN", "0").strip().lower() not in ("1", "true", "yes"):
-        return
-    if not hasattr(sql_manager, "policy_upsert"):
-        LOG.debug("policy_upsert nicht verfügbar – Lernen übersprungen.")
+    _record_learning_decision("seen")
+    if not _replay_learn_requested():
         return
 
+    ns = str(os.environ.get("OROMA_REPLAY_NS", "replay") or "replay")
+    _record_learning_decision("requested", namespace=ns)
+
     try:
-        ns = os.environ.get("OROMA_REPLAY_NS", "replay")
         base, centroid, meta = _extract_base_vector(ev)
         if not base:
+            _record_learning_decision("skipped", "missing_state_vector", namespace=ns)
             return
 
         s = json.dumps([round(float(x), 3) for x in base], separators=(",", ":"))
         sh = hashlib.sha1(s.encode("utf-8")).hexdigest()[:16]
 
-        action = str((meta or {}).get("action", "step"))
+        meta = dict(meta or {})
+        action = str(meta.get("policy_action") or meta.get("action") or "step")
 
-        if "reward" in (meta or {}):
+        if "reward" in meta:
             try:
                 reward = float(meta["reward"])
             except Exception:
                 reward = 0.0
-        elif (meta or {}).get("outcome") in ("win", "success"):
+        elif meta.get("outcome") in ("win", "success"):
             reward = 1.0
-        elif (meta or {}).get("outcome") in ("loss", "fail"):
+        elif meta.get("outcome") in ("loss", "fail"):
             reward = -1.0
         else:
             reward = 0.0
 
         nmr_bonus = _bounded_nmr_replay_bonus(nmr_out)
         reward += nmr_bonus
-
         outcome = "pos" if reward > 0 else ("neg" if reward < 0 else "draw")
-        centroid_txt = json.dumps(centroid, separators=(",", ":")) if centroid else None
 
-        sql_manager.policy_upsert(ns, sh, action, outcome=outcome, reward=reward, centroid=centroid_txt)  # type: ignore
+        gate = _replay_policy_gate_snapshot(namespace=ns, action=action)
+        if not gate.get("write_ready"):
+            reason = str(gate.get("blocked_reason") or "blocked")
+            _record_learning_decision("blocked", reason, namespace=ns, action=action)
+            log_guard.log_suppressed(
+                logger,
+                key=f"replay_manager.policy_write_blocked.{reason}",
+                msg=f"Replay→Policy write blocked: {reason}",
+                exc=None,
+                level=logging.WARNING if reason not in ("missing_or_generic_action",) else logging.DEBUG,
+                interval_s=300,
+            )
+            if nmr_bonus > 0.0:
+                try:
+                    _insert_replay_metric("replay_nmr_bonus_blocked", float(nmr_bonus))
+                except Exception as e:
+                    log_guard.log_suppressed(logger, key="replay_manager.nmr_metric_blocked", msg="Replay NMR metric write skipped", exc=e, level=logging.DEBUG, interval_s=300)
+            return
 
-        if hasattr(sql_manager, "insert_metric") and nmr_bonus > 0.0:
+        _record_learning_decision("attempted", namespace=ns, action=action)
+        _dbwriter_policy_upsert(ns, sh, action, outcome=outcome, centroid=centroid)
+        _record_learning_decision("written", namespace=ns, action=action)
+
+        if nmr_bonus > 0.0:
             try:
-                sql_manager.insert_metric("replay_nmr_bonus", float(nmr_bonus))  # type: ignore[attr-defined]
+                _insert_replay_metric("replay_nmr_bonus", float(nmr_bonus))
             except Exception as e:
-                log_guard.log_suppressed(logger, key="replay_manager.pass.7", msg="Suppressed exception (was: pass)", exc=e, level=logging.WARNING)
+                log_guard.log_suppressed(logger, key="replay_manager.nmr_metric", msg="Replay NMR metric write skipped", exc=e, level=logging.DEBUG, interval_s=300)
     except Exception as e:
-        LOG.debug("LearnHook Fehler: %s", e)
+        _record_learning_decision("error", "learn_hook_exception", namespace=ns, error=str(e))
+        log_guard.log_suppressed(logger, key="replay_manager.learn_hook", msg="Replay LearnHook Fehler", exc=e, level=logging.WARNING, interval_s=300)
 
 # =============================================================================
 # SnapChain-Load (selbstheilend)
@@ -662,19 +936,18 @@ def _worker(chain_id: Any, speed: float):
             nmr_out = _get_nmr_output()
             _state["last_nmr"] = nmr_out
 
-            # leichte Telemetrie
-            if _HAS_SQL and hasattr(sql_manager, "insert_metric"):
-                try:
-                    sql_manager.insert_metric("replay_step", float(idx + 1))  # type: ignore[attr-defined]
-                    if nmr_out:
-                        if int(nmr_out.get("nmr_surprise_event", 0) or 0) == 1:
-                            sql_manager.insert_metric("replay_nmr_surprise_step", 1.0)  # type: ignore[attr-defined]
-                        if int(nmr_out.get("binding_hint", 0) or 0) == 1:
-                            sql_manager.insert_metric("replay_nmr_binding_hint_step", 1.0)  # type: ignore[attr-defined]
-                        if int(nmr_out.get("crossmodal_hint", 0) or 0) == 1:
-                            sql_manager.insert_metric("replay_nmr_crossmodal_hint_step", 1.0)  # type: ignore[attr-defined]
-                except Exception as e:
-                    log_guard.log_suppressed(logger, key="replay_manager.pass.2", msg="Suppressed exception (was: pass)", exc=e, level=logging.WARNING)
+            # leichte Telemetrie: DBWriter-kompatibel, kein lokaler Write-Bypass bei OROMA_DBW_ENABLE=1
+            try:
+                _insert_replay_metric("replay_step", float(idx + 1))
+                if nmr_out:
+                    if int(nmr_out.get("nmr_surprise_event", 0) or 0) == 1:
+                        _insert_replay_metric("replay_nmr_surprise_step", 1.0)
+                    if int(nmr_out.get("binding_hint", 0) or 0) == 1:
+                        _insert_replay_metric("replay_nmr_binding_hint_step", 1.0)
+                    if int(nmr_out.get("crossmodal_hint", 0) or 0) == 1:
+                        _insert_replay_metric("replay_nmr_crossmodal_hint_step", 1.0)
+            except Exception as e:
+                log_guard.log_suppressed(logger, key="replay_manager.metric_write", msg="Replay metric write skipped", exc=e, level=logging.DEBUG, interval_s=300)
 
             # lokales Lernen (per ENV schaltbar)
             _learn_from_event(ev, nmr_out=nmr_out)
@@ -772,8 +1045,10 @@ def stop() -> None:
     LOG.info("⏹️ Replay gestoppt")
 
 def status() -> Dict[str, Any]:
-    """Liefert eine Momentaufnahme des Replay-Status."""
-    return dict(_state)
+    """Liefert eine Momentaufnahme des Replay-Status inklusive Learning-Gate."""
+    out = dict(_state)
+    out["replay_learning"] = _replay_learning_status()
+    return out
 
 # =============================================================================
 # CLI

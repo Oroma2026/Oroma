@@ -1,0 +1,40 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-ptz-positive-position-probe.timer
+# Projekt:  ORÓMA (Offline-Realtime-Organic-Memory-AI)
+# Modul:    PTZ Positive Position Probe Timer – Stage-A Evidence Verlauf
+# Version:  v3.7.3+ptz-positive-position-probe-timer-v1.0
+# Stand:    2026-06-13
+# Autor:    ORÓMA · ChatGPT Patch-Gate
+# Lizenz:   MIT
+# =============================================================================
+#
+# ZWECK
+# ─────
+# Startet `oroma-ptz-positive-position-probe.service` periodisch. Die Probe
+# erzeugt alle fünf Minuten eine kurze Stage-A-Evidence-Zeitreihe aus den PTZ
+# Positive Position Markern. Sie ist bewusst nicht steuernd und nicht
+# materialisierend.
+#
+# DESIGN
+# ──────
+# - OnBootSec: kurzer Startversatz, damit DBWriter/Worker Zeit zum Hochfahren haben.
+# - OnUnitActiveSec: regelmäßige Messung alle 5 Minuten.
+# - RandomizedDelaySec: leichte Entzerrung gegen andere Timer/DBWriter-Last.
+# - Persistent: nach Boot/Lücken wird ein verpasster Lauf nachgeholt.
+#
+# =============================================================================
+
+[Unit]
+Description=ORÓMA – PTZ Positive Position Probe Timer (every 5 minutes)
+Documentation=file:/opt/ai/oroma/docs/PTZ_MOTOR_WORKER.md
+
+[Timer]
+OnBootSec=180s
+OnUnitActiveSec=300s
+Persistent=true
+RandomizedDelaySec=30s
+AccuracySec=30s
+Unit=oroma-ptz-positive-position-probe.service
+
+[Install]
+WantedBy=timers.target

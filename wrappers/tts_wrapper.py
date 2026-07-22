@@ -4,8 +4,8 @@
 # Pfad:    /opt/ai/oroma/wrappers/tts_wrapper.py
 # Projekt: ORÓMA
 # Modul:   TTS-Wrapper (Fallback & DeviceHub-Integration)
-# Version: v3.8 (prod)
-# Stand:   2025-10-03
+# Version: v3.9 (prod, headless-safe playback)
+# Stand:   2026-07-07
 #
 # Zweck
 # ─────
@@ -31,6 +31,16 @@
 #   OROMA_TTS_VOLUME=1.0           (0..1)
 #   OROMA_TTS_MAX_CHARS=280        (Chunkgröße)
 #   OROMA_TTS_USE_DEVICE_HUB=true|false  (Default: true)
+#   OROMA_TTS_DIRECT_PLAYBACK_ENABLE=true|false
+#       Default false. Wenn DeviceHub kein valides Output-Device findet, wird
+#       NICHT mehr automatisch auf pyttsx3/espeak-Direktwiedergabe zurückgefallen.
+#       Das verhindert PortAudio/ALSA-Spam in headless/systemd-Setups.
+#   OROMA_TTS_HUB_OUTPUT_PRECHECK=true|false
+#       Default true. Prüft DeviceHub-Output vor WAV-Synthese/Playback.
+#   OROMA_TTS_NO_OUTPUT_CACHE_SEC=900
+#       Cache-Zeit für erkannte Headless-/No-Output-Situation.
+#   OROMA_TTS_SKIP_LOG_INTERVAL_SEC=900
+#       Drosselung für Headless-Skip-Logs.
 #   OROMA_LOG_LEVEL=INFO|DEBUG|...
 #
 # Kompatibilität
@@ -58,6 +68,7 @@ from core.log_guard import log_suppressed
 import tempfile
 import threading
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -187,6 +198,91 @@ def _chunk_text(text: str, max_chars: int = 280) -> List[str]:
 # -----------------------------------------------------------------------------
 _USE_HUB_DEFAULT = True
 _USE_HUB = _env_bool("OROMA_TTS_USE_DEVICE_HUB", _USE_HUB_DEFAULT)
+
+# -----------------------------------------------------------------------------
+# Headless-safe Playback Guard
+# -----------------------------------------------------------------------------
+# ORÓMA läuft produktiv häufig ohne X11/Wayland/Desktop und ohne dauerhaft
+# vorhandenes Audio-Output-Device. In diesem Modus darf ein fehlgeschlagener
+# DeviceHub-Playback-Versuch NICHT automatisch pyttsx3/espeak direkt starten,
+# weil diese Engines intern wieder PortAudio/ALSA öffnen und dadurch hunderte
+# Zeilen wie ``wave_open_sound > Pa_OpenStream : err=-9996`` in service.err.log
+# erzeugen können.
+#
+# Design:
+#   • TTS-Synthese in Dateien bleibt unverändert möglich (save_to_file).
+#   • DeviceHub bleibt der bevorzugte Playback-Pfad, weil er zentral auditierbar
+#     ist und Audio-Devices sauber auswählt.
+#   • Wenn DeviceHub kein Output-Device hat, wird Sprache als kontrollierter
+#     ``skipped``-Status zurückgegeben, nicht als Fehler-Spam.
+#   • Direkte Engine-Wiedergabe ist weiterhin bewusst zuschaltbar über
+#     OROMA_TTS_DIRECT_PLAYBACK_ENABLE=1, z. B. für Desktop-/Werkstattbetrieb.
+_TTS_DIRECT_PLAYBACK_ENABLE = _env_bool("OROMA_TTS_DIRECT_PLAYBACK_ENABLE", False)
+_TTS_HUB_OUTPUT_PRECHECK = _env_bool("OROMA_TTS_HUB_OUTPUT_PRECHECK", True)
+_TTS_NO_OUTPUT_CACHE_SEC = max(30, _env_int("OROMA_TTS_NO_OUTPUT_CACHE_SEC", 900))
+_TTS_SKIP_LOG_INTERVAL_SEC = max(30, _env_int("OROMA_TTS_SKIP_LOG_INTERVAL_SEC", 900))
+_TTS_OUTPUT_BLOCKED_UNTIL_TS: float = 0.0
+_TTS_OUTPUT_BLOCK_REASON: str = ""
+_TTS_SKIP_LOG_TS: float = 0.0
+
+def _remember_output_block(reason: str) -> None:
+    global _TTS_OUTPUT_BLOCKED_UNTIL_TS, _TTS_OUTPUT_BLOCK_REASON
+    _TTS_OUTPUT_BLOCK_REASON = str(reason or "no_output")
+    _TTS_OUTPUT_BLOCKED_UNTIL_TS = time.time() + float(_TTS_NO_OUTPUT_CACHE_SEC)
+
+def _clear_output_block() -> None:
+    global _TTS_OUTPUT_BLOCKED_UNTIL_TS, _TTS_OUTPUT_BLOCK_REASON
+    _TTS_OUTPUT_BLOCKED_UNTIL_TS = 0.0
+    _TTS_OUTPUT_BLOCK_REASON = ""
+
+def _output_block_active() -> Optional[str]:
+    if time.time() < float(_TTS_OUTPUT_BLOCKED_UNTIL_TS or 0.0):
+        return _TTS_OUTPUT_BLOCK_REASON or "no_output_cached"
+    return None
+
+def _log_tts_skip_ratelimited(reason: str) -> None:
+    global _TTS_SKIP_LOG_TS
+    now = time.time()
+    if (now - float(_TTS_SKIP_LOG_TS or 0.0)) >= float(_TTS_SKIP_LOG_INTERVAL_SEC):
+        _TTS_SKIP_LOG_TS = now
+        log.info("TTS-Playback übersprungen: %s", reason)
+
+def _skip_result(reason: str, backend: str = "", mode: str = "playback") -> Dict[str, Any]:
+    _log_tts_skip_ratelimited(reason)
+    return {
+        "ok": True,
+        "skipped": True,
+        "reason": str(reason or "playback_skipped"),
+        "backend": backend or "",
+        "mode": mode,
+        "headless_safe": True,
+    }
+
+def _hub_output_ready(hub) -> Tuple[bool, str]:
+    """Prüft best-effort, ob DeviceHub wirklich ein Output-Device nutzen kann.
+
+    Diese Vorprüfung verhindert, dass TTS erst WAV-Bytes synthetisiert und dann
+    bei jedem Versuch in ``DeviceHub.play_wav``/PortAudio landet. Sie nutzt nur
+    vorhandene DeviceHub-Felder/Methoden und bleibt strikt best-effort.
+    """
+    if hub is None:
+        return False, "device_hub_unavailable"
+    try:
+        if not bool(getattr(hub, "audio_enable", True)):
+            return False, "audio_disabled"
+    except Exception:
+        pass
+    try:
+        resolver = getattr(hub, "_resolve_output_device_index", None)
+        if callable(resolver):
+            idx = resolver()
+            if idx is None:
+                return False, "no_output_device"
+            return True, "ok"
+    except Exception as e:
+        log_suppressed(LOG, key="wrappers_tts_wrapper.hub_output_precheck", msg="DeviceHub output precheck failed", exc=e, level=logging.DEBUG, interval_s=600)
+        return False, "output_precheck_failed"
+    return True, "ok"
 
 def _get_hub():
     """Lazy-Import: gibt den DeviceHub zurück oder None."""
@@ -499,7 +595,7 @@ class TTSWrapper:
             try:
                 self._speak_impl(job.text, blocking=True, use_hub=job.use_hub, client=job.client)
             except Exception as e:
-                log.error("TTS Worker-Fehler: %s", e)
+                log_suppressed(LOG, key="wrappers_tts_wrapper.worker", msg="TTS Worker-Fehler", exc=e, level=logging.ERROR, interval_s=300)
             finally:
                 self._q.task_done()
 
@@ -507,6 +603,11 @@ class TTSWrapper:
         hub = _get_hub()
         if not hub:
             return False
+        if _TTS_HUB_OUTPUT_PRECHECK:
+            ok, reason = _hub_output_ready(hub)
+            if not ok:
+                _remember_output_block(reason)
+                return False
         maxc = _env_int("OROMA_TTS_MAX_CHARS", 280)
         chunks = _chunk_text(text, maxc)
         ok_all = True
@@ -517,20 +618,47 @@ class TTSWrapper:
                 continue
             ok = _hub_play_wav(hub, data, client=client or "tts")
             ok_all = ok_all and bool(ok)
+        if ok_all:
+            _clear_output_block()
+        else:
+            _remember_output_block("device_hub_playback_failed")
         return ok_all
 
-    def _speak_impl(self, text: str, blocking: bool, use_hub: bool, client: Optional[str]) -> None:
+    def _speak_impl(self, text: str, blocking: bool, use_hub: bool, client: Optional[str]) -> Dict[str, Any]:
         text = _norm_text(text)
         if not text:
-            return
-        if use_hub and _get_hub() is not None:
-            if self._play_via_hub(text, client=client):
-                return
-            log.info("DeviceHub-Ausgabe fehlgeschlagen – direkte Engine-Wiedergabe als Fallback.")
-        # Direkte Engine-Wiedergabe
+            return {"ok": False, "error": "empty_text", "backend": self.backend}
+
+        blocked_reason = _output_block_active()
+        if blocked_reason and not _TTS_DIRECT_PLAYBACK_ENABLE:
+            return _skip_result(blocked_reason, backend=self.backend, mode="blocking" if blocking else "non-blocking")
+
+        if use_hub:
+            hub = _get_hub()
+            if hub is not None:
+                if self._play_via_hub(text, client=client):
+                    return {"ok": True, "backend": self.backend, "mode": "blocking" if blocking else "non-blocking", "hub": True}
+                reason = _TTS_OUTPUT_BLOCK_REASON or "device_hub_playback_failed"
+                if not _TTS_DIRECT_PLAYBACK_ENABLE:
+                    return _skip_result(reason, backend=self.backend, mode="blocking" if blocking else "non-blocking")
+                log_suppressed(
+                    LOG,
+                    key="wrappers_tts_wrapper.direct_fallback",
+                    msg="DeviceHub-Ausgabe fehlgeschlagen – direkte Engine-Wiedergabe als explizit aktivierter Fallback.",
+                    level=logging.INFO,
+                    interval_s=300,
+                )
+            elif not _TTS_DIRECT_PLAYBACK_ENABLE:
+                return _skip_result("device_hub_unavailable", backend=self.backend, mode="blocking" if blocking else "non-blocking")
+
+        if not _TTS_DIRECT_PLAYBACK_ENABLE:
+            return _skip_result("direct_playback_disabled", backend=self.backend, mode="blocking" if blocking else "non-blocking")
+
+        # Direkte Engine-Wiedergabe – bewusst nur wenn explizit freigegeben.
         maxc = _env_int("OROMA_TTS_MAX_CHARS", 280)
         for c in _chunk_text(text, maxc):
             self._engine.speak_chunk(c, blocking=blocking)
+        return {"ok": True, "backend": self.backend, "mode": "blocking" if blocking else "non-blocking", "hub": False, "direct": True}
 
     # ---------------- Public API ----------------
 
@@ -559,9 +687,11 @@ class TTSWrapper:
         try:
             use_hub = self._use_hub_default if use_device_hub is None else bool(use_device_hub)
             if blocking:
-                self._speak_impl(text, blocking=True, use_hub=use_hub, client=client)
-                return {"ok": True, "backend": self.backend, "mode": "blocking", "hub": bool(use_hub and _get_hub() is not None)}
+                return self._speak_impl(text, blocking=True, use_hub=use_hub, client=client)
             else:
+                blocked_reason = _output_block_active()
+                if blocked_reason and not _TTS_DIRECT_PLAYBACK_ENABLE:
+                    return _skip_result(blocked_reason, backend=self.backend, mode="non-blocking")
                 self._q.put_nowait(_Job(text=text, use_hub=use_hub, client=client))
                 return {"ok": True, "backend": self.backend, "mode": "non-blocking", "queued": True, "hub": bool(use_hub and _get_hub() is not None)}
         except queue.Full:

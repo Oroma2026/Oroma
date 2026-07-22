@@ -1,0 +1,39 @@
+# =============================================================================
+# Datei:    /etc/systemd/system/oroma-ptz-structured-motion-probe.timer
+# Projekt:  ORÓMA (Offline-Realtime-Organic-Memory-AI)
+# Modul:    PTZ Structured Motion Probe Timer – P3a Evidence Verlauf
+# Version:  v3.7.3+p3a-structured-motion-timer-v1.0
+# Stand:    2026-06-16
+# Autor:    ORÓMA · ChatGPT Patch-Gate
+# Lizenz:   MIT
+# =============================================================================
+#
+# ZWECK
+# ─────
+# Startet `oroma-ptz-structured-motion-probe.service` periodisch. Die Probe
+# erzeugt alle fünf Minuten eine Stage-A-Evidence-Zeitreihe unter `ptz.motion.*`.
+# Sie ist bewusst nicht steuernd und nicht materialisierend.
+#
+# DESIGN
+# ──────
+# - OnBootSec: Startversatz für DBWriter/CameraHub/Orchestrator.
+# - OnUnitActiveSec: regelmäßige Messung alle 5 Minuten.
+# - RandomizedDelaySec: Entzerrung gegen andere Timer/DBWriter-Last.
+# - Persistent: nach Boot/Lücken wird ein verpasster Lauf nachgeholt.
+#
+# =============================================================================
+
+[Unit]
+Description=ORÓMA – PTZ Structured Motion Probe Timer (every 5 minutes)
+Documentation=file:/opt/ai/oroma/docs/PTZ_MOTOR_WORKER.md
+
+[Timer]
+OnBootSec=240s
+OnUnitActiveSec=300s
+Persistent=true
+RandomizedDelaySec=30s
+AccuracySec=30s
+Unit=oroma-ptz-structured-motion-probe.service
+
+[Install]
+WantedBy=timers.target

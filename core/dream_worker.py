@@ -5,8 +5,8 @@
 # Projekt:   ORÓMA (Dream/Rest Phase · Offline Learning · Headless)
 # Modul:     DreamWorker – periodischer Offline-Lernlauf
 #            (Replay/Mutation/LTM/Rules-Prune/Research + SceneGraph/ObjectGraph Ableitungen)
-# Version:   v3.7.3+structured-plasticity-ptz-motor-policy-v1
-# Stand:     2026-05-17
+# Version:   v3.7.3+structured-plasticity-ptz-policy-atomic-v1.2
+# Stand:     2026-06-14
 #
 # Autor (öffentlich / Zenodo):
 #   Jörg Werner
@@ -114,6 +114,126 @@
 #   OROMA_OBJECTGRAPH_TARGET_NS=<dst_ns>
 #   OROMA_OBJECT_EXTRACTOR_NAMESPACES=<csv_ns_list>
 #
+# PATCH-HINWEIS 2026-06-14 / P2.5b:
+# - Die PTZ-Policy-Materialisierung behält ihre Domänen-Semantik bei:
+#     * Spiel-/UniversalPolicy-Namespace: q als diskrete Bilanz (pos-neg)/n.
+#     * PTZ-Namespace(s): q als laufender Mittelwert über rohe Reward-Magnitude.
+# - Für DBWriter-Betrieb werden die bisherigen INSERT-OR-IGNORE + UPDATE-Paare
+#   in eine einzelne DBWriter-Transaction pro Reward gebündelt. Dadurch bleibt
+#   die bestehende Running-Mean-Formel exakt erhalten, aber die Queue-/Crash-Lücke
+#   zwischen Insert und Update wird geschlossen.
+# - Keine Motorsteuerung, keine Policy-Bias-Aktivierung und keine Materialisierung
+#   werden durch diesen Patch hinzugefügt. Es ist ein Atomicity-/Hygiene-Patch.
+#
+#
+# PATCH-HINWEIS 2026-07-06 / Dream Adapter Dry-Run Phase v1:
+# - Additiver, read-only Phasenanschluss fuer adapterbasierte Game-Traces.
+# - Aktiv nur bei expliziter CLI-/ENV-Auswahl (z. B. --phase adapter_dry_run).
+# - Keine policy_rules-/snapchains-/MetaChain-Writes, kein Forgetting, kein PTZ.
+# - Ziel: regulären Dream-Phasenrahmen nutzen, aber nur Konsolidierbarkeit loggen.
+#
+# PATCH-HINWEIS 2026-07-06 / Dream Policy Review Dry-Run v1:
+# - Additive, read-only Review-Phase fuer konkrete Policy-Update-Kandidaten.
+# - Aktiv nur bei expliziter CLI-/ENV-Auswahl (z. B. --phase adapter_policy_review_dry_run).
+# - Leitet aus Game-Trace-Outcomes + bestehender policy_rules-Ausrichtung eine
+#   pruefbare Kandidatenliste ab, schreibt aber keinerlei Policy-, SnapChain-,
+#   MetaChain-, Forgetting-, Checkpoint- oder PTZ-Daten.
+# - Ziel: den naechsten produktiven Schritt sichtbar machen, ohne ihn auszufuehren.
+#
+# PATCH-HINWEIS 2026-07-06 / Dream Policy Review Credit Guard v1:
+# - Additiver Sicherheitsgurt fuer read-only Policy-Review-Artefakte.
+# - Root-/Episode-Outcomes werden sichtbar als episode_root_broadcast markiert
+#   und bleiben write_eligible=False, weil ein Episodenergebnis noch keine
+#   belastbare per-step Credit-Assignment-Bewertung ist.
+# - Dadurch duerfen starke Delta-Kandidaten aus reinen Root-Outcomes nicht
+#   versehentlich als direkte Policy-Write-Freigabe interpretiert werden.
+# - Weiterhin keinerlei DB-/Policy-/SnapChain-/Checkpoint-/PTZ-Writes.
+#
+# PATCH-HINWEIS 2026-07-06 / Dream Credit Assignment Review Dry-Run v1:
+# - Additive, read-only Review-Phase fuer Root-/Episoden-Credit-Assignment.
+# - Aktiv nur bei expliziter CLI-/ENV-Auswahl (z. B. --phase adapter_credit_assignment_review_dry_run).
+# - Berechnet einen transparenten, terminalgewichteten Zuordnungsvorschlag
+#   (root_temporal_decay_v1) aus Episode-Outcomes, markiert alle Vorschlaege
+#   jedoch weiterhin write_eligible=False, weil das Modell noch nicht validiert
+#   und keine direkte Step-Reward-Quelle ist.
+# - Ziel: aus Root-Credit pruefbare Review-Kandidaten ableiten, ohne Policy-,
+#   SnapChain-, MetaChain-, Checkpoint-, Forgetting-, DBWriter- oder PTZ-Writes.
+#
+# PATCH-HINWEIS 2026-07-06 / Dream Credit Validation Review Dry-Run v1:
+# - Additive, read-only Validierungsphase fuer Credit-Assignment-Kandidaten.
+# - Aktiv nur bei expliziter CLI-/ENV-Auswahl (z. B. --phase adapter_credit_validation_dry_run).
+# - Sucht begrenzt und DB-schonend nach direkter Step-/Reward-Evidenz in
+#   Trace-Schritten, episode_events und rewards_log, schreibt aber keinerlei
+#   Validierungs-, Policy-, SnapChain-, Checkpoint-, Forgetting-, DBWriter-
+#   oder PTZ-Daten.
+# - Ziel: sichtbar machen, ob Root-Credit-Kandidaten gegen direkte Evidenz
+#   validierbar sind oder weiter blockiert bleiben muessen.
+#
+# PATCH-HINWEIS 2026-07-06 / Dream Shadow Write Plan Dry-Run v1:
+# - Additive, read-only Planungsphase direkt vor einem spaeteren Mini-Write.
+# - Aktiv nur bei expliziter CLI-/ENV-Auswahl (z. B. --phase adapter_shadow_write_plan_dry_run).
+# - Verwendet ausschliesslich direkte Step-Credit-Evidenz fuer future_write_eligible
+#   Kandidaten; Root-/Mixed-Credit bleibt sichtbar blockiert.
+# - Berechnet old_q -> proposed_q, Delta, Evidenz und Confidence als Schattenplan,
+#   schreibt aber keinerlei policy_rules-, SnapChain-, Checkpoint-, Forgetting-,
+#   DBWriter- oder PTZ-Daten. writes bleibt immer 0.
+#
+# PATCH-HINWEIS 2026-07-06 / Dream Gated Mini-Write v1:
+# - Additive, streng gegatete Mini-Write-Phase fuer den ersten kontrollierten
+#   Dream->policy_rules-Schreibtest nach erfolgreicher Direct-Step-Credit-Validation.
+# - Aktiv nur bei expliziter CLI-/ENV-Auswahl (z. B. --phase adapter_mini_write_gated)
+#   UND OROMA_DREAM_ADAPTER_MINI_WRITE_ENABLE=1 UND Confirm-Token.
+# - Schreibt ausschliesslich future_write_eligible Shadow-Kandidaten mit reinem
+#   Direct-Step-Credit (kein Root-/Mixed-Credit) und nur ueber den globalen
+#   DBWriter. Es gibt keinen lokalen SQLite-Fallback.
+# - Default-Limit ist bewusst 1 Kandidat; alles bleibt namespace-/schema-gebunden
+#   und vollstaendig sichtbar im Dream-Log.
+#
+# PATCH-HINWEIS 2026-07-07 / Dream Mini-Write Idempotenz-Guard v1:
+# - Additiver Repeat-/Idempotenz-Guard fuer adapter_mini_write_gated.
+# - Jede Direct-Step-Credit-Uebernahme erhaelt eine deterministische Ledger-
+#   Signatur pro Namespace, Schema, state_hash, action und aggregierter Direct-
+#   Evidence. Bereits verbrauchte Signaturen werden bei spaeteren Mini-Writes
+#   blockiert, damit dieselbe Trace-Evidenz nicht mehrfach in policy_rules
+#   addiert wird.
+# - Fuer den bereits vor diesem Patch manuell bestaetigten ersten Mini-Write gibt
+#   es eine separate DBWriter-only Seed-Phase aus DreamMiniWriteJSON-Logs
+#   (adapter_mini_write_ledger_seed_from_log). Sie schreibt ausschliesslich das
+#   Ledger, keine Policy-Regeln.
+# - Ohne vorhandenes Ledger blockiert adapter_mini_write_gated bewusst mit
+#   idempotency_ledger_missing_run_seed_phase, damit kein unmarkierter Repeat-
+#   Write passieren kann.
+#
+#
+# PATCH-HINWEIS 2026-07-07 / Dream Mini-Write Ledger Guard Fix v1.1:
+# - Behebt den standalone Mini-Write-Ledger-Read-Fehler (NameError), indem
+#   Row-/Table-Helper fuer alle Adapter-Phasen modulweit verfuegbar sind.
+# - Ergaenzt fuer den historischen ersten Mini-Write eine explizite manuelle
+#   Seed-Variante, falls die urspruengliche DreamMiniWriteJSON-Zeile bereits
+#   aus dem aktiven Logfenster rotiert ist. Diese Variante erfordert die exakte
+#   Direct-Step-Credit-Tupel-Eingabe per ENV und schreibt weiterhin nur das
+#   Idempotenz-Ledger via DBWriter, niemals policy_rules.
+#
+# PATCH-HINWEIS 2026-07-07 / Dream Shadow-Plan Ledger-Awareness v1.2:
+# - Erweitert den read-only Shadow-Write-Plan um Ledger-Sichtbarkeit. Bereits
+#   verbrauchte Direct-Step-Credit-Signaturen werden im Plan selbst als
+#   already_written_by_ledger=true markiert und nicht mehr als
+#   future_write_eligible gezaehlt.
+# - Dadurch sieht der Plan vor jedem spaeteren Mini-/Auto-Write exakt, welche
+#   Kandidaten der Idempotenz-Guard im Write-Pfad blockieren wuerde.
+# - Keine neuen Writes, keine Policy-Aenderungen, kein lokaler SQLite-Write:
+#   die Ledger-Abfrage ist read-only; writes bleibt 0.
+#
+# PATCH-HINWEIS 2026-07-07 / Dream Auto Mini-Write Gate+Cooldown v1.3:
+# - Ergaenzt eine separate, standardmaessig deaktivierte Auto-Phase
+#   adapter_auto_mini_write_gated fuer spaetere Orchestrator-/Halbautomatik.
+# - Die Auto-Phase nutzt denselben DBWriter-only Mini-Write-Pfad, verlangt aber
+#   eigene AUTO-ENV-Gates, ein separates Confirm-Token, Ledger-Pflicht,
+#   Rolling-24h-Cap, Cooldown und einen Mindest-Delta-Filter.
+# - Ohne explizite AUTO-Freigabe bleibt alles read-only. Die manuelle Phase
+#   adapter_mini_write_gated bleibt unveraendert nutzbar und wird nicht
+#   automatisch durch den normalen Dream-Rotationslauf aktiviert.
+#
 # Structured Plasticity / PTZ Motor Utility Verdichtung:
 #   OROMA_PTZ_MOTOR_POLICY_DREAM_ENABLE=1   (Default: 1)
 #   OROMA_PTZ_MOTOR_POLICY_MAX_ROWS=500      (Default: 500, Clamp 10..5000)
@@ -150,7 +270,8 @@
 
 from __future__ import annotations
 from pathlib import Path
-import logging, threading, time, os, glob, json, argparse, hashlib
+import logging, threading, time, os, glob, json, argparse, hashlib, math, zlib
+from collections import Counter
 from logging.handlers import RotatingFileHandler
 import sys
 
@@ -178,7 +299,7 @@ if _OROMA_ROOT not in sys.path:
 
 from core.log_guard import log_suppressed
 _BOOT_LOG = logging.getLogger("oroma.dream_worker.boot")
-from typing import List, Optional, Dict, Any, Iterable
+from typing import List, Optional, Dict, Any, Iterable, Tuple, Set
 # --- nur Linux/Unix ---
 import fcntl
 
@@ -201,6 +322,16 @@ from core import snap_indexer
 from core.langzeitgedaechtnis import LangzeitGedaechtnis
 from core.regelarchiv import prune
 from core import sql_manager
+
+# Optionaler SnapChain-Adapter fuer den read-only Dream-Adapter-Dry-Run.
+# Der produktive DreamWorker-Pfad bleibt ohne explizite CLI-Aktivierung unveraendert.
+try:
+    from core.snapchain_adapters import feature_centroid_from_trace, normalize_snapchain_blob  # type: ignore
+    _HAS_SNAPCHAIN_ADAPTERS = True
+except Exception:
+    feature_centroid_from_trace = None  # type: ignore
+    normalize_snapchain_blob = None  # type: ignore
+    _HAS_SNAPCHAIN_ADAPTERS = False
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Optionale Komponenten
@@ -380,6 +511,120 @@ def _env_int(name: str, default: int) -> int:
     except Exception as e:
         log_suppressed(_BOOT_LOG, key="dream_worker.ret.9", msg="Suppressed exception (returning default)", exc=e, level=logging.DEBUG, interval_s=300)
         return default
+
+def _row_get_value(row: Any, column: str = "value", default: Any = None) -> Any:
+    """Return a value from sqlite rows created by different row factories.
+
+    ORÓMA uses several SQLite access paths.  Some return plain tuples, while
+    core.sql_manager.get_conn() normally returns dict-like rows.  DreamWorker
+    checkpoints are small but critical: if a dict row is read via row[0], the
+    exception can silently reset the checkpoint to 0 and cause the policy dream
+    loop to reprocess the same reward window again and again.
+
+    This helper is intentionally conservative and dependency-free.  It supports:
+      - dict rows:              row["value"] / row.get("value")
+      - sqlite3.Row-like rows:  row["value"] or row.keys()
+      - tuple/list rows:        row[0]
+
+    It never raises to the caller; malformed rows return *default* so the caller
+    can log a visible checkpoint warning with context.
+    """
+    if row is None:
+        return default
+    try:
+        if isinstance(row, dict):
+            return row.get(column, default)
+    except Exception:
+        pass
+    try:
+        keys = row.keys() if hasattr(row, "keys") else None
+        if keys is not None and column in list(keys):
+            return row[column]
+    except Exception:
+        pass
+    try:
+        return row[column]
+    except Exception:
+        pass
+    try:
+        return row[0]
+    except Exception:
+        return default
+
+
+
+def _row_get_any(row: Any, key: str, idx: int = 0, default: Any = None) -> Any:
+    """Return a column value from dict-like, sqlite3.Row-like, or tuple rows.
+
+    This module-level variant is used by adapter Mini-Write guard phases that run
+    outside the older adapter-dry-run collector.  Keeping it module-local avoids
+    NameError regressions when ledger checks are executed as standalone Dream
+    phases.
+    """
+    if row is None:
+        return default
+    try:
+        if isinstance(row, dict):
+            return row.get(key, default)
+    except Exception:
+        pass
+    try:
+        if hasattr(row, "keys") and key in list(row.keys()):
+            return row[key]
+    except Exception:
+        pass
+    try:
+        return row[key]
+    except Exception:
+        pass
+    try:
+        return row[idx]
+    except Exception:
+        return default
+
+
+def _sqlite_has_table(conn: Any, table: str) -> bool:
+    """Return True if *table* exists on the supplied SQLite connection.
+
+    Read-only helper. It never creates schema and never writes. This is required
+    by DBWriter-gated paths to inspect ledger availability without falling back
+    to local SQLite writes.
+    """
+    try:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (str(table),),
+        ).fetchone()
+        return bool(row)
+    except Exception:
+        return False
+
+def _read_dream_state_int(key: str, default: int = 0, *, log_key: Optional[str] = None) -> int:
+    """Read an integer checkpoint from dream_state safely.
+
+    This is the canonical checkpoint reader for DreamWorker policy phases.
+    It fixes the dict-row/tuple-row mismatch that can otherwise make
+    DreamWorker fall back to 0 and repeatedly process old rewards.
+    """
+    try:
+        with sql_manager.get_conn() as conn:
+            row = conn.execute("SELECT value FROM dream_state WHERE key=?", (str(key),)).fetchone()
+        if row is None:
+            return int(default)
+        value = _row_get_value(row, "value", None)
+        if value is None:
+            raise ValueError(f"dream_state key {key!r} returned no value column")
+        return int(str(value).strip())
+    except Exception as e:
+        log_suppressed(
+            _BOOT_LOG,
+            key=log_key or f"dream_worker.checkpoint.read.{str(key).replace(':', '_')}",
+            msg=f"DreamWorker checkpoint read failed for key={key!r}; using default={int(default)}.",
+            exc=e,
+            level=logging.WARNING,
+            interval_s=300,
+        )
+        return int(default)
 
 def _log_reward_best_effort(*, source: str, reward: float, step: int = 0,
                            raw: Optional[Dict[str, Any]] = None,
@@ -1176,6 +1421,20 @@ class DreamWorker(threading.Thread):
                 # ------------------------------------------------------------------
                 forced_phase_raw = str(os.environ.get("OROMA_DREAM_ONLY_PHASES", "") or "").strip()
                 all_phase_map = {name: fn for name, fn, _heavy in phase_defs}
+                # Diagnostische/read-only Phasen: nur per expliziter Auswahl erreichbar,
+                # nicht Teil der normalen Core-/Heavy-Rotation.
+                diagnostic_phase_map = {
+                    "adapter_dry_run": self._adapter_dry_run_phase,
+                    "adapter_consolidation_dry_run": self._adapter_consolidation_dry_run_phase,
+                    "adapter_policy_review_dry_run": self._adapter_policy_review_dry_run_phase,
+                    "adapter_credit_assignment_review_dry_run": self._adapter_credit_assignment_review_dry_run_phase,
+                    "adapter_credit_validation_dry_run": self._adapter_credit_validation_dry_run_phase,
+                    "adapter_shadow_write_plan_dry_run": self._adapter_shadow_write_plan_dry_run_phase,
+                    "adapter_mini_write_gated": self._adapter_mini_write_gated_phase,
+                    "adapter_auto_mini_write_gated": self._adapter_auto_mini_write_gated_phase,
+                    "adapter_mini_write_ledger_seed_from_log": self._adapter_mini_write_ledger_seed_from_log_phase,
+                }
+                all_phase_map.update(diagnostic_phase_map)
                 selected_phase_map = heavy_phase_map
                 forced_phase_names: List[str] = []
                 if forced_phase_raw:
@@ -2417,6 +2676,2679 @@ class DreamWorker(threading.Thread):
         except Exception as e:
             LOG.debug("AutoTuning übersprungen: %s", e)
 
+    # -------------------- Adapter-Dry-Run (read-only) ------------------------
+    def _adapter_dry_run_collect(
+        self,
+        *,
+        namespace: str,
+        state_schema_prefix: str,
+        limit: int = 20,
+        include_namespace_scan: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Read-only Adapter-Probe im echten DreamWorker-Kontext.
+
+        Zweck
+        -----
+        Dieser Pfad ist absichtlich KEIN produktiver Dream-Lauf. Er prueft nur,
+        ob SnapChains eines einzelnen Namespaces ueber core.snapchain_adapters
+        Dream-verwertbar waeren und ob ihre state_hash/action-Paare zur aktuellen
+        Policy passen. Es werden keine DB-Writes, keine Checkpoints, keine
+        MetaChains, kein Forgetting und keine policy_rules-Updates ausgefuehrt.
+
+        Filterpfad
+        ----------
+        SnapChains werden standardmaessig ueber origin=? LIMIT-basiert gelesen.
+        Ein optionaler namespace-Fallback ist bewusst aus, damit grosse Live-DBs
+        nicht durch OR-Scans blockieren. Danach wird per Adapter gefiltert:
+            trace.state_schema == state_schema_prefix
+        Policy-Regeln werden separat per SQL-Filter gelesen:
+            namespace=? AND state_hash LIKE '<state_schema_prefix>%'
+        """
+        ns = str(namespace or "").strip()
+        schema = str(state_schema_prefix or "").strip()
+        lim = max(1, min(int(limit or 20), 500))
+        now_ts = int(time.time())
+
+        result: Dict[str, Any] = {
+            "ok": False,
+            "source": "dream_worker.adapter_dry_run",
+            "dry_run": True,
+            "writes": 0,
+            "namespace": ns,
+            "state_schema_prefix": schema,
+            "limit": lim,
+            "ts": now_ts,
+            "filter_path": "snapchains read by origin=?; optional namespace fallback disabled by default; schema filtered after adapter normalization: trace.state_schema == state_schema_prefix; policy_rules filtered by state_hash LIKE prefix%",
+            "include_namespace_scan": bool(include_namespace_scan),
+            "snapchain_scan_mode": "origin_plus_namespace" if include_namespace_scan else "origin_only",
+            "policy_before": {},
+            "trace_input": {},
+            "outcome_semantics": {},
+            "policy_overlap": {},
+            "consolidation_artifact": {},
+            "policy_review": {},
+            "credit_assignment_review": {},
+            "credit_validation_review": {},
+            "shadow_write_plan": {},
+            "would_dream_consolidate": {},
+        }
+
+        if not ns:
+            result["error"] = "missing_namespace"
+            return result
+        if not schema:
+            result["error"] = "missing_state_schema_prefix"
+            return result
+        if not _HAS_SNAPCHAIN_ADAPTERS or normalize_snapchain_blob is None:
+            result["error"] = "snapchain_adapters_unavailable"
+            return result
+
+        def row_get(row: Any, key: str, idx: int = 0, default: Any = None) -> Any:
+            try:
+                if hasattr(row, "keys"):
+                    return row[key]
+            except Exception:
+                pass
+            try:
+                return row[idx]
+            except Exception:
+                return default
+
+        def round_or_none(value: Any, digits: int = 4) -> Optional[float]:
+            try:
+                if value is None:
+                    return None
+                f = float(value)
+                if not math.isfinite(f):
+                    return None
+                return round(f, digits)
+            except Exception:
+                return None
+
+        def has_table(conn: Any, table: str) -> bool:
+            try:
+                r = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+                return bool(r)
+            except Exception:
+                return False
+
+        def decode_blob(blob: Any) -> Tuple[Optional[Any], str]:
+            if blob is None:
+                return None, "blob_null"
+            if isinstance(blob, (dict, list)):
+                return blob, ""
+            if isinstance(blob, memoryview):
+                blob = blob.tobytes()
+            if isinstance(blob, bytearray):
+                blob = bytes(blob)
+            candidates: List[str] = []
+            if isinstance(blob, bytes):
+                try:
+                    candidates.append(blob.decode("utf-8"))
+                except Exception:
+                    pass
+                try:
+                    candidates.append(zlib.decompress(blob).decode("utf-8"))
+                except Exception:
+                    pass
+            else:
+                candidates.append(str(blob))
+            last_error = "json_decode_failed"
+            for text in candidates:
+                try:
+                    return json.loads(text), ""
+                except Exception as exc:
+                    last_error = f"json_decode_failed:{type(exc).__name__}"
+            return None, last_error
+
+        def take_state_hash(step: Dict[str, Any]) -> str:
+            for key in ("state_hash", "h", "sh"):
+                value = step.get(key)
+                if value not in (None, ""):
+                    return str(value)
+            state = step.get("state")
+            if isinstance(state, dict):
+                for key in ("state_hash", "h", "sh"):
+                    value = state.get(key)
+                    if value not in (None, ""):
+                        return str(value)
+            return ""
+
+        def take_action(step: Dict[str, Any]) -> str:
+            for key in ("action", "a", "action_canon", "ac", "action_name"):
+                value = step.get(key)
+                if value not in (None, ""):
+                    return str(value)
+            return ""
+
+        def step_has_outcome(step: Dict[str, Any]) -> bool:
+            for key in ("outcome", "result", "reward"):
+                value = step.get(key)
+                if value not in (None, ""):
+                    return True
+            return False
+
+        def root_has_outcome(root: Any) -> bool:
+            if not isinstance(root, dict):
+                return False
+            for key in ("outcome", "result", "reward"):
+                value = root.get(key)
+                if value not in (None, ""):
+                    return True
+            meta = root.get("meta")
+            if isinstance(meta, dict):
+                for key in ("outcome", "result", "reward"):
+                    value = meta.get(key)
+                    if value not in (None, ""):
+                        return True
+            return False
+
+        def numeric_outcome_value(step: Dict[str, Any], root: Any) -> Optional[float]:
+            """Return the best read-only outcome value for a trace step.
+
+            Direct step outcomes win. If a compact Game-Trace stores a single
+            root/meta outcome, the value is treated as root-derived. This mirrors
+            the already reported outcome_source semantics and does not write or
+            reinterpret DB state.
+
+            Important compatibility detail: some compact Game-Traces store both
+            a symbolic root outcome (for example ``"W"``/``"L"``/``"D"``) and a
+            numeric ``result`` value. A non-numeric symbolic field must therefore
+            not stop the scan; otherwise the artifact would report
+            ``outcome_source=root`` while classifying all events as ``missing``.
+            """
+            def _coerce_numeric(value: Any) -> Optional[float]:
+                if value in (None, ""):
+                    return None
+                try:
+                    f = float(value)
+                    if not math.isfinite(f):
+                        return None
+                    return f
+                except Exception:
+                    return None
+
+            for key in ("outcome", "result", "reward"):
+                f = _coerce_numeric(step.get(key))
+                if f is not None:
+                    return f
+            if isinstance(root, dict):
+                for key in ("outcome", "result", "reward"):
+                    f = _coerce_numeric(root.get(key))
+                    if f is not None:
+                        return f
+                meta = root.get("meta")
+                if isinstance(meta, dict):
+                    for key in ("outcome", "result", "reward"):
+                        f = _coerce_numeric(meta.get(key))
+                        if f is not None:
+                            return f
+            return None
+
+        def numeric_outcome_value_with_source(step: Dict[str, Any], root: Any) -> Tuple[Optional[float], str]:
+            """Return numeric outcome plus explicit credit source.
+
+            The read-only review needs to distinguish direct per-step credit from
+            episode-level/root credit. A root outcome is useful for consolidation
+            review, but it must not be treated as write-ready per-step evidence.
+            """
+            def _coerce_numeric(value: Any) -> Optional[float]:
+                if value in (None, ""):
+                    return None
+                try:
+                    f = float(value)
+                    if not math.isfinite(f):
+                        return None
+                    return f
+                except Exception:
+                    return None
+
+            for key in ("outcome", "result", "reward"):
+                f = _coerce_numeric(step.get(key))
+                if f is not None:
+                    return f, "direct"
+            if isinstance(root, dict):
+                for key in ("outcome", "result", "reward"):
+                    f = _coerce_numeric(root.get(key))
+                    if f is not None:
+                        return f, "root"
+                meta = root.get("meta")
+                if isinstance(meta, dict):
+                    for key in ("outcome", "result", "reward"):
+                        f = _coerce_numeric(meta.get(key))
+                        if f is not None:
+                            return f, "root"
+            return None, "missing"
+
+        def credit_model_name(direct_steps: int, root_steps: int, missing_steps: int) -> str:
+            """Classify how trustworthy per-step policy credit currently is.
+
+            direct_step means step-local outcome evidence exists. pure
+            episode_root_broadcast means the same episode/root outcome is broadcast
+            over many state/action steps; this is useful for Dream review but not
+            write-eligible without an additional credit-assignment model.
+            """
+            if direct_steps > 0 and root_steps > 0:
+                return "mixed_direct_and_root"
+            if direct_steps > 0:
+                return "direct_step"
+            if root_steps > 0:
+                return "episode_root_broadcast"
+            if missing_steps > 0:
+                return "missing"
+            return "missing"
+
+        def root_temporal_credit_weight(step_index: int, step_count: int) -> Tuple[float, str, bool]:
+            """Return a read-only terminal-weight for episode/root credit.
+
+            This is deliberately *not* a productive update formula. It is a
+            transparent review heuristic only: late/terminal actions receive
+            stronger review weight than early actions, because a single
+            root-level episode result cannot safely be broadcast uniformly over
+            every state/action step. All candidates derived from this model stay
+            write_eligible=False until a validated direct-credit path exists.
+            """
+            try:
+                n = max(1, int(step_count))
+                idx = max(0, min(int(step_index), n - 1))
+                progress = float(idx + 1) / float(n)
+            except Exception:
+                progress = 1.0
+            if progress <= 0.333333:
+                band = "early"
+            elif progress <= 0.666667:
+                band = "mid"
+            else:
+                band = "late"
+            weight = 0.25 + (0.75 * progress)
+            if weight < 0.0:
+                weight = 0.0
+            if weight > 1.0:
+                weight = 1.0
+            return float(weight), band, bool(progress >= 0.80)
+
+        def outcome_source_name(direct_steps: int, root_steps: int, missing_steps: int) -> str:
+            if direct_steps > 0 and root_steps > 0:
+                return "mixed"
+            if direct_steps > 0:
+                return "direct"
+            if root_steps > 0:
+                return "root"
+            if missing_steps > 0:
+                return "missing"
+            return "missing"
+
+        def centroid_of_centroids(vectors: List[List[float]]) -> List[float]:
+            valid = [list(map(float, v)) for v in vectors if isinstance(v, list) and len(v) > 0]
+            if not valid:
+                return []
+            dim = min(len(v) for v in valid)
+            if dim <= 0:
+                return []
+            acc = [0.0] * dim
+            n = 0
+            for vec in valid:
+                for i in range(dim):
+                    x = float(vec[i])
+                    if math.isfinite(x):
+                        acc[i] += x
+                n += 1
+            return [x / n for x in acc] if n > 0 else []
+
+        def chunks(values: List[str], size: int = 400) -> Iterable[List[str]]:
+            for i in range(0, len(values), size):
+                yield values[i:i + size]
+
+        def ratio(numerator: int, denominator: int, digits: int = 4) -> Optional[float]:
+            try:
+                if int(denominator) <= 0:
+                    return None
+                return round(float(numerator) / float(denominator), digits)
+            except Exception:
+                return None
+
+        def top_counter_items(counter: Counter, limit_items: int = 8) -> List[Dict[str, Any]]:
+            out: List[Dict[str, Any]] = []
+            for key, count in counter.most_common(max(0, int(limit_items))):
+                out.append({"key": str(key), "count": int(count)})
+            return out
+
+        def clamp_unit(value: Any) -> Optional[float]:
+            try:
+                f = float(value)
+                if not math.isfinite(f):
+                    return None
+                if f > 1.0:
+                    return 1.0
+                if f < -1.0:
+                    return -1.0
+                return f
+            except Exception:
+                return None
+
+        try:
+            with sql_manager.get_conn() as conn:
+                if not has_table(conn, "snapchains"):
+                    result["error"] = "missing_table:snapchains"
+                    return result
+
+                # Policy-Snapshot, strikt auf Schema-Prefix begrenzt.
+                policy_snapshot: Dict[str, Any] = {"ok": False, "reason": "missing_table:policy_rules"}
+                if has_table(conn, "policy_rules"):
+                    like = f"{schema}%"
+                    row = conn.execute(
+                        """
+                        SELECT COUNT(*) AS rules,
+                               COALESCE(SUM(n),0) AS samples,
+                               COALESCE(SUM(pos),0) AS pos,
+                               COALESCE(SUM(neg),0) AS neg,
+                               COALESCE(SUM(draw),0) AS draw,
+                               AVG(q) AS q_avg,
+                               MIN(q) AS q_min,
+                               MAX(q) AS q_max,
+                               MAX(id) AS max_id,
+                               MAX(last_ts) AS max_last_ts
+                        FROM policy_rules
+                        WHERE namespace=? AND state_hash LIKE ?
+                        """,
+                        (ns, like),
+                    ).fetchone()
+                    policy_snapshot = {
+                        "ok": True,
+                        "rules": int(row_get(row, "rules", 0, 0) or 0),
+                        "samples": int(row_get(row, "samples", 1, 0) or 0),
+                        "pos": int(row_get(row, "pos", 2, 0) or 0),
+                        "neg": int(row_get(row, "neg", 3, 0) or 0),
+                        "draw": int(row_get(row, "draw", 4, 0) or 0),
+                        "q_avg": round_or_none(row_get(row, "q_avg", 5, None), 4),
+                        "q_min": round_or_none(row_get(row, "q_min", 6, None), 4),
+                        "q_max": round_or_none(row_get(row, "q_max", 7, None), 4),
+                        "max_id": int(row_get(row, "max_id", 8, 0) or 0),
+                        "max_last_ts": int(row_get(row, "max_last_ts", 9, 0) or 0),
+                    }
+                result["policy_before"] = policy_snapshot
+
+                # Live-DB-schonender Standardpfad: origin=? nutzt den vorhandenen
+                # Index und vermeidet teure OR-Scans ueber sehr grosse SnapChain-Tabellen.
+                # Ein namespace-Fallback existiert nur fuer manuelle Diagnosefaelle.
+                rows = list(conn.execute(
+                    """
+                    SELECT id, origin, namespace, source_id, version, blob
+                    FROM snapchains
+                    WHERE origin=?
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (ns, lim),
+                ).fetchall())
+                if include_namespace_scan:
+                    extra_rows = conn.execute(
+                        """
+                        SELECT id, origin, namespace, source_id, version, blob
+                        FROM snapchains
+                        WHERE namespace=? AND COALESCE(origin,'')<>?
+                        ORDER BY id DESC
+                        LIMIT ?
+                        """,
+                        (ns, ns, lim),
+                    ).fetchall()
+                    by_id: Dict[int, Any] = {}
+                    for r in list(rows) + list(extra_rows):
+                        try:
+                            by_id[int(row_get(r, "id", 0, 0) or 0)] = r
+                        except Exception:
+                            pass
+                    rows = [by_id[k] for k in sorted(by_id.keys(), reverse=True)[:lim]]
+
+                latest_ids: List[int] = []
+                selected_ids: List[int] = []
+                formats_all: Counter = Counter()
+                formats_selected: Counter = Counter()
+                skip_selected: Counter = Counter()
+                decode_errors_all = 0
+                decode_errors_selected = 0
+                schema_matching = 0
+                schema_mismatch = 0
+                adapter_ok = 0
+                policy_trainable = 0
+                dream_processable = 0
+                input_events = 0
+                input_features = 0
+                state_schema_counter: Counter = Counter()
+                action_schema_counter: Counter = Counter()
+                mode_counter: Counter = Counter()
+                centroid_vectors: List[List[float]] = []
+
+                direct_outcome_steps = 0
+                root_outcome_steps = 0
+                missing_outcome_steps = 0
+                state_action_outcome_steps = 0
+                total_steps = 0
+                state_action_steps = 0
+                unique_trace_state_hashes: Set[str] = set()
+                trace_state_actions: Set[Tuple[str, str]] = set()
+                state_action_counter: Counter = Counter()
+                action_counter: Counter = Counter()
+                positive_action_counter: Counter = Counter()
+                negative_action_counter: Counter = Counter()
+                zero_action_counter: Counter = Counter()
+                outcome_distribution: Counter = Counter()
+                # Read-only Evidenzspeicher fuer die naechste Review-Stufe.
+                # Pro (state_hash, action) wird nur zusammengefasst, was in den
+                # ausgewählten Traces beobachtet wurde. Daraus entstehen spaeter
+                # Review-Kandidaten; es erfolgt hier und spaeter kein Write.
+                state_action_evidence: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+                for row in rows:
+                    row_id = int(row_get(row, "id", 0, 0) or 0)
+                    latest_ids.append(row_id)
+                    row_origin = str(row_get(row, "origin", 1, "") or "")
+                    row_ns = str(row_get(row, "namespace", 2, "") or "")
+                    source_id = row_get(row, "source_id", 3, None)
+                    blob = row_get(row, "blob", 5, None)
+                    trace = normalize_snapchain_blob(blob, origin=row_origin, namespace=row_ns, source_id=source_id)  # type: ignore[misc]
+                    formats_all[str(getattr(trace, "source_format", "unknown") or "unknown")] += 1
+                    if str(getattr(trace, "source_format", "")) == "decode_error":
+                        decode_errors_all += 1
+
+                    if str(getattr(trace, "state_schema", "") or "") != schema:
+                        schema_mismatch += 1
+                        continue
+
+                    schema_matching += 1
+                    selected_ids.append(row_id)
+                    formats_selected[str(getattr(trace, "source_format", "unknown") or "unknown")] += 1
+                    if str(getattr(trace, "source_format", "")) == "decode_error":
+                        decode_errors_selected += 1
+                    if getattr(trace, "ok", False):
+                        adapter_ok += 1
+                    else:
+                        skip_selected[str(getattr(trace, "skip_reason", "adapter_not_ok") or "adapter_not_ok")] += 1
+                    if bool(getattr(trace, "policy_trainable", False)):
+                        policy_trainable += 1
+                    if bool(getattr(trace, "dream_processable", False)):
+                        dream_processable += 1
+                    input_events += int(getattr(trace, "event_count", 0) or 0)
+                    input_features += int(getattr(trace, "feature_count", 0) or 0)
+                    if getattr(trace, "state_schema", ""):
+                        state_schema_counter[str(getattr(trace, "state_schema"))] += 1
+                    if getattr(trace, "action_schema", ""):
+                        action_schema_counter[str(getattr(trace, "action_schema"))] += 1
+                    if getattr(trace, "mode", ""):
+                        mode_counter[str(getattr(trace, "mode"))] += 1
+                    c = feature_centroid_from_trace(trace) if feature_centroid_from_trace is not None else []  # type: ignore[misc]
+                    if c:
+                        centroid_vectors.append([float(x) for x in c])
+
+                    decoded, _err = decode_blob(blob)
+                    root_has = root_has_outcome(decoded)
+                    steps = list(getattr(trace, "steps", []) or [])
+                    step_count = max(1, len(steps))
+                    for step_index, step in enumerate(steps):
+                        if not isinstance(step, dict):
+                            continue
+                        total_steps += 1
+                        sh = take_state_hash(step)
+                        ac = take_action(step)
+                        if sh:
+                            unique_trace_state_hashes.add(sh)
+                        if sh and ac:
+                            state_action_steps += 1
+                            trace_state_actions.add((sh, ac))
+                            state_action_counter[(sh, ac)] += 1
+                            action_counter[ac] += 1
+                        out_value, outcome_credit_source = numeric_outcome_value_with_source(step, decoded)
+                        if out_value is None:
+                            outcome_distribution["missing"] += 1
+                        elif out_value > 1e-9:
+                            outcome_distribution["positive"] += 1
+                            if ac:
+                                positive_action_counter[ac] += 1
+                        elif out_value < -1e-9:
+                            outcome_distribution["negative"] += 1
+                            if ac:
+                                negative_action_counter[ac] += 1
+                        else:
+                            outcome_distribution["zero"] += 1
+                            if ac:
+                                zero_action_counter[ac] += 1
+
+                        if sh and ac:
+                            ev = state_action_evidence.setdefault((sh, ac), {
+                                "count": 0,
+                                "outcome_known": 0,
+                                "positive": 0,
+                                "negative": 0,
+                                "zero": 0,
+                                "missing": 0,
+                                "outcome_sum": 0.0,
+                                "direct_credit": 0,
+                                "direct_positive": 0,
+                                "direct_negative": 0,
+                                "direct_zero": 0,
+                                "direct_outcome_sum": 0.0,
+                                "direct_evidence_refs": [],
+                                "root_credit": 0,
+                                "missing_credit": 0,
+                                "assigned_root_credit_sum": 0.0,
+                                "assigned_root_credit_abs_sum": 0.0,
+                                "assigned_root_temporal_weight_sum": 0.0,
+                                "assigned_root_events": 0,
+                                "root_credit_early": 0,
+                                "root_credit_mid": 0,
+                                "root_credit_late": 0,
+                                "root_credit_terminal": 0,
+                            })
+                            ev["count"] = int(ev.get("count") or 0) + 1
+                            if out_value is None:
+                                ev["missing"] = int(ev.get("missing") or 0) + 1
+                                ev["missing_credit"] = int(ev.get("missing_credit") or 0) + 1
+                            else:
+                                ev["outcome_known"] = int(ev.get("outcome_known") or 0) + 1
+                                ev["outcome_sum"] = float(ev.get("outcome_sum") or 0.0) + float(out_value)
+                                if outcome_credit_source == "direct":
+                                    ev["direct_credit"] = int(ev.get("direct_credit") or 0) + 1
+                                    ev["direct_outcome_sum"] = float(ev.get("direct_outcome_sum") or 0.0) + float(out_value)
+                                    try:
+                                        refs = ev.setdefault("direct_evidence_refs", [])
+                                        if isinstance(refs, list) and len(refs) < 200:
+                                            refs.append(f"sc:{int(row_id)}:step:{int(step_index)}:v:{round(float(out_value), 6)}")
+                                    except Exception:
+                                        pass
+                                    if out_value > 1e-9:
+                                        ev["direct_positive"] = int(ev.get("direct_positive") or 0) + 1
+                                    elif out_value < -1e-9:
+                                        ev["direct_negative"] = int(ev.get("direct_negative") or 0) + 1
+                                    else:
+                                        ev["direct_zero"] = int(ev.get("direct_zero") or 0) + 1
+                                elif outcome_credit_source == "root":
+                                    ev["root_credit"] = int(ev.get("root_credit") or 0) + 1
+                                    w, band, is_terminal = root_temporal_credit_weight(step_index, step_count)
+                                    ev["assigned_root_credit_sum"] = float(ev.get("assigned_root_credit_sum") or 0.0) + (float(out_value) * float(w))
+                                    ev["assigned_root_credit_abs_sum"] = float(ev.get("assigned_root_credit_abs_sum") or 0.0) + abs(float(w))
+                                    ev["assigned_root_temporal_weight_sum"] = float(ev.get("assigned_root_temporal_weight_sum") or 0.0) + float(w)
+                                    ev["assigned_root_events"] = int(ev.get("assigned_root_events") or 0) + 1
+                                    if band == "early":
+                                        ev["root_credit_early"] = int(ev.get("root_credit_early") or 0) + 1
+                                    elif band == "mid":
+                                        ev["root_credit_mid"] = int(ev.get("root_credit_mid") or 0) + 1
+                                    else:
+                                        ev["root_credit_late"] = int(ev.get("root_credit_late") or 0) + 1
+                                    if is_terminal:
+                                        ev["root_credit_terminal"] = int(ev.get("root_credit_terminal") or 0) + 1
+                                else:
+                                    ev["missing_credit"] = int(ev.get("missing_credit") or 0) + 1
+                                if out_value > 1e-9:
+                                    ev["positive"] = int(ev.get("positive") or 0) + 1
+                                elif out_value < -1e-9:
+                                    ev["negative"] = int(ev.get("negative") or 0) + 1
+                                else:
+                                    ev["zero"] = int(ev.get("zero") or 0) + 1
+                        direct_has = step_has_outcome(step)
+                        if direct_has:
+                            direct_outcome_steps += 1
+                        elif root_has:
+                            root_outcome_steps += 1
+                        else:
+                            missing_outcome_steps += 1
+                        if sh and ac and (direct_has or root_has):
+                            state_action_outcome_steps += 1
+
+                centroid = centroid_of_centroids(centroid_vectors)
+                outcome_source = outcome_source_name(direct_outcome_steps, root_outcome_steps, missing_outcome_steps)
+                credit_model = credit_model_name(direct_outcome_steps, root_outcome_steps, missing_outcome_steps)
+                numeric_outcome_steps = int(outcome_distribution.get("positive", 0) + outcome_distribution.get("negative", 0) + outcome_distribution.get("zero", 0))
+                root_credit_requires_review = bool(credit_model in ("episode_root_broadcast", "mixed_direct_and_root"))
+
+                existing_state_hashes: Set[str] = set()
+                existing_state_actions: Set[Tuple[str, str]] = set()
+                policy_rule_by_state_action: Dict[Tuple[str, str], Dict[str, Any]] = {}
+                matched_samples = 0
+                matched_q_values: List[float] = []
+                if has_table(conn, "policy_rules") and unique_trace_state_hashes:
+                    states_sorted = sorted(unique_trace_state_hashes)
+                    trace_actions_by_state: Dict[str, Set[str]] = {}
+                    for sh, ac in trace_state_actions:
+                        trace_actions_by_state.setdefault(sh, set()).add(ac)
+                    like = f"{schema}%"
+                    for part in chunks(states_sorted, 400):
+                        placeholders = ",".join(["?"] * len(part))
+                        q = (
+                            "SELECT state_hash, action, n, pos, neg, draw, q FROM policy_rules "
+                            f"WHERE namespace=? AND state_hash LIKE ? AND state_hash IN ({placeholders})"
+                        )
+                        params: List[Any] = [ns, like] + part
+                        for pr in conn.execute(q, params).fetchall():
+                            sh = str(row_get(pr, "state_hash", 0, "") or "")
+                            ac = str(row_get(pr, "action", 1, "") or "")
+                            try:
+                                pn = int(row_get(pr, "n", 2, 0) or 0)
+                            except Exception:
+                                pn = 0
+                            try:
+                                ppos = int(row_get(pr, "pos", 3, 0) or 0)
+                            except Exception:
+                                ppos = 0
+                            try:
+                                pneg = int(row_get(pr, "neg", 4, 0) or 0)
+                            except Exception:
+                                pneg = 0
+                            try:
+                                pdraw = int(row_get(pr, "draw", 5, 0) or 0)
+                            except Exception:
+                                pdraw = 0
+                            qv = round_or_none(row_get(pr, "q", 6, None), 6)
+                            existing_state_hashes.add(sh)
+                            policy_rule_by_state_action[(sh, ac)] = {
+                                "n": int(pn),
+                                "pos": int(ppos),
+                                "neg": int(pneg),
+                                "draw": int(pdraw),
+                                "q": qv,
+                            }
+                            if ac in trace_actions_by_state.get(sh, set()):
+                                existing_state_actions.add((sh, ac))
+                                matched_samples += int(pn)
+                                if qv is not None:
+                                    matched_q_values.append(float(qv))
+
+                new_state_hashes = unique_trace_state_hashes - existing_state_hashes
+                new_state_actions = trace_state_actions - existing_state_actions
+                matched_rule_q_avg = round_or_none(sum(matched_q_values) / len(matched_q_values), 4) if matched_q_values else None
+
+                result["trace_input"] = {
+                    "scan_mode": result.get("snapchain_scan_mode"),
+                    "include_namespace_scan": bool(include_namespace_scan),
+                    "snapchains_scanned": len(rows),
+                    "schema_matching": schema_matching,
+                    "schema_mismatch": schema_mismatch,
+                    "latest_ids": latest_ids[:10],
+                    "selected_ids": selected_ids[:10],
+                    "formats_selected": dict(formats_selected),
+                    "formats_all": dict(formats_all),
+                    "adapter_ok": adapter_ok,
+                    "policy_trainable": policy_trainable,
+                    "dream_processable": dream_processable,
+                    "skipped_selected": sum(skip_selected.values()),
+                    "skip_reasons_selected": dict(skip_selected),
+                    "decode_errors_selected": decode_errors_selected,
+                    "decode_errors_all": decode_errors_all,
+                    "input_events": input_events,
+                    "input_features": input_features,
+                    "state_schema": dict(state_schema_counter),
+                    "action_schema": dict(action_schema_counter),
+                    "mode": dict(mode_counter),
+                }
+                result["outcome_semantics"] = {
+                    "direct_outcome_steps": direct_outcome_steps,
+                    "root_outcome_steps": root_outcome_steps,
+                    "missing_outcome_steps": missing_outcome_steps,
+                    "state_action_outcome_steps": state_action_outcome_steps,
+                    "outcome_source": outcome_source,
+                    "credit_model": credit_model,
+                    "numeric_outcome_steps": int(numeric_outcome_steps),
+                    "root_credit_requires_review": bool(root_credit_requires_review),
+                }
+                result["policy_overlap"] = {
+                    "total_steps": total_steps,
+                    "state_action_steps": state_action_steps,
+                    "state_action_outcome_steps": state_action_outcome_steps,
+                    "unique_trace_state_hashes": len(unique_trace_state_hashes),
+                    "existing_state_hashes": len(existing_state_hashes),
+                    "new_state_hashes": len(new_state_hashes),
+                    "existing_state_actions": len(existing_state_actions),
+                    "new_state_actions": len(new_state_actions),
+                    "action_links": len(existing_state_actions),
+                    "matched_rule_samples": int(matched_samples),
+                    "matched_rule_q_avg": matched_rule_q_avg,
+                }
+                would = bool(dream_processable > 0 and input_events > 0 and input_features > 0 and centroid)
+                safe_criteria = {
+                    "dream_processable_gt_0": bool(dream_processable > 0),
+                    "outcome_source_not_missing": bool(outcome_source != "missing"),
+                    "matched_rule_q_avg_gt_0": bool(matched_rule_q_avg is not None and float(matched_rule_q_avg) > 0.0),
+                    "no_decode_errors_in_selected_traces": bool(decode_errors_selected == 0),
+                    "numeric_outcome_steps_gt_0": bool(numeric_outcome_steps > 0),
+                }
+
+                top_state_action_groups: List[Dict[str, Any]] = []
+                for (sh, ac), cnt in state_action_counter.most_common(12):
+                    known = bool((sh, ac) in existing_state_actions)
+                    top_state_action_groups.append({
+                        "state_hash": sh,
+                        "action": ac,
+                        "count": int(cnt),
+                        "known_policy_action": known,
+                    })
+                existing_state_ratio = ratio(len(existing_state_hashes), len(unique_trace_state_hashes))
+                existing_action_ratio = ratio(len(existing_state_actions), len(trace_state_actions))
+                matched_q_positive = bool(matched_rule_q_avg is not None and float(matched_rule_q_avg) > 0.0)
+                policy_alignment = "strong" if matched_q_positive and (existing_action_ratio or 0.0) >= 0.50 else ("partial" if matched_q_positive else "weak")
+
+                # Read-only Policy-Review: konkrete Kandidaten, aber kein Write-Plan.
+                # Die Formel ist absichtlich transparent und vorsichtig: trace_q
+                # ist nur eine lokale Review-Metrik aus den ausgewerteten Traces
+                # ((positive-negative)/bekannte Outcomes), nicht die produktive
+                # Policy-Update-Formel. Sie dient nur zur Priorisierung.
+                review_min_evidence = max(1, min(_env_int("OROMA_DREAM_ADAPTER_REVIEW_MIN_EVIDENCE", 3), 1000))
+                review_top_n = max(1, min(_env_int("OROMA_DREAM_ADAPTER_REVIEW_TOP_N", 12), 100))
+                review_candidates: List[Dict[str, Any]] = []
+                for (sh, ac), ev in state_action_evidence.items():
+                    total_ev = int(ev.get("count") or 0)
+                    known_ev = int(ev.get("outcome_known") or 0)
+                    if total_ev < review_min_evidence or known_ev <= 0:
+                        continue
+                    pos_ev = int(ev.get("positive") or 0)
+                    neg_ev = int(ev.get("negative") or 0)
+                    zero_ev = int(ev.get("zero") or 0)
+                    trace_q = clamp_unit((float(pos_ev) - float(neg_ev)) / float(max(1, known_ev)))
+                    avg_outcome = clamp_unit(float(ev.get("outcome_sum") or 0.0) / float(max(1, known_ev)))
+                    cur = policy_rule_by_state_action.get((sh, ac)) or {}
+                    current_q = cur.get("q")
+                    known_policy_action = bool((sh, ac) in existing_state_actions)
+                    delta_q = None
+                    if current_q is not None and trace_q is not None:
+                        delta_q = round_or_none(float(trace_q) - float(current_q), 4)
+                    if not known_policy_action:
+                        candidate_type = "new_state_action_candidate"
+                    elif trace_q is not None and current_q is not None and abs(float(trace_q) - float(current_q)) >= 0.25:
+                        candidate_type = "review_existing_large_delta"
+                    elif trace_q is not None and float(trace_q) > 0.0:
+                        candidate_type = "reinforce_existing_candidate"
+                    else:
+                        candidate_type = "review_existing_low_or_negative_trace"
+                    confidence = round_or_none((float(known_ev) / float(max(1, total_ev))) * min(1.0, float(total_ev) / 10.0), 4)
+                    direct_credit = int(ev.get("direct_credit") or 0)
+                    direct_pos = int(ev.get("direct_positive") or 0)
+                    direct_neg = int(ev.get("direct_negative") or 0)
+                    direct_zero = int(ev.get("direct_zero") or 0)
+                    direct_q = clamp_unit((float(direct_pos) - float(direct_neg)) / float(max(1, direct_credit))) if direct_credit > 0 else None
+                    root_credit = int(ev.get("root_credit") or 0)
+                    if direct_credit > 0 and root_credit > 0:
+                        candidate_credit_source = "mixed_direct_and_root"
+                    elif direct_credit > 0:
+                        candidate_credit_source = "direct_step"
+                    elif root_credit > 0:
+                        candidate_credit_source = "episode_root_broadcast"
+                    else:
+                        candidate_credit_source = "missing"
+                    write_eligible = bool(candidate_credit_source == "direct_step" and not root_credit_requires_review)
+                    write_block_reason = "" if write_eligible else (
+                        "episode_root_outcome_requires_credit_assignment"
+                        if candidate_credit_source in ("episode_root_broadcast", "mixed_direct_and_root")
+                        else "no_direct_step_credit"
+                    )
+                    assigned_abs = float(ev.get("assigned_root_credit_abs_sum") or 0.0)
+                    assigned_q = clamp_unit(float(ev.get("assigned_root_credit_sum") or 0.0) / assigned_abs) if assigned_abs > 0.0 else None
+                    assigned_events = int(ev.get("assigned_root_events") or 0)
+                    root_terminal = int(ev.get("root_credit_terminal") or 0)
+                    root_late = int(ev.get("root_credit_late") or 0)
+                    terminal_fraction = round_or_none(float(root_terminal) / float(max(1, assigned_events)), 4) if assigned_events > 0 else None
+                    late_fraction = round_or_none(float(root_late) / float(max(1, assigned_events)), 4) if assigned_events > 0 else None
+                    credit_assignment_confidence = round_or_none(
+                        min(1.0, float(assigned_events) / 10.0) * float(late_fraction or 0.0),
+                        4,
+                    ) if assigned_events > 0 else None
+                    review_candidates.append({
+                        "state_hash": sh,
+                        "action": ac,
+                        "candidate_type": candidate_type,
+                        "known_policy_action": known_policy_action,
+                        "evidence_count": total_ev,
+                        "outcome_known": known_ev,
+                        "positive": pos_ev,
+                        "negative": neg_ev,
+                        "zero": zero_ev,
+                        "missing": int(ev.get("missing") or 0),
+                        "direct_credit": int(direct_credit),
+                        "direct_positive": int(direct_pos),
+                        "direct_negative": int(direct_neg),
+                        "direct_zero": int(direct_zero),
+                        "direct_q": round_or_none(direct_q, 4),
+                        "direct_evidence_refs": list(ev.get("direct_evidence_refs") or [])[:50],
+                        "direct_evidence_ref_count": int(len(list(ev.get("direct_evidence_refs") or []))),
+                        "root_credit": int(root_credit),
+                        "missing_credit": int(ev.get("missing_credit") or 0),
+                        "candidate_credit_source": candidate_credit_source,
+                        "write_eligible": bool(write_eligible),
+                        "write_block_reason": write_block_reason,
+                        "trace_q": round_or_none(trace_q, 4),
+                        "avg_outcome": round_or_none(avg_outcome, 4),
+                        "current_policy_n": int(cur.get("n") or 0),
+                        "current_policy_pos": int(cur.get("pos") or 0),
+                        "current_policy_neg": int(cur.get("neg") or 0),
+                        "current_policy_draw": int(cur.get("draw") or 0),
+                        "current_policy_q": round_or_none(current_q, 4),
+                        "delta_q": delta_q,
+                        "confidence": confidence,
+                        "review_action": "candidate_only_no_write",
+                        "future_write_gate": "blocked_until_direct_credit" if not write_eligible else "direct_credit_candidate_still_read_only",
+                        "credit_assignment_model": "root_temporal_decay_v1" if assigned_events > 0 else "none",
+                        "assigned_root_events": int(assigned_events),
+                        "assigned_root_weight_sum": round_or_none(ev.get("assigned_root_temporal_weight_sum"), 4),
+                        "assigned_root_weighted_q": round_or_none(assigned_q, 4),
+                        "root_credit_early": int(ev.get("root_credit_early") or 0),
+                        "root_credit_mid": int(ev.get("root_credit_mid") or 0),
+                        "root_credit_late": int(root_late),
+                        "root_credit_terminal": int(root_terminal),
+                        "root_credit_terminal_fraction": terminal_fraction,
+                        "root_credit_late_fraction": late_fraction,
+                        "credit_assignment_confidence": credit_assignment_confidence,
+                        "credit_assignment_write_eligible": False,
+                        "credit_assignment_block_reason": "credit_assignment_model_unvalidated_no_write" if assigned_events > 0 else "no_root_credit_to_assign",
+                    })
+
+                def _candidate_sort_key(item: Dict[str, Any]) -> Tuple[float, int, float]:
+                    trace_q_v = float(item.get("trace_q") or 0.0)
+                    delta_abs = abs(float(item.get("delta_q") or 0.0))
+                    return (delta_abs, int(item.get("evidence_count") or 0), trace_q_v)
+
+                review_candidates.sort(key=_candidate_sort_key, reverse=True)
+                review_top = review_candidates[:review_top_n]
+                write_eligible_count = int(sum(1 for c in review_candidates if c.get("write_eligible")))
+                write_blocked_count = int(len(review_candidates) - write_eligible_count)
+                root_credit_candidate_count = int(sum(1 for c in review_candidates if c.get("candidate_credit_source") in ("episode_root_broadcast", "mixed_direct_and_root")))
+                if root_credit_requires_review and review_candidates:
+                    review_recommendation = "credit_assignment_review_required_no_write"
+                elif review_top and all(safe_criteria.values()):
+                    review_recommendation = "review_candidates_ready_no_write"
+                else:
+                    review_recommendation = "keep_in_consolidation_review"
+                result["policy_review"] = {
+                    "artifact_version": "dream_adapter_policy_review_readonly_v1",
+                    "artifact_kind": "read_only_policy_update_candidates",
+                    "source": "dream_worker.adapter_policy_review_dry_run",
+                    "writes": 0,
+                    "write_plan": "none_review_only",
+                    "namespace": ns,
+                    "state_schema_prefix": schema,
+                    "review_min_evidence": int(review_min_evidence),
+                    "candidate_count_total": int(len(review_candidates)),
+                    "candidate_count_returned": int(len(review_top)),
+                    "new_state_action_candidates": int(sum(1 for c in review_candidates if not c.get("known_policy_action"))),
+                    "existing_state_action_candidates": int(sum(1 for c in review_candidates if c.get("known_policy_action"))),
+                    "positive_trace_candidates": int(sum(1 for c in review_candidates if float(c.get("trace_q") or 0.0) > 0.0)),
+                    "negative_trace_candidates": int(sum(1 for c in review_candidates if float(c.get("trace_q") or 0.0) < 0.0)),
+                    "write_eligible_candidates": int(write_eligible_count),
+                    "write_blocked_candidates": int(write_blocked_count),
+                    "root_credit_candidates": int(root_credit_candidate_count),
+                    "credit_model": credit_model,
+                    "root_credit_requires_review": bool(root_credit_requires_review),
+                    "write_gate": "blocked_episode_root_credit" if root_credit_requires_review else "direct_credit_review_only",
+                    "top_candidates": review_top,
+                    "recommendation": review_recommendation,
+                }
+
+                credit_assignment_candidates = [
+                    c for c in review_candidates
+                    if int(c.get("assigned_root_events") or 0) > 0
+                ]
+                credit_assignment_candidates.sort(
+                    key=lambda item: (
+                        abs(float(item.get("assigned_root_weighted_q") or 0.0) - float(item.get("current_policy_q") or 0.0)),
+                        float(item.get("credit_assignment_confidence") or 0.0),
+                        int(item.get("assigned_root_events") or 0),
+                    ),
+                    reverse=True,
+                )
+                credit_assignment_top = credit_assignment_candidates[:review_top_n]
+                terminal_candidate_count = int(sum(
+                    1 for c in credit_assignment_candidates
+                    if float(c.get("root_credit_terminal_fraction") or 0.0) > 0.0
+                ))
+                high_conf_assignment_count = int(sum(
+                    1 for c in credit_assignment_candidates
+                    if float(c.get("credit_assignment_confidence") or 0.0) >= 0.50
+                ))
+                result["credit_assignment_review"] = {
+                    "artifact_version": "dream_adapter_credit_assignment_review_readonly_v1",
+                    "artifact_kind": "read_only_credit_assignment_candidates",
+                    "source": "dream_worker.adapter_credit_assignment_review_dry_run",
+                    "writes": 0,
+                    "write_plan": "none_credit_assignment_review_only",
+                    "namespace": ns,
+                    "state_schema_prefix": schema,
+                    "credit_assignment_model": "root_temporal_decay_v1",
+                    "model_status": "proposal_unvalidated_no_write",
+                    "source_credit_model": credit_model,
+                    "root_credit_requires_review": bool(root_credit_requires_review),
+                    "candidate_count_total": int(len(credit_assignment_candidates)),
+                    "candidate_count_returned": int(len(credit_assignment_top)),
+                    "terminal_candidate_count": int(terminal_candidate_count),
+                    "high_confidence_candidate_count": int(high_conf_assignment_count),
+                    "write_eligible_candidates": 0,
+                    "write_blocked_candidates": int(len(credit_assignment_candidates)),
+                    "write_gate": "blocked_credit_assignment_model_unvalidated",
+                    "top_candidates": credit_assignment_top,
+                    "recommendation": "credit_assignment_candidates_ready_for_review_no_write" if credit_assignment_top else "no_credit_assignment_candidates",
+                    "next_required_gate": "validate_credit_assignment_against_direct_step_rewards_or_ab_test",
+                }
+
+                # Read-only Validierungsstufe fuer Credit-Assignment-Kandidaten.
+                # Diese Auswertung sucht nach direkter Step-/Reward-Evidenz, hebt
+                # aber den Write-Guard bewusst nicht auf. Sie ist der Beleg, ob
+                # ein spaeteres produktives Credit-Assignment ueberhaupt validierbar
+                # waere. DB-Zugriffe sind auf die neuesten Zeilen begrenzt und
+                # nutzen ORDER BY id DESC LIMIT, damit Live-Systeme nicht durch
+                # breite Vollscans belastet werden.
+                validation_scan_limit = max(100, min(_env_int("OROMA_DREAM_ADAPTER_CREDIT_VALIDATION_SCAN_LIMIT", 2000), 20000))
+
+                def _jsonish(value: Any) -> Any:
+                    if value in (None, ""):
+                        return None
+                    try:
+                        if isinstance(value, memoryview):
+                            value = value.tobytes()
+                        if isinstance(value, bytearray):
+                            value = bytes(value)
+                        if isinstance(value, bytes):
+                            value = value.decode("utf-8", "ignore")
+                        if isinstance(value, str):
+                            return json.loads(value)
+                        if isinstance(value, (dict, list)):
+                            return value
+                    except Exception:
+                        return None
+                    return None
+
+                def _find_key_recursive(obj: Any, keys: Tuple[str, ...], depth: int = 0) -> str:
+                    if depth > 4:
+                        return ""
+                    if isinstance(obj, dict):
+                        for k in keys:
+                            v = obj.get(k)
+                            if v not in (None, ""):
+                                return str(v)
+                        for v in obj.values():
+                            found = _find_key_recursive(v, keys, depth + 1)
+                            if found:
+                                return found
+                    elif isinstance(obj, list):
+                        for v in obj[:50]:
+                            found = _find_key_recursive(v, keys, depth + 1)
+                            if found:
+                                return found
+                    return ""
+
+                candidate_key_set: Set[Tuple[str, str]] = set()
+                for c in credit_assignment_candidates:
+                    sh = str(c.get("state_hash") or "")
+                    ac = str(c.get("action") or "")
+                    if sh and ac:
+                        candidate_key_set.add((sh, ac))
+
+                trace_direct_credit_events = int(sum(int(c.get("direct_credit") or 0) for c in review_candidates))
+                trace_root_credit_events = int(sum(int(c.get("root_credit") or 0) for c in review_candidates))
+                trace_direct_candidate_count = int(sum(1 for c in review_candidates if int(c.get("direct_credit") or 0) > 0))
+
+                episode_rows_scanned = 0
+                episode_reward_rows = 0
+                episode_state_matches = 0
+                episode_candidate_matches = 0
+                episode_action_present = 0
+                rewards_rows_scanned = 0
+                rewards_state_matches = 0
+                rewards_candidate_matches = 0
+                rewards_action_present = 0
+
+                if has_table(conn, "episode_events"):
+                    try:
+                        ev_rows = conn.execute(
+                            """
+                            SELECT id, event_type, state_hash, reward, meta_json, payload
+                            FROM episode_events
+                            ORDER BY id DESC
+                            LIMIT ?
+                            """,
+                            (validation_scan_limit,),
+                        ).fetchall()
+                        for er in ev_rows:
+                            episode_rows_scanned += 1
+                            reward_value = row_get(er, "reward", 3, None)
+                            if reward_value in (None, ""):
+                                continue
+                            episode_reward_rows += 1
+                            sh = str(row_get(er, "state_hash", 2, "") or "")
+                            meta_obj = _jsonish(row_get(er, "meta_json", 4, None))
+                            payload_obj = _jsonish(row_get(er, "payload", 5, None))
+                            if not sh:
+                                sh = _find_key_recursive(meta_obj, ("state_hash", "h", "sh")) or _find_key_recursive(payload_obj, ("state_hash", "h", "sh"))
+                            ac = _find_key_recursive(meta_obj, ("action", "policy_action", "action_canon", "ac", "action_name")) or _find_key_recursive(payload_obj, ("action", "policy_action", "action_canon", "ac", "action_name"))
+                            if sh.startswith(schema):
+                                episode_state_matches += 1
+                                if ac:
+                                    episode_action_present += 1
+                                if ac and (sh, ac) in candidate_key_set:
+                                    episode_candidate_matches += 1
+                    except Exception as exc:
+                        result.setdefault("warnings", []).append(f"episode_events_validation_scan_failed:{type(exc).__name__}:{exc}")
+
+                if has_table(conn, "rewards_log"):
+                    try:
+                        rw_rows = conn.execute(
+                            """
+                            SELECT id, source, reward, raw, tag
+                            FROM rewards_log
+                            ORDER BY id DESC
+                            LIMIT ?
+                            """,
+                            (validation_scan_limit,),
+                        ).fetchall()
+                        for rr in rw_rows:
+                            rewards_rows_scanned += 1
+                            raw_obj = _jsonish(row_get(rr, "raw", 3, None))
+                            sh = _find_key_recursive(raw_obj, ("state_hash", "h", "sh"))
+                            ac = _find_key_recursive(raw_obj, ("action", "policy_action", "action_canon", "ac", "action_name"))
+                            if sh.startswith(schema):
+                                rewards_state_matches += 1
+                                if ac:
+                                    rewards_action_present += 1
+                                if ac and (sh, ac) in candidate_key_set:
+                                    rewards_candidate_matches += 1
+                    except Exception as exc:
+                        result.setdefault("warnings", []).append(f"rewards_log_validation_scan_failed:{type(exc).__name__}:{exc}")
+
+                direct_validation_matches = int(trace_direct_candidate_count + episode_candidate_matches + rewards_candidate_matches)
+                direct_validation_evidence = int(trace_direct_credit_events + episode_candidate_matches + rewards_candidate_matches)
+                validation_ready = bool(direct_validation_matches > 0)
+                if validation_ready:
+                    validation_recommendation = "direct_credit_evidence_found_review_only"
+                    validation_gate = "blocked_validation_review_only"
+                else:
+                    validation_recommendation = "no_direct_credit_validation_evidence_keep_blocked"
+                    validation_gate = "blocked_no_direct_step_validation_evidence"
+
+                result["credit_validation_review"] = {
+                    "artifact_version": "dream_adapter_credit_validation_review_readonly_v1",
+                    "artifact_kind": "read_only_credit_assignment_validation",
+                    "source": "dream_worker.adapter_credit_validation_dry_run",
+                    "writes": 0,
+                    "write_plan": "none_credit_validation_review_only",
+                    "namespace": ns,
+                    "state_schema_prefix": schema,
+                    "validation_model": "direct_step_reward_presence_v1",
+                    "source_credit_assignment_model": "root_temporal_decay_v1",
+                    "model_status": "validation_review_only_no_write",
+                    "scan_limit": int(validation_scan_limit),
+                    "candidate_count_total": int(len(credit_assignment_candidates)),
+                    "candidate_count_returned": int(len(credit_assignment_top)),
+                    "trace_direct_credit_events": int(trace_direct_credit_events),
+                    "trace_root_credit_events": int(trace_root_credit_events),
+                    "trace_direct_candidate_count": int(trace_direct_candidate_count),
+                    "episode_events_rows_scanned": int(episode_rows_scanned),
+                    "episode_events_reward_rows": int(episode_reward_rows),
+                    "episode_events_state_matches": int(episode_state_matches),
+                    "episode_events_action_present": int(episode_action_present),
+                    "episode_events_candidate_matches": int(episode_candidate_matches),
+                    "rewards_log_rows_scanned": int(rewards_rows_scanned),
+                    "rewards_log_state_matches": int(rewards_state_matches),
+                    "rewards_log_action_present": int(rewards_action_present),
+                    "rewards_log_candidate_matches": int(rewards_candidate_matches),
+                    "direct_validation_matches": int(direct_validation_matches),
+                    "direct_validation_evidence": int(direct_validation_evidence),
+                    "validation_ready": bool(validation_ready),
+                    "write_eligible_candidates": 0,
+                    "write_blocked_candidates": int(len(credit_assignment_candidates)),
+                    "write_gate": validation_gate,
+                    "recommendation": validation_recommendation,
+                    "next_required_gate": "add_or_observe_direct_step_credit_before_policy_writes" if not validation_ready else "manual_review_direct_credit_matches_before_any_write",
+                }
+
+                # Shadow-Write-Plan: letzte read-only Stufe vor einem spaeteren
+                # minimalen DBWriter-Write. Dieser Plan nutzt nur direkte
+                # Step-Credits. Root-/Mixed-Credit-Kandidaten bleiben sichtbar
+                # blockiert und werden nicht als future_write_eligible markiert.
+                # Es wird KEIN SQL-Write ausgefuehrt; proposed_q ist nur ein
+                # transparenter Review-Wert fuer den naechsten manuellen Gate.
+                shadow_min_direct = max(1, min(_env_int("OROMA_DREAM_ADAPTER_SHADOW_MIN_DIRECT_EVIDENCE", 3), 1000))
+                shadow_top_n = max(1, min(_env_int("OROMA_DREAM_ADAPTER_SHADOW_TOP_N", 12), 100))
+                shadow_max_blend = max(0.01, min(_env_float("OROMA_DREAM_ADAPTER_SHADOW_MAX_BLEND", 0.25), 1.0))
+                shadow_ledger_present = False
+                shadow_existing_signatures: Set[str] = set()
+                shadow_ledger_read_error = ""
+                try:
+                    with sql_manager.get_conn() as ledger_conn:
+                        shadow_ledger_present = bool(_sqlite_has_table(ledger_conn, "dream_policy_mini_write_ledger"))
+                        shadow_existing_signatures = self._adapter_mini_write_existing_signatures(ledger_conn, ns, schema)
+                except Exception as exc:
+                    shadow_ledger_read_error = f"{type(exc).__name__}:{exc}"
+                    result.setdefault("warnings", []).append(f"shadow_ledger_read_failed:{shadow_ledger_read_error}")
+
+                shadow_candidates: List[Dict[str, Any]] = []
+                shadow_ledger_duplicate_count = 0
+                for c in review_candidates:
+                    direct_n = int(c.get("direct_credit") or 0)
+                    root_n = int(c.get("root_credit") or 0)
+                    current_n = int(c.get("current_policy_n") or 0)
+                    current_q_val = c.get("current_policy_q")
+                    direct_q_val = c.get("direct_q")
+                    sh = str(c.get("state_hash") or "")
+                    ac = str(c.get("action") or "")
+                    if not sh or not ac:
+                        continue
+                    direct_only = bool(direct_n >= shadow_min_direct and root_n == 0 and direct_q_val is not None)
+                    evidence_signature = self._adapter_mini_write_evidence_signature(ns, schema, {
+                        "state_hash": sh,
+                        "action": ac,
+                        "direct_credit": direct_n,
+                        "direct_positive": int(c.get("direct_positive") or 0),
+                        "direct_negative": int(c.get("direct_negative") or 0),
+                        "direct_zero": int(c.get("direct_zero") or 0),
+                    })
+                    already_written_by_ledger = bool(evidence_signature and evidence_signature in shadow_existing_signatures)
+                    future_write_eligible = bool(validation_ready and direct_only and not already_written_by_ledger)
+                    if already_written_by_ledger:
+                        shadow_ledger_duplicate_count += 1
+                    if current_q_val is None:
+                        old_q = 0.0
+                        old_q_missing = True
+                    else:
+                        old_q = float(current_q_val)
+                        old_q_missing = False
+                    if direct_q_val is None:
+                        proposed_q = None
+                        shadow_delta = None
+                        blend = 0.0
+                    elif current_n <= 0 or old_q_missing:
+                        blend = 1.0
+                        proposed_q = float(direct_q_val)
+                        shadow_delta = float(direct_q_val) - old_q
+                    else:
+                        blend = min(float(shadow_max_blend), float(direct_n) / float(max(1, current_n + direct_n)))
+                        proposed_q = clamp_unit(old_q + (float(direct_q_val) - old_q) * blend)
+                        shadow_delta = float(proposed_q) - old_q
+                    if not future_write_eligible:
+                        if already_written_by_ledger:
+                            block_reason = "duplicate_direct_evidence_signature"
+                        elif root_n > 0:
+                            block_reason = "root_or_mixed_credit_not_allowed_for_shadow_write"
+                        elif direct_n < shadow_min_direct:
+                            block_reason = "direct_credit_below_shadow_min_evidence"
+                        elif not validation_ready:
+                            block_reason = "credit_validation_not_ready"
+                        else:
+                            block_reason = "direct_q_missing"
+                    else:
+                        block_reason = ""
+                    shadow_candidates.append({
+                        "state_hash": sh,
+                        "action": ac,
+                        "candidate_type": c.get("candidate_type"),
+                        "future_write_eligible": bool(future_write_eligible),
+                        "shadow_action": "plan_only_no_write",
+                        "block_reason": block_reason,
+                        "direct_credit": int(direct_n),
+                        "direct_positive": int(c.get("direct_positive") or 0),
+                        "direct_negative": int(c.get("direct_negative") or 0),
+                        "direct_zero": int(c.get("direct_zero") or 0),
+                        "root_credit": int(root_n),
+                        "direct_q": round_or_none(direct_q_val, 4),
+                        "old_q": round_or_none(old_q, 4),
+                        "old_n": int(current_n),
+                        "proposed_q": round_or_none(proposed_q, 4),
+                        "shadow_delta_q": round_or_none(shadow_delta, 4),
+                        "blend": round_or_none(blend, 4),
+                        "confidence": round_or_none(min(1.0, float(direct_n) / 10.0), 4),
+                        "direct_evidence_refs": list(c.get("direct_evidence_refs") or [])[:20],
+                        "direct_evidence_ref_count": int(c.get("direct_evidence_ref_count") or 0),
+                        "direct_evidence_signature": evidence_signature,
+                        "direct_evidence_signature_version": "aggregate_v1",
+                        "already_written_by_ledger": bool(already_written_by_ledger),
+                        "ledger_status": "present" if shadow_ledger_present else "missing",
+                        "write_path": "dbwriter_required_later",
+                        "writes": 0,
+                    })
+
+                def _shadow_sort_key(item: Dict[str, Any]) -> Tuple[int, float, int]:
+                    return (
+                        1 if item.get("future_write_eligible") else 0,
+                        abs(float(item.get("shadow_delta_q") or 0.0)),
+                        int(item.get("direct_credit") or 0),
+                    )
+
+                shadow_candidates.sort(key=_shadow_sort_key, reverse=True)
+                shadow_top = shadow_candidates[:shadow_top_n]
+                shadow_eligible = int(sum(1 for c in shadow_candidates if c.get("future_write_eligible")))
+                shadow_blocked = int(len(shadow_candidates) - shadow_eligible)
+                shadow_max_abs_delta = round_or_none(max([abs(float(c.get("shadow_delta_q") or 0.0)) for c in shadow_candidates] or [0.0]), 4)
+                if shadow_eligible > 0:
+                    shadow_recommendation = "shadow_plan_ready_manual_review_no_write"
+                    shadow_next_gate = "manual_review_shadow_plan_then_gated_dbwriter_mini_write"
+                elif validation_ready:
+                    shadow_recommendation = "direct_credit_seen_but_no_strict_shadow_candidates"
+                    shadow_next_gate = "increase_direct_credit_or_relax_min_evidence_after_review"
+                else:
+                    shadow_recommendation = "no_shadow_plan_until_credit_validation_ready"
+                    shadow_next_gate = "run_credit_validation_after_new_direct_credit_traces"
+
+                result["shadow_write_plan"] = {
+                    "artifact_version": "dream_adapter_shadow_write_plan_readonly_v1",
+                    "artifact_kind": "read_only_shadow_policy_write_plan",
+                    "source": "dream_worker.adapter_shadow_write_plan_dry_run",
+                    "writes": 0,
+                    "write_plan": "shadow_only_no_db_write",
+                    "write_path_later": "DBWriter-compatible only",
+                    "namespace": ns,
+                    "state_schema_prefix": schema,
+                    "shadow_model": "direct_step_q_blend_v1",
+                    "validation_model": "direct_step_reward_presence_v1",
+                    "validation_ready": bool(validation_ready),
+                    "shadow_min_direct_evidence": int(shadow_min_direct),
+                    "shadow_max_blend": round_or_none(shadow_max_blend, 4),
+                    "ledger_aware": True,
+                    "ledger_present": bool(shadow_ledger_present),
+                    "ledger_existing_signatures": int(len(shadow_existing_signatures)),
+                    "ledger_duplicate_candidates": int(shadow_ledger_duplicate_count),
+                    "ledger_read_error": shadow_ledger_read_error,
+                    "candidate_count_total": int(len(shadow_candidates)),
+                    "candidate_count_returned": int(len(shadow_top)),
+                    "future_write_eligible_candidates": int(shadow_eligible),
+                    "blocked_candidates": int(shadow_blocked),
+                    "max_abs_delta_q": shadow_max_abs_delta,
+                    "top_candidates": shadow_top,
+                    "write_gate": "shadow_plan_only_no_write",
+                    "recommendation": shadow_recommendation,
+                    "next_required_gate": shadow_next_gate,
+                }
+
+
+                result["consolidation_artifact"] = {
+                    "artifact_version": "dream_adapter_consolidation_readonly_v1",
+                    "artifact_kind": "read_only_dream_consolidation_candidate",
+                    "writes": 0,
+                    "namespace": ns,
+                    "state_schema_prefix": schema,
+                    "source": "dream_worker.adapter_consolidation_dry_run",
+                    "input_summary": {
+                        "candidate_traces": int(dream_processable),
+                        "input_events": int(input_events),
+                        "input_features": int(input_features),
+                        "centroid_dim": int(len(centroid)),
+                        "centroid_preview": [round(float(x), 6) for x in centroid[:12]],
+                        "mode": dict(mode_counter),
+                        "state_schema": dict(state_schema_counter),
+                        "action_schema": dict(action_schema_counter),
+                    },
+                    "outcome_summary": {
+                        "outcome_source": outcome_source,
+                        "credit_model": credit_model,
+                        "root_credit_requires_review": bool(root_credit_requires_review),
+                        "numeric_outcome_steps": int(numeric_outcome_steps),
+                        "direct_outcome_steps": int(direct_outcome_steps),
+                        "root_outcome_steps": int(root_outcome_steps),
+                        "missing_outcome_steps": int(missing_outcome_steps),
+                        "distribution": dict(outcome_distribution),
+                    },
+                    "policy_alignment": {
+                        "existing_state_hash_ratio": existing_state_ratio,
+                        "existing_state_action_ratio": existing_action_ratio,
+                        "matched_rule_samples": int(matched_samples),
+                        "matched_rule_q_avg": matched_rule_q_avg,
+                        "alignment": policy_alignment,
+                    },
+                    "action_distribution": top_counter_items(action_counter, 8),
+                    "positive_action_distribution": top_counter_items(positive_action_counter, 8),
+                    "negative_action_distribution": top_counter_items(negative_action_counter, 8),
+                    "state_action_groups": top_state_action_groups,
+                    "policy_review_summary": {
+                        "candidate_count_total": result.get("policy_review", {}).get("candidate_count_total", 0),
+                        "candidate_count_returned": result.get("policy_review", {}).get("candidate_count_returned", 0),
+                        "recommendation": result.get("policy_review", {}).get("recommendation"),
+                    },
+                    "credit_assignment_review_summary": {
+                        "candidate_count_total": result.get("credit_assignment_review", {}).get("candidate_count_total", 0),
+                        "candidate_count_returned": result.get("credit_assignment_review", {}).get("candidate_count_returned", 0),
+                        "credit_assignment_model": result.get("credit_assignment_review", {}).get("credit_assignment_model"),
+                        "recommendation": result.get("credit_assignment_review", {}).get("recommendation"),
+                    },
+                    "recommendation": "ready_for_read_only_dream_review" if all(safe_criteria.values()) else "keep_in_probe_only",
+                    "write_plan": "none_read_only_artifact",
+                }
+                result["would_dream_consolidate"] = {
+                    "yes": would,
+                    "reason": "dream_processable_schema_traces_with_centroid_and_outcome" if would and outcome_source != "missing" else "insufficient_dream_input_or_outcome",
+                    "candidate_count": int(dream_processable),
+                    "input_events": int(input_events),
+                    "input_features": int(input_features),
+                    "centroid_dim": int(len(centroid)),
+                    "centroid_preview": [round(float(x), 6) for x in centroid[:12]],
+                    "safe_to_connect_next": bool(all(safe_criteria.values())),
+                    "safe_to_connect_criteria": safe_criteria,
+                }
+                result["ok"] = True
+                return result
+        except Exception as exc:
+            result["error"] = f"adapter_dry_run_failed:{type(exc).__name__}:{exc}"
+            return result
+
+    def _adapter_dry_run_print(self, result: Dict[str, Any], *, as_json: bool = False) -> None:
+        """Konsole-Ausgabe fuer den read-only Adapter-Dry-Run."""
+        if as_json:
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            return
+        print("ORÓMA DreamWorker Adapter Dry-Run (read-only)")
+        print(f"namespace={result.get('namespace')}")
+        print(f"state_schema_prefix={result.get('state_schema_prefix')}")
+        print("dry_run=true")
+        print(f"writes={result.get('writes', 0)}")
+        print(f"filter_path={result.get('filter_path')}")
+        if result.get("error"):
+            print(f"error={result.get('error')}")
+            return
+
+        pb = result.get("policy_before") or {}
+        ti = result.get("trace_input") or {}
+        osx = result.get("outcome_semantics") or {}
+        po = result.get("policy_overlap") or {}
+        wd = result.get("would_dream_consolidate") or {}
+
+        print("\nPolicy before:")
+        print(
+            "  rules={rules} samples={samples} pos={pos} neg={neg} draw={draw}".format(
+                rules=pb.get("rules", 0), samples=pb.get("samples", 0), pos=pb.get("pos", 0),
+                neg=pb.get("neg", 0), draw=pb.get("draw", 0)
+            )
+        )
+        print(
+            "  q_avg/min/max={}/{}/{} max_id={} max_last_ts={}".format(
+                pb.get("q_avg"), pb.get("q_min"), pb.get("q_max"), pb.get("max_id"), pb.get("max_last_ts")
+            )
+        )
+
+        print("\nTrace input:")
+        print(f"  scan_mode={ti.get('scan_mode')} include_namespace_scan={ti.get('include_namespace_scan')}")
+        print(
+            "  snapchains_scanned={snapchains_scanned} schema_matching={schema_matching} schema_mismatch={schema_mismatch}".format(**ti)
+        )
+        print(f"  latest_ids={ti.get('latest_ids')}")
+        print(f"  selected_ids={ti.get('selected_ids')}")
+        print(f"  formats_selected={ti.get('formats_selected')} formats_all={ti.get('formats_all')}")
+        print(
+            "  adapter_ok={adapter_ok} policy_trainable={policy_trainable} dream_processable={dream_processable} skipped_selected={skipped_selected}".format(**ti)
+        )
+        print(
+            "  decode_errors_selected={decode_errors_selected} decode_errors_all={decode_errors_all}".format(**ti)
+        )
+        print(f"  input_events={ti.get('input_events')} input_features={ti.get('input_features')}")
+        print(f"  state_schema={ti.get('state_schema')}")
+        print(f"  action_schema={ti.get('action_schema')}")
+        print(f"  mode={ti.get('mode')}")
+
+        print("\nOutcome semantics:")
+        print(f"  direct_outcome_steps={osx.get('direct_outcome_steps')}")
+        print(f"  root_outcome_steps={osx.get('root_outcome_steps')}")
+        print(f"  missing_outcome_steps={osx.get('missing_outcome_steps')}")
+        print(f"  state_action_outcome_steps={osx.get('state_action_outcome_steps')}")
+        print(f"  outcome_source={osx.get('outcome_source')}")
+
+        print("\nPolicy overlap:")
+        print(
+            "  total_steps={total_steps} state_action_steps={state_action_steps} state_action_outcome_steps={state_action_outcome_steps}".format(**po)
+        )
+        print(f"  unique_trace_state_hashes={po.get('unique_trace_state_hashes')}")
+        print(f"  existing_state_hashes={po.get('existing_state_hashes')} new_state_hashes={po.get('new_state_hashes')}")
+        print(f"  existing_state_actions={po.get('existing_state_actions')} new_state_actions={po.get('new_state_actions')} action_links={po.get('action_links')}")
+        print(f"  matched_rule_samples={po.get('matched_rule_samples')} matched_rule_q_avg={po.get('matched_rule_q_avg')}")
+
+        print("\nWould Dream consolidate:")
+        print(f"  yes={wd.get('yes')} reason={wd.get('reason')}")
+        print(
+            "  candidate_count={candidate_count} input_events={input_events} input_features={input_features} centroid_dim={centroid_dim}".format(**wd)
+        )
+        print(f"  centroid_preview={wd.get('centroid_preview')}")
+        print(f"  safe_to_connect_next={wd.get('safe_to_connect_next')}")
+        print(f"  safe_to_connect_criteria={wd.get('safe_to_connect_criteria')}")
+
+        artifact = result.get("consolidation_artifact") or {}
+        if artifact:
+            align = artifact.get("policy_alignment") or {}
+            inp = artifact.get("input_summary") or {}
+            out = artifact.get("outcome_summary") or {}
+            print("\nRead-only consolidation artifact:")
+            print(f"  artifact_kind={artifact.get('artifact_kind')} version={artifact.get('artifact_version')}")
+            print(f"  recommendation={artifact.get('recommendation')} write_plan={artifact.get('write_plan')}")
+            print(f"  input_events={inp.get('input_events')} centroid_dim={inp.get('centroid_dim')}")
+            print(f"  outcome_source={out.get('outcome_source')} distribution={out.get('distribution')}")
+            print(f"  policy_alignment={align.get('alignment')} state_ratio={align.get('existing_state_hash_ratio')} action_ratio={align.get('existing_state_action_ratio')} matched_q={align.get('matched_rule_q_avg')}")
+            print(f"  action_distribution={artifact.get('action_distribution')}")
+            print(f"  state_action_groups={artifact.get('state_action_groups')}")
+
+        review = result.get("policy_review") or {}
+        if review:
+            print("\nRead-only policy review:")
+            print(f"  artifact_kind={review.get('artifact_kind')} version={review.get('artifact_version')}")
+            print(f"  recommendation={review.get('recommendation')} write_plan={review.get('write_plan')}")
+            print(f"  candidate_count_total={review.get('candidate_count_total')} returned={review.get('candidate_count_returned')}")
+            print(f"  new_state_action_candidates={review.get('new_state_action_candidates')} existing_state_action_candidates={review.get('existing_state_action_candidates')}")
+            print(f"  top_candidates={review.get('top_candidates')}")
+
+    def _adapter_dry_run_phase(self) -> None:
+        """
+        Reguläre Dream-Phase fuer den adapterbasierten Game-Trace-Dry-Run.
+
+        Diese Phase ist absichtlich nur ueber explizite Auswahl erreichbar
+        (z. B. ``--phase adapter_dry_run`` oder ``OROMA_DREAM_ONLY_PHASES``).
+        Sie nutzt den normalen DreamWorker-Phasenrahmen, RunLock, Budget- und
+        State-Logging, bleibt aber fachlich read-only:
+
+        - keine policy_rules-Writes
+        - keine SnapChain-/MetaChain-Writes
+        - keine Checkpoint-Bewegung in der DB
+        - kein Forgetting
+        - kein PTZ
+
+        Die Phase beantwortet nur, ob ein Namespace/Schema ueber den Adapter im
+        Dream-Kontext konsolidierbar waere. Defaults sind bewusst eng auf den
+        ersten Proof-Kandidaten Snake2D gesetzt.
+        """
+        ns = str(os.environ.get("OROMA_DREAM_ADAPTER_PHASE_NAMESPACE", "game:snake") or "game:snake").strip()
+        schema = str(os.environ.get("OROMA_DREAM_ADAPTER_PHASE_STATE_SCHEMA_PREFIX", "snake:pro_v2") or "snake:pro_v2").strip()
+        limit = max(1, min(_env_int("OROMA_DREAM_ADAPTER_PHASE_LIMIT", 20), 500))
+        include_ns = _env_bool("OROMA_DREAM_ADAPTER_PHASE_INCLUDE_NAMESPACE_SCAN", False)
+
+        self._dream_state_update(
+            current_phase="adapter_dry_run",
+            current_phase_step="adapter_dry_run_collect",
+            adapter_dry_run_namespace=ns,
+            adapter_dry_run_state_schema_prefix=schema,
+            adapter_dry_run_limit=limit,
+            adapter_dry_run_include_namespace_scan=bool(include_ns),
+            adapter_dry_run_writes=0,
+        )
+        res = self._adapter_dry_run_collect(
+            namespace=ns,
+            state_schema_prefix=schema,
+            limit=limit,
+            include_namespace_scan=bool(include_ns),
+        )
+
+        ti = res.get("trace_input") or {}
+        wd = res.get("would_dream_consolidate") or {}
+        osx = res.get("outcome_semantics") or {}
+        po = res.get("policy_overlap") or {}
+        if res.get("error"):
+            LOG.warning(
+                "[DreamAdapterDryRun] error namespace=%s schema=%s error=%s writes=0",
+                ns, schema, res.get("error"),
+            )
+        else:
+            LOG.info(
+                "[DreamAdapterDryRun] namespace=%s schema=%s safe_to_connect_next=%s "
+                "candidate_count=%s dream_processable=%s events=%s features=%s centroid_dim=%s "
+                "outcome_source=%s matched_rule_q_avg=%s scan_mode=%s writes=0",
+                ns,
+                schema,
+                wd.get("safe_to_connect_next"),
+                wd.get("candidate_count"),
+                ti.get("dream_processable"),
+                ti.get("input_events"),
+                ti.get("input_features"),
+                wd.get("centroid_dim"),
+                osx.get("outcome_source"),
+                po.get("matched_rule_q_avg"),
+                ti.get("scan_mode"),
+            )
+
+        self._dream_state_update(
+            current_phase="adapter_dry_run",
+            current_phase_step="adapter_dry_run_done",
+            adapter_dry_run_ok=bool(res.get("ok")),
+            adapter_dry_run_error=res.get("error"),
+            adapter_dry_run_safe_to_connect_next=bool(wd.get("safe_to_connect_next")),
+            adapter_dry_run_candidate_count=int(wd.get("candidate_count") or 0),
+            adapter_dry_run_dream_processable=int(ti.get("dream_processable") or 0),
+            adapter_dry_run_input_events=int(ti.get("input_events") or 0),
+            adapter_dry_run_outcome_source=osx.get("outcome_source"),
+            adapter_dry_run_matched_rule_q_avg=po.get("matched_rule_q_avg"),
+            adapter_dry_run_writes=0,
+        )
+
+
+    def _adapter_consolidation_dry_run_phase(self) -> None:
+        """
+        Reguläre Dream-Phase für ein read-only Konsolidierungsartefakt.
+
+        Diese Phase baut auf adapter_dry_run auf, erzeugt aber zusätzlich ein
+        explizites Konsolidierungsartefakt im Log/State-Kontext. Es bleibt ein
+        Dry-Run: keine DB-Writes, keine MetaChains, keine policy_rules-Updates,
+        kein Forgetting und keine Checkpoints. Das Artefakt dokumentiert nur,
+        welche Trace-/Policy-Cluster Dream im nächsten Schritt prüfen könnte.
+        """
+        ns = str(os.environ.get("OROMA_DREAM_ADAPTER_PHASE_NAMESPACE", "game:snake") or "game:snake").strip()
+        schema = str(os.environ.get("OROMA_DREAM_ADAPTER_PHASE_STATE_SCHEMA_PREFIX", "snake:pro_v2") or "snake:pro_v2").strip()
+        limit = max(1, min(_env_int("OROMA_DREAM_ADAPTER_PHASE_LIMIT", 20), 500))
+        include_ns = _env_bool("OROMA_DREAM_ADAPTER_PHASE_INCLUDE_NAMESPACE_SCAN", False)
+
+        self._dream_state_update(
+            current_phase="adapter_consolidation_dry_run",
+            current_phase_step="adapter_consolidation_collect",
+            adapter_consolidation_namespace=ns,
+            adapter_consolidation_state_schema_prefix=schema,
+            adapter_consolidation_limit=limit,
+            adapter_consolidation_include_namespace_scan=bool(include_ns),
+            adapter_consolidation_writes=0,
+        )
+        res = self._adapter_dry_run_collect(
+            namespace=ns,
+            state_schema_prefix=schema,
+            limit=limit,
+            include_namespace_scan=bool(include_ns),
+        )
+        ti = res.get("trace_input") or {}
+        wd = res.get("would_dream_consolidate") or {}
+        artifact = res.get("consolidation_artifact") or {}
+        align = artifact.get("policy_alignment") or {}
+        out = artifact.get("outcome_summary") or {}
+
+        if res.get("error"):
+            LOG.warning(
+                "[DreamConsolidationArtifact] error namespace=%s schema=%s error=%s writes=0",
+                ns, schema, res.get("error"),
+            )
+        else:
+            LOG.info(
+                "[DreamConsolidationArtifact] namespace=%s schema=%s artifact_ready=%s "
+                "safe_to_connect_next=%s traces=%s events=%s features=%s centroid_dim=%s "
+                "outcome_source=%s policy_alignment=%s state_ratio=%s action_ratio=%s "
+                "matched_rule_q_avg=%s recommendation=%s writes=0",
+                ns,
+                schema,
+                bool(artifact),
+                wd.get("safe_to_connect_next"),
+                ti.get("dream_processable"),
+                ti.get("input_events"),
+                ti.get("input_features"),
+                (artifact.get("input_summary") or {}).get("centroid_dim"),
+                out.get("outcome_source"),
+                align.get("alignment"),
+                align.get("existing_state_hash_ratio"),
+                align.get("existing_state_action_ratio"),
+                align.get("matched_rule_q_avg"),
+                artifact.get("recommendation"),
+            )
+            # Kompaktes JSON-Artefakt im Log, damit der nächste Proof-Schritt ohne
+            # DB-Writes reproduzierbar ist. Bewusst klein: Top-Aktionen/-Gruppen
+            # sind bereits in _adapter_dry_run_collect begrenzt.
+            try:
+                LOG.info("[DreamConsolidationArtifactJSON] %s", json.dumps(artifact, ensure_ascii=False, sort_keys=True))
+            except Exception as exc:
+                LOG.warning("[DreamConsolidationArtifactJSON] encode_failed=%s writes=0", exc)
+
+        self._dream_state_update(
+            current_phase="adapter_consolidation_dry_run",
+            current_phase_step="adapter_consolidation_done",
+            adapter_consolidation_ok=bool(res.get("ok")),
+            adapter_consolidation_error=res.get("error"),
+            adapter_consolidation_safe_to_connect_next=bool(wd.get("safe_to_connect_next")),
+            adapter_consolidation_artifact_ready=bool(artifact),
+            adapter_consolidation_recommendation=artifact.get("recommendation"),
+            adapter_consolidation_policy_alignment=align.get("alignment"),
+            adapter_consolidation_matched_rule_q_avg=align.get("matched_rule_q_avg"),
+            adapter_consolidation_writes=0,
+        )
+
+
+    def _adapter_policy_review_dry_run_phase(self) -> None:
+        """
+        Reguläre Dream-Phase fuer read-only Policy-Update-Kandidaten.
+
+        Diese Phase ist die Stufe nach dem Konsolidierungsartefakt. Sie
+        berechnet konkrete Kandidaten pro (state_hash, action) aus den
+        ausgewählten Game-Traces und der bestehenden policy_rules-Ausrichtung.
+        Der Output ist ausschliesslich ein Review-Artefakt im Log/State-Kontext.
+
+        Sicherheitsvertrag:
+        - keine policy_rules-Writes
+        - keine SnapChain-/MetaChain-Writes
+        - keine DB-Checkpoints
+        - kein Forgetting
+        - kein DBWriter
+        - kein PTZ
+        """
+        ns = str(os.environ.get("OROMA_DREAM_ADAPTER_PHASE_NAMESPACE", "game:snake") or "game:snake").strip()
+        schema = str(os.environ.get("OROMA_DREAM_ADAPTER_PHASE_STATE_SCHEMA_PREFIX", "snake:pro_v2") or "snake:pro_v2").strip()
+        limit = max(1, min(_env_int("OROMA_DREAM_ADAPTER_PHASE_LIMIT", 20), 500))
+        include_ns = _env_bool("OROMA_DREAM_ADAPTER_PHASE_INCLUDE_NAMESPACE_SCAN", False)
+
+        self._dream_state_update(
+            current_phase="adapter_policy_review_dry_run",
+            current_phase_step="adapter_policy_review_collect",
+            adapter_policy_review_namespace=ns,
+            adapter_policy_review_state_schema_prefix=schema,
+            adapter_policy_review_limit=limit,
+            adapter_policy_review_include_namespace_scan=bool(include_ns),
+            adapter_policy_review_writes=0,
+        )
+
+        res = self._adapter_dry_run_collect(
+            namespace=ns,
+            state_schema_prefix=schema,
+            limit=limit,
+            include_namespace_scan=bool(include_ns),
+        )
+        wd = res.get("would_dream_consolidate") or {}
+        review = res.get("policy_review") or {}
+        top_candidates = list(review.get("top_candidates") or [])
+
+        if res.get("error"):
+            LOG.warning(
+                "[DreamPolicyReview] error namespace=%s schema=%s error=%s writes=0",
+                ns, schema, res.get("error"),
+            )
+        else:
+            LOG.info(
+                "[DreamPolicyReview] namespace=%s schema=%s review_ready=%s "
+                "safe_to_connect_next=%s candidates_total=%s candidates_returned=%s "
+                "new_candidates=%s existing_candidates=%s positive_trace_candidates=%s "
+                "negative_trace_candidates=%s write_eligible=%s write_blocked=%s "
+                "credit_model=%s recommendation=%s writes=0",
+                ns,
+                schema,
+                bool(top_candidates),
+                wd.get("safe_to_connect_next"),
+                review.get("candidate_count_total"),
+                review.get("candidate_count_returned"),
+                review.get("new_state_action_candidates"),
+                review.get("existing_state_action_candidates"),
+                review.get("positive_trace_candidates"),
+                review.get("negative_trace_candidates"),
+                review.get("write_eligible_candidates"),
+                review.get("write_blocked_candidates"),
+                review.get("credit_model"),
+                review.get("recommendation"),
+            )
+            try:
+                LOG.info("[DreamPolicyReviewJSON] %s", json.dumps(review, ensure_ascii=False, sort_keys=True))
+            except Exception as exc:
+                LOG.warning("[DreamPolicyReviewJSON] encode_failed=%s writes=0", exc)
+
+        self._dream_state_update(
+            current_phase="adapter_policy_review_dry_run",
+            current_phase_step="adapter_policy_review_done",
+            adapter_policy_review_ok=bool(res.get("ok")),
+            adapter_policy_review_error=res.get("error"),
+            adapter_policy_review_safe_to_connect_next=bool(wd.get("safe_to_connect_next")),
+            adapter_policy_review_ready=bool(top_candidates),
+            adapter_policy_review_candidate_count_total=int(review.get("candidate_count_total") or 0),
+            adapter_policy_review_candidate_count_returned=int(review.get("candidate_count_returned") or 0),
+            adapter_policy_review_recommendation=review.get("recommendation"),
+            adapter_policy_review_credit_model=review.get("credit_model"),
+            adapter_policy_review_write_eligible_candidates=int(review.get("write_eligible_candidates") or 0),
+            adapter_policy_review_write_blocked_candidates=int(review.get("write_blocked_candidates") or 0),
+            adapter_policy_review_root_credit_requires_review=bool(review.get("root_credit_requires_review")),
+            adapter_policy_review_writes=0,
+        )
+
+
+    def _adapter_credit_assignment_review_dry_run_phase(self) -> None:
+        """Regulaere Dream-Phase fuer read-only Credit-Assignment-Vorschlaege.
+
+        Diese Phase ist die Sicherheitsstufe nach dem Policy-Review. Sie nimmt
+        Root-/Episoden-Credit nicht als direkte Step-Wahrheit, sondern erzeugt
+        lediglich ein transparentes, terminalgewichtetes Review-Artefakt. Auch
+        diese Phase schreibt nichts und hebt keine Write-Guards auf.
+        """
+        ns = str(os.environ.get("OROMA_DREAM_ADAPTER_PHASE_NAMESPACE", "game:snake") or "game:snake").strip()
+        schema = str(os.environ.get("OROMA_DREAM_ADAPTER_PHASE_STATE_SCHEMA_PREFIX", "snake:pro_v2") or "snake:pro_v2").strip()
+        limit = max(1, min(_env_int("OROMA_DREAM_ADAPTER_PHASE_LIMIT", 20), 500))
+        include_ns = _env_bool("OROMA_DREAM_ADAPTER_PHASE_INCLUDE_NAMESPACE_SCAN", False)
+
+        self._dream_state_update(
+            current_phase="adapter_credit_assignment_review_dry_run",
+            current_phase_step="adapter_credit_assignment_collect",
+            adapter_credit_assignment_namespace=ns,
+            adapter_credit_assignment_state_schema_prefix=schema,
+            adapter_credit_assignment_limit=limit,
+            adapter_credit_assignment_include_namespace_scan=bool(include_ns),
+            adapter_credit_assignment_writes=0,
+        )
+
+        res = self._adapter_dry_run_collect(
+            namespace=ns,
+            state_schema_prefix=schema,
+            limit=limit,
+            include_namespace_scan=bool(include_ns),
+        )
+        wd = res.get("would_dream_consolidate") or {}
+        review = res.get("credit_assignment_review") or {}
+        top_candidates = list(review.get("top_candidates") or [])
+
+        if res.get("error"):
+            LOG.warning(
+                "[DreamCreditAssignmentReview] error namespace=%s schema=%s error=%s writes=0",
+                ns, schema, res.get("error"),
+            )
+        else:
+            LOG.info(
+                "[DreamCreditAssignmentReview] namespace=%s schema=%s review_ready=%s "
+                "safe_to_connect_next=%s credit_assignment_model=%s source_credit_model=%s "
+                "candidates_total=%s candidates_returned=%s terminal_candidates=%s "
+                "high_confidence_candidates=%s write_eligible=%s write_blocked=%s "
+                "recommendation=%s writes=0",
+                ns,
+                schema,
+                bool(top_candidates),
+                wd.get("safe_to_connect_next"),
+                review.get("credit_assignment_model"),
+                review.get("source_credit_model"),
+                review.get("candidate_count_total"),
+                review.get("candidate_count_returned"),
+                review.get("terminal_candidate_count"),
+                review.get("high_confidence_candidate_count"),
+                review.get("write_eligible_candidates"),
+                review.get("write_blocked_candidates"),
+                review.get("recommendation"),
+            )
+            try:
+                LOG.info("[DreamCreditAssignmentReviewJSON] %s", json.dumps(review, ensure_ascii=False, sort_keys=True))
+            except Exception as exc:
+                LOG.warning("[DreamCreditAssignmentReviewJSON] encode_failed=%s writes=0", exc)
+
+        self._dream_state_update(
+            current_phase="adapter_credit_assignment_review_dry_run",
+            current_phase_step="adapter_credit_assignment_done",
+            adapter_credit_assignment_ok=bool(res.get("ok")),
+            adapter_credit_assignment_error=res.get("error"),
+            adapter_credit_assignment_safe_to_connect_next=bool(wd.get("safe_to_connect_next")),
+            adapter_credit_assignment_ready=bool(top_candidates),
+            adapter_credit_assignment_model=review.get("credit_assignment_model"),
+            adapter_credit_assignment_source_credit_model=review.get("source_credit_model"),
+            adapter_credit_assignment_candidate_count_total=int(review.get("candidate_count_total") or 0),
+            adapter_credit_assignment_candidate_count_returned=int(review.get("candidate_count_returned") or 0),
+            adapter_credit_assignment_recommendation=review.get("recommendation"),
+            adapter_credit_assignment_write_eligible_candidates=int(review.get("write_eligible_candidates") or 0),
+            adapter_credit_assignment_write_blocked_candidates=int(review.get("write_blocked_candidates") or 0),
+            adapter_credit_assignment_writes=0,
+        )
+
+
+    def _adapter_credit_validation_dry_run_phase(self) -> None:
+        """Regulaere Dream-Phase fuer read-only Credit-Validation-Review.
+
+        Diese Phase ist die Sicherheitsstufe nach dem Credit-Assignment-Review.
+        Sie sucht begrenzt nach direkter Step-/Reward-Evidenz in den aktuellen
+        adapter-normalisierten Traces sowie in episode_events/rewards_log. Auch
+        bei gefundenen Treffern bleibt die Phase strikt review-only: keine
+        Policy-, SnapChain-, MetaChain-, Checkpoint-, Forgetting-, DBWriter- oder
+        PTZ-Writes.
+        """
+        ns = str(os.environ.get("OROMA_DREAM_ADAPTER_PHASE_NAMESPACE", "game:snake") or "game:snake").strip()
+        schema = str(os.environ.get("OROMA_DREAM_ADAPTER_PHASE_STATE_SCHEMA_PREFIX", "snake:pro_v2") or "snake:pro_v2").strip()
+        limit = max(1, min(_env_int("OROMA_DREAM_ADAPTER_PHASE_LIMIT", 20), 500))
+        include_ns = _env_bool("OROMA_DREAM_ADAPTER_PHASE_INCLUDE_NAMESPACE_SCAN", False)
+
+        self._dream_state_update(
+            current_phase="adapter_credit_validation_dry_run",
+            current_phase_step="adapter_credit_validation_collect",
+            adapter_credit_validation_namespace=ns,
+            adapter_credit_validation_state_schema_prefix=schema,
+            adapter_credit_validation_limit=limit,
+            adapter_credit_validation_include_namespace_scan=bool(include_ns),
+            adapter_credit_validation_writes=0,
+        )
+
+        res = self._adapter_dry_run_collect(
+            namespace=ns,
+            state_schema_prefix=schema,
+            limit=limit,
+            include_namespace_scan=bool(include_ns),
+        )
+        wd = res.get("would_dream_consolidate") or {}
+        validation = res.get("credit_validation_review") or {}
+
+        if res.get("error"):
+            LOG.warning(
+                "[DreamCreditValidation] error namespace=%s schema=%s error=%s writes=0",
+                ns, schema, res.get("error"),
+            )
+        else:
+            LOG.info(
+                "[DreamCreditValidation] namespace=%s schema=%s validation_ready=%s "
+                "safe_to_connect_next=%s validation_model=%s candidates_total=%s "
+                "trace_direct_credit_events=%s trace_root_credit_events=%s "
+                "episode_matches=%s rewards_matches=%s direct_validation_matches=%s "
+                "write_eligible=%s write_blocked=%s recommendation=%s writes=0",
+                ns,
+                schema,
+                validation.get("validation_ready"),
+                wd.get("safe_to_connect_next"),
+                validation.get("validation_model"),
+                validation.get("candidate_count_total"),
+                validation.get("trace_direct_credit_events"),
+                validation.get("trace_root_credit_events"),
+                validation.get("episode_events_candidate_matches"),
+                validation.get("rewards_log_candidate_matches"),
+                validation.get("direct_validation_matches"),
+                validation.get("write_eligible_candidates"),
+                validation.get("write_blocked_candidates"),
+                validation.get("recommendation"),
+            )
+            try:
+                LOG.info("[DreamCreditValidationJSON] %s", json.dumps(validation, ensure_ascii=False, sort_keys=True))
+            except Exception as exc:
+                LOG.warning("[DreamCreditValidationJSON] encode_failed=%s writes=0", exc)
+
+        self._dream_state_update(
+            current_phase="adapter_credit_validation_dry_run",
+            current_phase_step="adapter_credit_validation_done",
+            adapter_credit_validation_ok=bool(res.get("ok")),
+            adapter_credit_validation_error=res.get("error"),
+            adapter_credit_validation_safe_to_connect_next=bool(wd.get("safe_to_connect_next")),
+            adapter_credit_validation_ready=bool(validation.get("validation_ready")),
+            adapter_credit_validation_model=validation.get("validation_model"),
+            adapter_credit_validation_candidate_count_total=int(validation.get("candidate_count_total") or 0),
+            adapter_credit_validation_direct_matches=int(validation.get("direct_validation_matches") or 0),
+            adapter_credit_validation_recommendation=validation.get("recommendation"),
+            adapter_credit_validation_write_eligible_candidates=int(validation.get("write_eligible_candidates") or 0),
+            adapter_credit_validation_write_blocked_candidates=int(validation.get("write_blocked_candidates") or 0),
+            adapter_credit_validation_writes=0,
+        )
+
+
+    @staticmethod
+    def _adapter_mini_write_evidence_signature(ns: str, schema: str, candidate: Dict[str, Any]) -> str:
+        """Return a deterministic aggregate evidence signature for Mini-Write idempotency.
+
+        The first production Mini-Write was intentionally tiny and did not yet persist
+        per-step evidence IDs. For compatibility with that already-written row, v1 is
+        an aggregate signature over the strict Direct-Step-Credit tuple. This is
+        deliberately conservative: the same (namespace, schema, state_hash, action,
+        direct n/pos/neg/draw) bundle is consumed once until a future source-ID based
+        ledger version is introduced.
+        """
+        sh = str(candidate.get("state_hash") or "").strip()
+        ac = str(candidate.get("action") or "").strip()
+        direct_n = int(candidate.get("direct_credit", candidate.get("n", 0)) or 0)
+        pos = int(candidate.get("direct_positive", candidate.get("pos", 0)) or 0)
+        neg = int(candidate.get("direct_negative", candidate.get("neg", 0)) or 0)
+        draw = int(candidate.get("direct_zero", candidate.get("draw", 0)) or 0)
+        payload = {
+            "version": "aggregate_v1",
+            "namespace": str(ns or ""),
+            "schema": str(schema or ""),
+            "state_hash": sh,
+            "action": ac,
+            "direct_credit": int(direct_n),
+            "direct_positive": int(pos),
+            "direct_negative": int(neg),
+            "direct_zero": int(draw),
+        }
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()
+
+    @staticmethod
+    def _adapter_mini_write_ledger_create_sql() -> str:
+        return """
+            CREATE TABLE IF NOT EXISTS dream_policy_mini_write_ledger (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                evidence_signature TEXT NOT NULL UNIQUE,
+                signature_version TEXT NOT NULL DEFAULT 'aggregate_v1',
+                namespace TEXT NOT NULL,
+                state_schema_prefix TEXT NOT NULL,
+                state_hash TEXT NOT NULL,
+                action TEXT NOT NULL,
+                direct_credit INTEGER NOT NULL DEFAULT 0,
+                direct_positive INTEGER NOT NULL DEFAULT 0,
+                direct_negative INTEGER NOT NULL DEFAULT 0,
+                direct_zero INTEGER NOT NULL DEFAULT 0,
+                policy_n_before INTEGER,
+                policy_q_before REAL,
+                policy_n_after INTEGER,
+                policy_q_after REAL,
+                source TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'applied',
+                created_ts INTEGER NOT NULL,
+                meta_json TEXT
+            )
+        """
+
+    @staticmethod
+    def _adapter_mini_write_ledger_index_sql() -> str:
+        return """
+            CREATE INDEX IF NOT EXISTS idx_dream_policy_mini_write_ledger_lookup
+            ON dream_policy_mini_write_ledger(namespace, state_schema_prefix, state_hash, action)
+        """
+
+    def _adapter_mini_write_existing_signatures(self, conn: Any, ns: str, schema: str) -> Set[str]:
+        try:
+            if not _sqlite_has_table(conn, "dream_policy_mini_write_ledger"):
+                return set()
+            rows = conn.execute(
+                """
+                SELECT evidence_signature
+                FROM dream_policy_mini_write_ledger
+                WHERE namespace=? AND state_schema_prefix=? AND status IN ('applied','seeded_from_log')
+                """,
+                (ns, schema),
+            ).fetchall()
+            return {str(_row_get_any(r, "evidence_signature", 0, "") or "") for r in rows if str(_row_get_any(r, "evidence_signature", 0, "") or "")}
+        except Exception as exc:
+            LOG.warning("[DreamMiniWriteGuard] ledger_read_failed=%s", exc)
+            return set()
+
+    def _adapter_mini_write_ledger_count_since(self, conn: Any, ns: str, schema: str, since_ts: int) -> int:
+        """Count applied/seeded Mini-Write ledger rows since *since_ts* for auto gates.
+
+        Read-only helper. It never creates schema and never writes. The automatic
+        Mini-Write phase uses this count as a rolling cap/cooldown guard before
+        DBWriter is allowed to touch policy_rules.
+        """
+        try:
+            if not _sqlite_has_table(conn, "dream_policy_mini_write_ledger"):
+                return 0
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM dream_policy_mini_write_ledger
+                WHERE namespace=? AND state_schema_prefix=?
+                  AND status IN ('applied','seeded_from_log')
+                  AND COALESCE(created_ts, 0) >= ?
+                """,
+                (str(ns), str(schema), int(since_ts)),
+            ).fetchone()
+            return int(_row_get_any(row, "c", 0, 0) or 0)
+        except Exception as exc:
+            LOG.warning("[DreamMiniWriteGuard] ledger_count_failed=%s", exc)
+            return 0
+
+    def _adapter_mini_write_ledger_seed_from_log_phase(self) -> None:
+        """Seed idempotency ledger entries from previous successful DreamMiniWriteJSON logs.
+
+        Purpose:
+        - The first manually confirmed Mini-Write happened before the ledger existed.
+        - This phase records that already-consumed Direct-Step-Credit bundle without
+          touching policy_rules, so a later adapter_mini_write_gated run cannot add
+          the same evidence a second time.
+        - All writes are DBWriter-only; no local SQLite write fallback exists here.
+        """
+        ns = str(os.environ.get("OROMA_DREAM_ADAPTER_PHASE_NAMESPACE", "game:snake") or "game:snake").strip()
+        schema = str(os.environ.get("OROMA_DREAM_ADAPTER_PHASE_STATE_SCHEMA_PREFIX", "snake:pro_v2") or "snake:pro_v2").strip()
+        enabled = _env_bool("OROMA_DREAM_ADAPTER_LEDGER_SEED_ENABLE", False)
+        confirm = str(os.environ.get("OROMA_DREAM_ADAPTER_LEDGER_SEED_CONFIRM", "") or "").strip()
+        required_confirm = "SEED_PREVIOUS_MINI_WRITE_LOG_ONLY"
+        max_seed = max(1, min(_env_int("OROMA_DREAM_ADAPTER_LEDGER_SEED_MAX", 20), 200))
+        log_path = str(os.environ.get("OROMA_DREAM_ADAPTER_LEDGER_SEED_LOG", "") or os.path.join(_OROMA_ROOT, "logs", "dream.out.log"))
+        now_ts = int(time.time())
+
+        self._dream_state_update(
+            current_phase="adapter_mini_write_ledger_seed_from_log",
+            current_phase_step="adapter_mini_write_ledger_seed_collect",
+            adapter_mini_write_ledger_seed_namespace=ns,
+            adapter_mini_write_ledger_seed_schema=schema,
+            adapter_mini_write_ledger_seed_writes=0,
+        )
+
+        gate_ok = True
+        gate_reason = "ok"
+        rows_seen = 0
+        seed_rows: List[Dict[str, Any]] = []
+        write_error = ""
+        if not enabled:
+            gate_ok = False
+            gate_reason = "ledger_seed_disabled"
+        elif confirm != required_confirm:
+            gate_ok = False
+            gate_reason = "missing_seed_confirm_token"
+        elif db_writer_client is None:
+            gate_ok = False
+            gate_reason = "dbwriter_client_unavailable"
+        elif not bool(getattr(db_writer_client, "enabled", lambda: False)()):
+            gate_ok = False
+            gate_reason = "dbwriter_disabled"
+        elif hasattr(db_writer_client, "ping") and not bool(db_writer_client.ping(timeout_ms=1000)):
+            gate_ok = False
+            gate_reason = "dbwriter_ping_failed"
+
+        if gate_ok:
+            try:
+                with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
+                    lines = fh.readlines()[-5000:]
+                for line in lines:
+                    marker = "[DreamMiniWriteJSON]"
+                    if marker not in line:
+                        continue
+                    raw = line.split(marker, 1)[1].strip()
+                    try:
+                        obj = json.loads(raw)
+                    except Exception:
+                        continue
+                    if str(obj.get("namespace") or "") != ns or str(obj.get("state_schema_prefix") or "") != schema:
+                        continue
+                    if int(obj.get("rows_written") or 0) <= 0 or str(obj.get("write_path") or "") != "DBWriter-only":
+                        continue
+                    for c in list(obj.get("selected_candidates") or []):
+                        if len(seed_rows) >= max_seed:
+                            break
+                        if not isinstance(c, dict):
+                            continue
+                        rows_seen += 1
+                        sig = self._adapter_mini_write_evidence_signature(ns, schema, c)
+                        n = int(c.get("direct_credit", c.get("n", 0)) or 0)
+                        pos = int(c.get("direct_positive", c.get("pos", 0)) or 0)
+                        neg = int(c.get("direct_negative", c.get("neg", 0)) or 0)
+                        draw = int(c.get("direct_zero", c.get("draw", 0)) or 0)
+                        if n <= 0 or (pos + neg + draw) != n:
+                            continue
+                        seed_rows.append({
+                            "evidence_signature": sig,
+                            "namespace": ns,
+                            "schema": schema,
+                            "state_hash": str(c.get("state_hash") or ""),
+                            "action": str(c.get("action") or ""),
+                            "n": n,
+                            "pos": pos,
+                            "neg": neg,
+                            "draw": draw,
+                            "old_n": c.get("old_n"),
+                            "old_q": c.get("old_q"),
+                            "after_n": int(c.get("old_n") or 0) + n if c.get("old_n") is not None else None,
+                            "after_q": c.get("proposed_q"),
+                            "source": "dream_worker.adapter_mini_write_ledger_seed_from_log",
+                            "status": "seeded_from_log",
+                        })
+                    if len(seed_rows) >= max_seed:
+                        break
+            except Exception as exc:
+                gate_ok = False
+                gate_reason = "log_seed_scan_failed"
+                write_error = f"{type(exc).__name__}:{exc}"
+
+        if gate_ok and not seed_rows:
+            # If the original Mini-Write log line has already rotated out of the
+            # active log window, allow one explicitly confirmed manual seed.  This
+            # still writes only the idempotency ledger via DBWriter and requires the
+            # operator to provide the exact Direct-Step-Credit tuple that was already
+            # verified in policy_rules.  No policy_rules row is inserted or updated.
+            manual_state_hash = str(os.environ.get("OROMA_DREAM_ADAPTER_LEDGER_SEED_STATE_HASH", "") or "").strip()
+            manual_action = str(os.environ.get("OROMA_DREAM_ADAPTER_LEDGER_SEED_ACTION", "") or "").strip()
+            manual_n = _env_int("OROMA_DREAM_ADAPTER_LEDGER_SEED_DIRECT_CREDIT", 0)
+            manual_pos = _env_int("OROMA_DREAM_ADAPTER_LEDGER_SEED_DIRECT_POSITIVE", 0)
+            manual_neg = _env_int("OROMA_DREAM_ADAPTER_LEDGER_SEED_DIRECT_NEGATIVE", 0)
+            manual_draw = _env_int("OROMA_DREAM_ADAPTER_LEDGER_SEED_DIRECT_ZERO", 0)
+            if manual_state_hash or manual_action or manual_n or manual_pos or manual_neg or manual_draw:
+                rows_seen += 1
+                if not manual_state_hash.startswith(schema):
+                    gate_ok = False
+                    gate_reason = "manual_seed_schema_mismatch"
+                elif not manual_action:
+                    gate_ok = False
+                    gate_reason = "manual_seed_missing_action"
+                elif manual_n <= 0 or (manual_pos + manual_neg + manual_draw) != manual_n:
+                    gate_ok = False
+                    gate_reason = "manual_seed_invalid_direct_credit_tuple"
+                else:
+                    manual_candidate = {
+                        "state_hash": manual_state_hash,
+                        "action": manual_action,
+                        "direct_credit": manual_n,
+                        "direct_positive": manual_pos,
+                        "direct_negative": manual_neg,
+                        "direct_zero": manual_draw,
+                    }
+                    seed_rows.append({
+                        "evidence_signature": self._adapter_mini_write_evidence_signature(ns, schema, manual_candidate),
+                        "namespace": ns,
+                        "schema": schema,
+                        "state_hash": manual_state_hash,
+                        "action": manual_action,
+                        "n": int(manual_n),
+                        "pos": int(manual_pos),
+                        "neg": int(manual_neg),
+                        "draw": int(manual_draw),
+                        "old_n": None,
+                        "old_q": None,
+                        "after_n": None,
+                        "after_q": None,
+                        "source": "dream_worker.adapter_mini_write_ledger_seed_manual_tuple",
+                        "status": "seeded_from_log",
+                    })
+
+        rows_written = 0
+        if gate_ok and seed_rows:
+            try:
+                stmts: List[Tuple[str, List[Any]]] = [
+                    (self._adapter_mini_write_ledger_create_sql(), []),
+                    (self._adapter_mini_write_ledger_index_sql(), []),
+                ]
+                for c in seed_rows:
+                    stmts.append((
+                        """
+                        INSERT OR IGNORE INTO dream_policy_mini_write_ledger
+                            (evidence_signature, signature_version, namespace, state_schema_prefix, state_hash, action,
+                             direct_credit, direct_positive, direct_negative, direct_zero,
+                             policy_n_before, policy_q_before, policy_n_after, policy_q_after,
+                             source, status, created_ts, meta_json)
+                        VALUES (?, 'aggregate_v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        [
+                            c["evidence_signature"], c["namespace"], c["schema"], c["state_hash"], c["action"],
+                            int(c["n"]), int(c["pos"]), int(c["neg"]), int(c["draw"]),
+                            c.get("old_n"), c.get("old_q"), c.get("after_n"), c.get("after_q"),
+                            c["source"], c["status"], int(now_ts),
+                            json.dumps({"seeded_from": os.path.basename(log_path)}, ensure_ascii=False, sort_keys=True),
+                        ],
+                    ))
+                db_writer_client.transaction(
+                    stmts,
+                    tag="dream_worker.adapter_mini_write_ledger_seed_from_log",
+                    priority="normal",
+                    timeout_ms=max(1000, _env_int("OROMA_DREAM_ADAPTER_MINI_WRITE_TIMEOUT_MS", 60000)),
+                    db="oroma",
+                )
+                rows_written = int(len(seed_rows))
+            except Exception as exc:
+                rows_written = 0
+                gate_ok = False
+                gate_reason = "dbwriter_ledger_seed_failed"
+                write_error = f"{type(exc).__name__}:{exc}"
+        elif gate_ok and not seed_rows:
+            gate_ok = False
+            gate_reason = "no_previous_mini_write_log_rows_found"
+
+        seed_result = {
+            "artifact_version": "dream_adapter_mini_write_idempotency_ledger_seed_v1",
+            "artifact_kind": "gated_policy_mini_write_ledger_seed_result",
+            "source": "dream_worker.adapter_mini_write_ledger_seed_from_log",
+            "namespace": ns,
+            "state_schema_prefix": schema,
+            "enabled": bool(enabled),
+            "confirm_ok": bool(confirm == required_confirm),
+            "gate_ok": bool(gate_ok),
+            "gate_reason": str(gate_reason),
+            "log_path": log_path,
+            "rows_seen": int(rows_seen),
+            "seed_rows_selected": int(len(seed_rows)),
+            "ledger_rows_written_or_ignored": int(rows_written),
+            "policy_rows_written": 0,
+            "write_path": "DBWriter-only",
+            "write_error": write_error,
+        }
+        LOG.info(
+            "[DreamMiniWriteLedgerSeed] namespace=%s schema=%s enabled=%s confirm_ok=%s gate_ok=%s gate_reason=%s rows_seen=%s ledger_rows=%s policy_writes=0",
+            ns, schema, bool(enabled), bool(confirm == required_confirm), bool(gate_ok), gate_reason, rows_seen, rows_written,
+        )
+        try:
+            LOG.info("[DreamMiniWriteLedgerSeedJSON] %s", json.dumps(seed_result, ensure_ascii=False, sort_keys=True))
+        except Exception as exc:
+            LOG.warning("[DreamMiniWriteLedgerSeedJSON] encode_failed=%s rows_written=%s", exc, rows_written)
+        self._dream_state_update(
+            current_phase="adapter_mini_write_ledger_seed_from_log",
+            current_phase_step="adapter_mini_write_ledger_seed_done",
+            adapter_mini_write_ledger_seed_ok=bool(gate_ok and rows_written > 0),
+            adapter_mini_write_ledger_seed_gate_reason=gate_reason,
+            adapter_mini_write_ledger_seed_rows_written=int(rows_written),
+            adapter_mini_write_ledger_seed_policy_writes=0,
+            adapter_mini_write_ledger_seed_error=write_error,
+        )
+
+    def _adapter_shadow_write_plan_dry_run_phase(self) -> None:
+        """Regulaere Dream-Phase fuer read-only Shadow-Write-Plan.
+
+        Diese Phase ist der letzte Review-Schritt vor einem spaeteren, separat
+        gegateten Mini-Write. Sie berechnet aus validierten direkten Step-Credits
+        konkrete old_q -> proposed_q Kandidaten, schreibt aber weiterhin nichts.
+        Root-/Mixed-Credit bleibt blockiert; ein spaeterer produktiver Write muss
+        DBWriter-kompatibel und separat freigeschaltet werden.
+        """
+        ns = str(os.environ.get("OROMA_DREAM_ADAPTER_PHASE_NAMESPACE", "game:snake") or "game:snake").strip()
+        schema = str(os.environ.get("OROMA_DREAM_ADAPTER_PHASE_STATE_SCHEMA_PREFIX", "snake:pro_v2") or "snake:pro_v2").strip()
+        limit = max(1, min(_env_int("OROMA_DREAM_ADAPTER_PHASE_LIMIT", 20), 500))
+        include_ns = _env_bool("OROMA_DREAM_ADAPTER_PHASE_INCLUDE_NAMESPACE_SCAN", False)
+
+        self._dream_state_update(
+            current_phase="adapter_shadow_write_plan_dry_run",
+            current_phase_step="adapter_shadow_write_plan_collect",
+            adapter_shadow_write_plan_namespace=ns,
+            adapter_shadow_write_plan_state_schema_prefix=schema,
+            adapter_shadow_write_plan_limit=limit,
+            adapter_shadow_write_plan_include_namespace_scan=bool(include_ns),
+            adapter_shadow_write_plan_writes=0,
+        )
+
+        res = self._adapter_dry_run_collect(
+            namespace=ns,
+            state_schema_prefix=schema,
+            limit=limit,
+            include_namespace_scan=bool(include_ns),
+        )
+        wd = res.get("would_dream_consolidate") or {}
+        validation = res.get("credit_validation_review") or {}
+        plan = res.get("shadow_write_plan") or {}
+        top_candidates = list(plan.get("top_candidates") or [])
+
+        if res.get("error"):
+            LOG.warning(
+                "[DreamShadowWritePlan] error namespace=%s schema=%s error=%s writes=0",
+                ns, schema, res.get("error"),
+            )
+        else:
+            LOG.info(
+                "[DreamShadowWritePlan] namespace=%s schema=%s plan_ready=%s "
+                "safe_to_connect_next=%s validation_ready=%s shadow_model=%s "
+                "candidates_total=%s candidates_returned=%s future_write_eligible=%s "
+                "blocked=%s max_abs_delta_q=%s recommendation=%s writes=0",
+                ns,
+                schema,
+                bool(top_candidates),
+                wd.get("safe_to_connect_next"),
+                validation.get("validation_ready"),
+                plan.get("shadow_model"),
+                plan.get("candidate_count_total"),
+                plan.get("candidate_count_returned"),
+                plan.get("future_write_eligible_candidates"),
+                plan.get("blocked_candidates"),
+                plan.get("max_abs_delta_q"),
+                plan.get("recommendation"),
+            )
+            try:
+                LOG.info("[DreamShadowWritePlanJSON] %s", json.dumps(plan, ensure_ascii=False, sort_keys=True))
+            except Exception as exc:
+                LOG.warning("[DreamShadowWritePlanJSON] encode_failed=%s writes=0", exc)
+
+        self._dream_state_update(
+            current_phase="adapter_shadow_write_plan_dry_run",
+            current_phase_step="adapter_shadow_write_plan_done",
+            adapter_shadow_write_plan_ok=bool(res.get("ok")),
+            adapter_shadow_write_plan_error=res.get("error"),
+            adapter_shadow_write_plan_safe_to_connect_next=bool(wd.get("safe_to_connect_next")),
+            adapter_shadow_write_plan_validation_ready=bool(validation.get("validation_ready")),
+            adapter_shadow_write_plan_ready=bool(top_candidates),
+            adapter_shadow_write_plan_model=plan.get("shadow_model"),
+            adapter_shadow_write_plan_candidate_count_total=int(plan.get("candidate_count_total") or 0),
+            adapter_shadow_write_plan_candidate_count_returned=int(plan.get("candidate_count_returned") or 0),
+            adapter_shadow_write_plan_future_write_eligible_candidates=int(plan.get("future_write_eligible_candidates") or 0),
+            adapter_shadow_write_plan_blocked_candidates=int(plan.get("blocked_candidates") or 0),
+            adapter_shadow_write_plan_recommendation=plan.get("recommendation"),
+            adapter_shadow_write_plan_writes=0,
+        )
+
+
+    def _adapter_mini_write_gated_phase(self, *, auto_mode: bool = False) -> None:
+        """Streng gegateter erster Dream->policy_rules Mini-Write.
+
+        Zweck
+        -----
+        Diese Phase ist der erste produktive Schreibpfad nach der vollstaendig
+        read-only validierten Adapter-/Credit-/Shadow-Kette. Sie schreibt nur
+        kleinste, direkt validierte Step-Credit-Kandidaten in ``policy_rules``.
+
+        Sicherheitsvertrag
+        ------------------
+        - Standardmaessig inaktiv: Ohne OROMA_DREAM_ADAPTER_MINI_WRITE_ENABLE=1
+          UND Confirm-Token wird nur geloggt und nichts geschrieben.
+        - Kein lokaler SQLite-Fallback: DBWriter muss aktiv und erreichbar sein.
+        - Nur future_write_eligible=True aus dem Shadow-Plan.
+        - Nur Direct-Step-Credit: root_credit muss 0 sein.
+        - Namespace/Schema bleiben explizit gebunden; Default-Limit ist 1.
+        - Keine SnapChain-, Checkpoint-, Forgetting-, PTZ- oder Orchestrator-Writes.
+        """
+        ns = str(os.environ.get("OROMA_DREAM_ADAPTER_PHASE_NAMESPACE", "game:snake") or "game:snake").strip()
+        schema = str(os.environ.get("OROMA_DREAM_ADAPTER_PHASE_STATE_SCHEMA_PREFIX", "snake:pro_v2") or "snake:pro_v2").strip()
+        limit = max(1, min(_env_int("OROMA_DREAM_ADAPTER_PHASE_LIMIT", 20), 500))
+        include_ns = _env_bool("OROMA_DREAM_ADAPTER_PHASE_INCLUDE_NAMESPACE_SCAN", False)
+        phase_name = "adapter_auto_mini_write_gated" if auto_mode else "adapter_mini_write_gated"
+        log_tag = "DreamAutoMiniWrite" if auto_mode else "DreamMiniWrite"
+        write_source = "dream_worker.adapter_auto_mini_write_gated" if auto_mode else "dream_worker.adapter_mini_write_gated"
+        if auto_mode:
+            max_writes = max(1, min(_env_int("OROMA_DREAM_ADAPTER_AUTO_MINI_WRITE_MAX", 1), 2))
+            enabled = _env_bool("OROMA_DREAM_ADAPTER_AUTO_MINI_WRITE_ENABLE", False)
+            confirm = str(os.environ.get("OROMA_DREAM_ADAPTER_AUTO_MINI_WRITE_CONFIRM", "") or "").strip()
+            required_confirm = "AUTO_DIRECT_STEP_CREDIT_ONLY"
+            auto_daily_cap = max(0, min(_env_int("OROMA_DREAM_ADAPTER_AUTO_MINI_WRITE_DAILY_CAP", 2), 50))
+            auto_cooldown_s = max(0, min(_env_int("OROMA_DREAM_ADAPTER_AUTO_MINI_WRITE_COOLDOWN_S", 3600), 86400))
+            auto_min_abs_delta = max(0.0, min(_env_float("OROMA_DREAM_ADAPTER_AUTO_MINI_WRITE_MIN_ABS_DELTA", 0.0001), 1.0))
+            auto_min_direct = max(1, min(_env_int("OROMA_DREAM_ADAPTER_AUTO_MINI_WRITE_MIN_DIRECT_EVIDENCE", 3), 1000))
+        else:
+            max_writes = max(1, min(_env_int("OROMA_DREAM_ADAPTER_MINI_WRITE_MAX", 1), 20))
+            enabled = _env_bool("OROMA_DREAM_ADAPTER_MINI_WRITE_ENABLE", False)
+            confirm = str(os.environ.get("OROMA_DREAM_ADAPTER_MINI_WRITE_CONFIRM", "") or "").strip()
+            required_confirm = "DIRECT_STEP_CREDIT_ONLY"
+            auto_daily_cap = 0
+            auto_cooldown_s = 0
+            auto_min_abs_delta = 0.0
+            auto_min_direct = 1
+
+        self._dream_state_update(
+            current_phase=phase_name,
+            current_phase_step="adapter_mini_write_collect",
+            adapter_mini_write_namespace=ns,
+            adapter_mini_write_state_schema_prefix=schema,
+            adapter_mini_write_limit=limit,
+            adapter_mini_write_max_writes=max_writes,
+            adapter_mini_write_enabled=bool(enabled),
+            adapter_mini_write_auto_mode=bool(auto_mode),
+            adapter_mini_write_auto_daily_cap=int(auto_daily_cap),
+            adapter_mini_write_auto_cooldown_s=int(auto_cooldown_s),
+            adapter_mini_write_auto_min_abs_delta=float(auto_min_abs_delta),
+            adapter_mini_write_writes=0,
+        )
+
+        res = self._adapter_dry_run_collect(
+            namespace=ns,
+            state_schema_prefix=schema,
+            limit=limit,
+            include_namespace_scan=bool(include_ns),
+        )
+        wd = res.get("would_dream_consolidate") or {}
+        validation = res.get("credit_validation_review") or {}
+        plan = res.get("shadow_write_plan") or {}
+        candidates = [c for c in list(plan.get("top_candidates") or []) if bool(c.get("future_write_eligible"))]
+        selected: List[Dict[str, Any]] = []
+        blocked_reasons: List[str] = []
+        existing_signatures: Set[str] = set()
+        ledger_present = False
+        now_ts = int(time.time())
+        auto_daily_count = 0
+        auto_cooldown_count = 0
+        auto_remaining_today = max_writes
+        try:
+            with sql_manager.get_conn() as ledger_conn:
+                ledger_present = bool(_sqlite_has_table(ledger_conn, "dream_policy_mini_write_ledger"))
+                existing_signatures = self._adapter_mini_write_existing_signatures(ledger_conn, ns, schema)
+                if auto_mode and ledger_present:
+                    auto_daily_count = self._adapter_mini_write_ledger_count_since(ledger_conn, ns, schema, now_ts - 86400)
+                    auto_cooldown_count = self._adapter_mini_write_ledger_count_since(ledger_conn, ns, schema, now_ts - int(auto_cooldown_s)) if int(auto_cooldown_s) > 0 else 0
+                    auto_remaining_today = max(0, int(auto_daily_cap) - int(auto_daily_count))
+        except Exception as exc:
+            blocked_reasons.append(f"ledger_read_failed:{type(exc).__name__}")
+
+        if auto_mode:
+            max_writes = max(1, min(int(max_writes), max(1, int(auto_remaining_today))))
+
+        gate_ok = True
+        gate_reason = "ok"
+        if res.get("error"):
+            gate_ok = False
+            gate_reason = f"collect_error:{res.get('error')}"
+        elif not enabled:
+            gate_ok = False
+            gate_reason = "mini_write_disabled"
+        elif confirm != required_confirm:
+            gate_ok = False
+            gate_reason = "missing_confirm_token"
+        elif db_writer_client is None:
+            gate_ok = False
+            gate_reason = "dbwriter_client_unavailable"
+        elif not bool(getattr(db_writer_client, "enabled", lambda: False)()):
+            gate_ok = False
+            gate_reason = "dbwriter_disabled"
+        elif hasattr(db_writer_client, "ping") and not bool(db_writer_client.ping(timeout_ms=1000)):
+            gate_ok = False
+            gate_reason = "dbwriter_ping_failed"
+        elif not bool(validation.get("validation_ready")):
+            gate_ok = False
+            gate_reason = "credit_validation_not_ready"
+        elif int(plan.get("future_write_eligible_candidates") or 0) <= 0:
+            gate_ok = False
+            gate_reason = "no_future_write_eligible_candidates"
+        elif not ledger_present:
+            gate_ok = False
+            gate_reason = "idempotency_ledger_missing_run_seed_phase"
+        elif auto_mode and int(auto_daily_cap) <= 0:
+            gate_ok = False
+            gate_reason = "auto_daily_cap_zero"
+        elif auto_mode and int(auto_daily_count) >= int(auto_daily_cap):
+            gate_ok = False
+            gate_reason = "auto_daily_cap_reached"
+        elif auto_mode and int(auto_cooldown_s) > 0 and int(auto_cooldown_count) > 0:
+            gate_ok = False
+            gate_reason = "auto_cooldown_active"
+
+        for c in candidates:
+            if len(selected) >= max_writes:
+                break
+            sh = str(c.get("state_hash") or "")
+            ac = str(c.get("action") or "")
+            direct_n = int(c.get("direct_credit") or 0)
+            pos = int(c.get("direct_positive") or 0)
+            neg = int(c.get("direct_negative") or 0)
+            draw = int(c.get("direct_zero") or 0)
+            root_n = int(c.get("root_credit") or 0)
+            if not sh.startswith(schema):
+                blocked_reasons.append("schema_mismatch")
+                continue
+            if not ac:
+                blocked_reasons.append("missing_action")
+                continue
+            if root_n != 0:
+                blocked_reasons.append("root_or_mixed_credit_not_allowed")
+                continue
+            if direct_n <= 0 or (pos + neg + draw) != direct_n:
+                blocked_reasons.append("direct_credit_count_mismatch")
+                continue
+            if auto_mode and direct_n < int(auto_min_direct):
+                blocked_reasons.append("auto_direct_credit_below_min")
+                continue
+            if auto_mode:
+                try:
+                    delta_abs = abs(float(c.get("shadow_delta_q") or 0.0))
+                except Exception:
+                    delta_abs = 0.0
+                if delta_abs < float(auto_min_abs_delta):
+                    blocked_reasons.append("auto_delta_below_min_abs")
+                    continue
+            sig = str(c.get("direct_evidence_signature") or "") or self._adapter_mini_write_evidence_signature(ns, schema, {
+                "state_hash": sh,
+                "action": ac,
+                "direct_credit": direct_n,
+                "direct_positive": pos,
+                "direct_negative": neg,
+                "direct_zero": draw,
+            })
+            if sig in existing_signatures:
+                blocked_reasons.append("duplicate_direct_evidence_signature")
+                continue
+            selected.append({
+                "evidence_signature": sig,
+                "signature_version": str(c.get("direct_evidence_signature_version") or "aggregate_v1"),
+                "state_hash": sh,
+                "action": ac,
+                "n": int(direct_n),
+                "pos": int(pos),
+                "neg": int(neg),
+                "draw": int(draw),
+                "direct_q": c.get("direct_q"),
+                "old_q": c.get("old_q"),
+                "old_n": c.get("old_n"),
+                "proposed_q": c.get("proposed_q"),
+                "shadow_delta_q": c.get("shadow_delta_q"),
+            })
+
+        rows_written = 0
+        rowcount = 0
+        ledger_rows_written = 0
+        write_error = ""
+        policy_sql = """
+            INSERT INTO policy_rules
+                (namespace, state_hash, action, n, pos, neg, draw, q, last_ts, centroid)
+            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            WHERE EXISTS (
+                SELECT 1
+                FROM dream_policy_mini_write_ledger
+                WHERE evidence_signature=? AND status='pending'
+            )
+            ON CONFLICT(namespace, state_hash, action) DO UPDATE SET
+                n = policy_rules.n + excluded.n,
+                pos = policy_rules.pos + excluded.pos,
+                neg = policy_rules.neg + excluded.neg,
+                draw = policy_rules.draw + excluded.draw,
+                q = CASE
+                      WHEN (policy_rules.n + excluded.n) > 0
+                      THEN CAST((policy_rules.pos + excluded.pos) - (policy_rules.neg + excluded.neg) AS REAL)
+                           / CAST(policy_rules.n + excluded.n AS REAL)
+                      ELSE 0.0
+                    END,
+                last_ts = CASE
+                            WHEN excluded.last_ts > COALESCE(policy_rules.last_ts, 0) THEN excluded.last_ts
+                            ELSE policy_rules.last_ts
+                          END,
+                centroid = COALESCE(excluded.centroid, policy_rules.centroid)
+        """
+        if gate_ok and selected:
+            try:
+                stmts: List[Tuple[str, List[Any]]] = [
+                    (self._adapter_mini_write_ledger_create_sql(), []),
+                    (self._adapter_mini_write_ledger_index_sql(), []),
+                ]
+                for c in selected:
+                    n = int(c.get("n") or 0)
+                    pos = int(c.get("pos") or 0)
+                    neg = int(c.get("neg") or 0)
+                    draw = int(c.get("draw") or 0)
+                    q = ((float(pos) - float(neg)) / float(n)) if n > 0 else 0.0
+                    sig = str(c.get("evidence_signature") or "")
+                    old_n = c.get("old_n")
+                    old_q = c.get("old_q")
+                    after_n = (int(old_n) + n) if old_n is not None else None
+                    after_q = c.get("proposed_q")
+                    stmts.append((
+                        """
+                        INSERT OR IGNORE INTO dream_policy_mini_write_ledger
+                            (evidence_signature, signature_version, namespace, state_schema_prefix, state_hash, action,
+                             direct_credit, direct_positive, direct_negative, direct_zero,
+                             policy_n_before, policy_q_before, policy_n_after, policy_q_after,
+                             source, status, created_ts, meta_json)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                        """,
+                        [
+                            sig, str(c.get("signature_version") or "aggregate_v1"), ns, schema, c["state_hash"], c["action"],
+                            n, pos, neg, draw, old_n, old_q, after_n, after_q,
+                            write_source, int(now_ts),
+                            json.dumps({
+                                "direct_q": c.get("direct_q"),
+                                "shadow_delta_q": c.get("shadow_delta_q"),
+                                "write_path": "DBWriter-only",
+                            }, ensure_ascii=False, sort_keys=True),
+                        ],
+                    ))
+                    stmts.append((
+                        policy_sql,
+                        [ns, c["state_hash"], c["action"], n, pos, neg, draw, q, now_ts, None, sig],
+                    ))
+                    stmts.append((
+                        """
+                        UPDATE dream_policy_mini_write_ledger
+                        SET status='applied', policy_n_after=?, policy_q_after=?, created_ts=?
+                        WHERE evidence_signature=? AND status='pending'
+                        """,
+                        [after_n, after_q, int(now_ts), sig],
+                    ))
+                db_writer_client.transaction(
+                    stmts,
+                    tag=f"{write_source}.policy_rules_with_ledger",
+                    priority="normal",
+                    timeout_ms=max(1000, _env_int("OROMA_DREAM_ADAPTER_MINI_WRITE_TIMEOUT_MS", 60000)),
+                    db="oroma",
+                )
+                rows_written = int(len(selected))
+                rowcount = int(len(selected))
+                ledger_rows_written = int(len(selected))
+            except Exception as exc:
+                rows_written = 0
+                rowcount = 0
+                ledger_rows_written = 0
+                gate_ok = False
+                gate_reason = "dbwriter_write_failed"
+                write_error = f"{type(exc).__name__}:{exc}"
+        elif gate_ok and not selected:
+            gate_ok = False
+            gate_reason = "no_selected_candidates_after_guards"
+
+        mini_result = {
+            "artifact_version": "dream_adapter_mini_write_gated_v1",
+            "artifact_kind": "gated_policy_mini_write_result",
+            "source": write_source,
+            "namespace": ns,
+            "auto_mode": bool(auto_mode),
+            "auto_daily_cap": int(auto_daily_cap),
+            "auto_daily_count": int(auto_daily_count),
+            "auto_remaining_today": int(auto_remaining_today),
+            "auto_cooldown_s": int(auto_cooldown_s),
+            "auto_cooldown_count": int(auto_cooldown_count),
+            "auto_min_abs_delta": float(auto_min_abs_delta),
+            "auto_min_direct_evidence": int(auto_min_direct),
+            "state_schema_prefix": schema,
+            "enabled": bool(enabled),
+            "confirm_ok": bool(confirm == required_confirm),
+            "dbwriter_required": True,
+            "dbwriter_enabled": bool(db_writer_client is not None and getattr(db_writer_client, "enabled", lambda: False)()),
+            "idempotency_ledger_present": bool(ledger_present),
+            "idempotency_ledger_existing_signatures": int(len(existing_signatures)),
+            "gate_ok": bool(gate_ok),
+            "gate_reason": str(gate_reason),
+            "validation_ready": bool(validation.get("validation_ready")),
+            "safe_to_connect_next": bool(wd.get("safe_to_connect_next")),
+            "shadow_future_write_eligible": int(plan.get("future_write_eligible_candidates") or 0),
+            "selected_candidates": selected,
+            "selected_count": int(len(selected)),
+            "max_writes": int(max_writes),
+            "rows_written": int(rows_written),
+            "dbwriter_rowcount": int(rowcount),
+            "ledger_rows_written": int(ledger_rows_written),
+            "blocked_reasons_sample": blocked_reasons[:20],
+            "write_error": write_error,
+            "write_path": "DBWriter-only",
+            "root_credit_allowed": False,
+        }
+
+        LOG.info(
+            f"[{log_tag}] namespace=%s schema=%s enabled=%s confirm_ok=%s "
+            "gate_ok=%s gate_reason=%s validation_ready=%s shadow_eligible=%s "
+            "selected=%s rows_written=%s dbwriter_rowcount=%s ledger_present=%s duplicate_guard=%s writes=%s",
+            ns,
+            schema,
+            bool(enabled),
+            bool(confirm == required_confirm),
+            bool(gate_ok),
+            gate_reason,
+            validation.get("validation_ready"),
+            plan.get("future_write_eligible_candidates"),
+            len(selected),
+            rows_written,
+            rowcount,
+            bool(ledger_present),
+            len(existing_signatures),
+            rows_written,
+        )
+        try:
+            LOG.info("[%sJSON] %s", log_tag, json.dumps(mini_result, ensure_ascii=False, sort_keys=True))
+        except Exception as exc:
+            LOG.warning("[%sJSON] encode_failed=%s rows_written=%s", log_tag, exc, rows_written)
+
+        self._dream_state_update(
+            current_phase=phase_name,
+            current_phase_step="adapter_mini_write_done",
+            adapter_mini_write_ok=bool(gate_ok and rows_written > 0),
+            adapter_mini_write_gate_reason=gate_reason,
+            adapter_mini_write_validation_ready=bool(validation.get("validation_ready")),
+            adapter_mini_write_shadow_future_write_eligible=int(plan.get("future_write_eligible_candidates") or 0),
+            adapter_mini_write_selected_count=int(len(selected)),
+            adapter_mini_write_rows_written=int(rows_written),
+            adapter_mini_write_rowcount=int(rowcount),
+            adapter_mini_write_ledger_present=bool(ledger_present),
+            adapter_mini_write_ledger_existing_signatures=int(len(existing_signatures)),
+            adapter_mini_write_ledger_rows_written=int(ledger_rows_written),
+            adapter_mini_write_auto_mode=bool(auto_mode),
+            adapter_mini_write_auto_daily_cap=int(auto_daily_cap),
+            adapter_mini_write_auto_daily_count=int(auto_daily_count),
+            adapter_mini_write_auto_remaining_today=int(auto_remaining_today),
+            adapter_mini_write_auto_cooldown_s=int(auto_cooldown_s),
+            adapter_mini_write_auto_cooldown_count=int(auto_cooldown_count),
+            adapter_mini_write_error=write_error,
+        )
+
+
+    def _adapter_auto_mini_write_gated_phase(self) -> None:
+        """Auto-gated Mini-Write phase with rolling cap and cooldown.
+
+        This wrapper deliberately reuses the DBWriter-only Mini-Write core, but
+        switches it to AUTO gates. It is registered only as an explicit adapter
+        phase and is not part of the normal Dream rotation unless an operator or
+        orchestrator explicitly selects it and provides the AUTO confirm token.
+        """
+        return self._adapter_mini_write_gated_phase(auto_mode=True)
+
     # --------------------------- PTZ: Bandit Policy ---------------------------
     def _ptz_policy_from_attention_gain(self) -> None:
         """Aggregate PTZ attention_gain rewards into policy_rules.
@@ -2458,20 +5390,11 @@ class DreamWorker(threading.Thread):
             neg_thr = -abs(float(neg_thr))
 
         # checkpoint in dream_state
-        last_id = 0
-        try:
-            with sql_manager.get_conn() as conn:
-                row = conn.execute(
-                    "SELECT value FROM dream_state WHERE key=?",
-                    ("ptz_policy:last_reward_id",),
-                ).fetchone()
-                if row:
-                    try:
-                        last_id = int(row[0])
-                    except Exception:
-                        last_id = 0
-        except Exception:
-            last_id = 0
+        last_id = _read_dream_state_int(
+            "ptz_policy:last_reward_id",
+            0,
+            log_key="dream_worker.ptz_policy.checkpoint.read",
+        )
 
         # Fetch new rewards
         rows = []
@@ -2572,8 +5495,13 @@ class DreamWorker(threading.Thread):
                     upd_params = [float(r), int(pos), int(neg), int(draw), ts1, "ptz_att", state_hash, action]
 
                     if use_dbw:
-                        db_writer_client.exec_write(ins_sql, ins_params, tag="dream_worker.ptz_policy.ins", priority="low", timeout_ms=2000, db="oroma")
-                        db_writer_client.exec_write(upd_sql, upd_params, tag="dream_worker.ptz_policy.upd", priority="low", timeout_ms=2000, db="oroma")
+                        db_writer_client.transaction(
+                            [(ins_sql, ins_params), (upd_sql, upd_params)],
+                            tag="dream_worker.ptz_policy.tx",
+                            priority="low",
+                            timeout_ms=5000,
+                            db="oroma",
+                        )
                     else:
                         conn.execute(ins_sql, ins_params)
                         conn.execute(upd_sql, upd_params)
@@ -2632,14 +5560,11 @@ class DreamWorker(threading.Thread):
             neg_thr = -abs(float(neg_thr))
 
         ck_key = "ptz_motion_policy:last_reward_id"
-        last_id = 0
-        try:
-            with sql_manager.get_conn() as conn:
-                row = conn.execute("SELECT value FROM dream_state WHERE key=?", (ck_key,)).fetchone()
-                if row:
-                    last_id = int(row[0])
-        except Exception:
-            last_id = 0
+        last_id = _read_dream_state_int(
+            ck_key,
+            0,
+            log_key="dream_worker.ptz_motion_policy.checkpoint.read",
+        )
 
         try:
             with sql_manager.get_conn() as conn:
@@ -2706,8 +5631,13 @@ class DreamWorker(threading.Thread):
                 ins_params = ["ptz_motion", state_hash, action, 0, 0, 0, 0, 0.0, ts1]
                 upd_params = [float(r), int(pos), int(neg), int(draw), ts1, "ptz_motion", state_hash, action]
                 if use_dbw:
-                    db_writer_client.exec_write(ins_sql, ins_params, tag="dream_worker.ptz_motion_policy.ins", priority="low", timeout_ms=2000, db="oroma")
-                    db_writer_client.exec_write(upd_sql, upd_params, tag="dream_worker.ptz_motion_policy.upd", priority="low", timeout_ms=2000, db="oroma")
+                    db_writer_client.transaction(
+                        [(ins_sql, ins_params), (upd_sql, upd_params)],
+                        tag="dream_worker.ptz_motion_policy.tx",
+                        priority="low",
+                        timeout_ms=5000,
+                        db="oroma",
+                    )
                 else:
                     conn.execute(ins_sql, ins_params)
                     conn.execute(upd_sql, upd_params)
@@ -2760,14 +5690,11 @@ class DreamWorker(threading.Thread):
             neg_thr = -abs(float(neg_thr))
 
         ck_key = "ptz_probe_policy:last_reward_id"
-        last_id = 0
-        try:
-            with sql_manager.get_conn() as conn:
-                row = conn.execute("SELECT value FROM dream_state WHERE key=?", (ck_key,)).fetchone()
-                if row:
-                    last_id = int(row[0])
-        except Exception:
-            last_id = 0
+        last_id = _read_dream_state_int(
+            ck_key,
+            0,
+            log_key="dream_worker.ptz_probe_policy.checkpoint.read",
+        )
 
         try:
             with sql_manager.get_conn() as conn:
@@ -2834,8 +5761,13 @@ class DreamWorker(threading.Thread):
                 ins_params = ["ptz_probe", state_hash, action, 0, 0, 0, 0, 0.0, ts1]
                 upd_params = [float(r), int(pos), int(neg), int(draw), ts1, "ptz_probe", state_hash, action]
                 if use_dbw:
-                    db_writer_client.exec_write(ins_sql, ins_params, tag="dream_worker.ptz_probe_policy.ins", priority="low", timeout_ms=2000, db="oroma")
-                    db_writer_client.exec_write(upd_sql, upd_params, tag="dream_worker.ptz_probe_policy.upd", priority="low", timeout_ms=2000, db="oroma")
+                    db_writer_client.transaction(
+                        [(ins_sql, ins_params), (upd_sql, upd_params)],
+                        tag="dream_worker.ptz_probe_policy.tx",
+                        priority="low",
+                        timeout_ms=5000,
+                        db="oroma",
+                    )
                 else:
                     conn.execute(ins_sql, ins_params)
                     conn.execute(upd_sql, upd_params)
@@ -2918,17 +5850,11 @@ class DreamWorker(threading.Thread):
             neg_thr = -abs(float(neg_thr))
 
         ck_key = "ptz_motor_policy:last_reward_id"
-        last_id = 0
-        try:
-            with sql_manager.get_conn() as conn:
-                row = conn.execute("SELECT value FROM dream_state WHERE key=?", (ck_key,)).fetchone()
-                if row:
-                    try:
-                        last_id = int(row[0])
-                    except Exception:
-                        last_id = 0
-        except Exception:
-            last_id = 0
+        last_id = _read_dream_state_int(
+            ck_key,
+            0,
+            log_key="dream_worker.ptz_motor_policy.checkpoint.read",
+        )
 
         try:
             with sql_manager.get_conn() as conn:
@@ -3061,8 +5987,13 @@ class DreamWorker(threading.Thread):
                 upd_params = [float(r), int(pos), int(neg), int(draw), ts1, namespace, state_hash, action]
 
                 if use_dbw:
-                    db_writer_client.exec_write(ins_sql, ins_params, tag="dream_worker.ptz_motor_policy.ins", priority="low", timeout_ms=2000, db="oroma")
-                    db_writer_client.exec_write(upd_sql, upd_params, tag="dream_worker.ptz_motor_policy.upd", priority="low", timeout_ms=2000, db="oroma")
+                    db_writer_client.transaction(
+                        [(ins_sql, ins_params), (upd_sql, upd_params)],
+                        tag="dream_worker.ptz_motor_policy.tx",
+                        priority="low",
+                        timeout_ms=5000,
+                        db="oroma",
+                    )
                 else:
                     conn.execute(ins_sql, ins_params)
                     conn.execute(upd_sql, upd_params)
@@ -3093,7 +6024,9 @@ class DreamWorker(threading.Thread):
             pass
 
         LOG.info(
-            "PTZ motor policy: updated=%s skipped=%s no_utility=%s no_action=%s parse=%s last_id=%s namespace=%s",
+            "PTZ motor policy: start_id=%s fetched=%s updated=%s skipped=%s no_utility=%s no_action=%s parse=%s last_id=%s namespace=%s",
+            last_id,
+            len(rows),
             updated,
             skipped,
             skipped_no_utility,
@@ -3549,6 +6482,12 @@ def _parse_args():
     ap.add_argument("--phase", type=str, default="", help="Nur diese Dream-Phase(n) im Single-Run ausfuehren, kommasepariert; setzt OROMA_DREAM_ONLY_PHASES")
     ap.add_argument("--verbose", action="store_true", help="Konsole auf DEBUG schalten")
     ap.add_argument("--filter", type=str, default="", help='Substring-Filter auf chain.metadata (z. B. "game:tictactoe")')
+    ap.add_argument("--adapter-dry-run", action="store_true", help="Read-only DreamWorker-Adapter-Dry-Run ausfuehren und danach beenden; keine Writes")
+    ap.add_argument("--adapter-namespace", type=str, default="game:snake", help="Namespace fuer --adapter-dry-run, z. B. game:snake")
+    ap.add_argument("--adapter-state-schema-prefix", type=str, default="snake:pro_v2", help="State-Schema-Prefix fuer --adapter-dry-run, z. B. snake:pro_v2")
+    ap.add_argument("--adapter-limit", type=int, default=20, help="Maximale SnapChains fuer --adapter-dry-run (klein halten bei grosser Live-DB)")
+    ap.add_argument("--adapter-json", action="store_true", help="--adapter-dry-run als JSON ausgeben")
+    ap.add_argument("--adapter-include-namespace-scan", action="store_true", help="Nur Diagnose: zusaetzlich namespace=? scannen; Default bleibt origin-only")
     return ap.parse_args()
 
 
@@ -3587,6 +6526,13 @@ if __name__ == "__main__":
         args.interval = 0
     if str(getattr(args, "phase", "") or "").strip():
         os.environ["OROMA_DREAM_ONLY_PHASES"] = str(args.phase).strip()
+        adapter_phase_names = {x.strip() for x in str(args.phase).replace(";", ",").split(",") if x.strip()}
+        if adapter_phase_names.intersection({"adapter_dry_run", "adapter_consolidation_dry_run", "adapter_policy_review_dry_run", "adapter_credit_assignment_review_dry_run", "adapter_credit_validation_dry_run", "adapter_shadow_write_plan_dry_run", "adapter_mini_write_gated", "adapter_auto_mini_write_gated", "adapter_mini_write_ledger_seed_from_log"}):
+            os.environ.setdefault("OROMA_DREAM_ADAPTER_PHASE_NAMESPACE", str(getattr(args, "adapter_namespace", "") or "game:snake"))
+            os.environ.setdefault("OROMA_DREAM_ADAPTER_PHASE_STATE_SCHEMA_PREFIX", str(getattr(args, "adapter_state_schema_prefix", "") or "snake:pro_v2"))
+            os.environ.setdefault("OROMA_DREAM_ADAPTER_PHASE_LIMIT", str(int(getattr(args, "adapter_limit", 20) or 20)))
+            if bool(getattr(args, "adapter_include_namespace_scan", False)):
+                os.environ["OROMA_DREAM_ADAPTER_PHASE_INCLUDE_NAMESPACE_SCAN"] = "1"
 
     # Optional: Verbose-Logging aktivieren (nur Konsole & .out – .err bleibt WARN+)
     if args.verbose:
@@ -3601,6 +6547,26 @@ if __name__ == "__main__":
             except Exception as e:
                 log_suppressed(_BOOT_LOG, key="dream_worker.pass.24", msg="Suppressed exception (was: pass)", exc=e, level=logging.WARNING, interval_s=600)
         LOG.debug("Verbose-Mode aktiv")
+
+    # Expliziter Adapter-Dry-Run: nutzt die DreamWorker-Klasse und den echten
+    # DB-/Adapter-Kontext, fuehrt aber KEINEN produktiven Dream-Lauf aus.
+    # Dadurch bleiben DB, policy_rules, SnapChains, Checkpoints und Forgetting
+    # unangetastet. Ausgabe erfolgt nur auf stdout.
+    if getattr(args, "adapter_dry_run", False):
+        mem = LangzeitGedaechtnis()
+        wk = DreamWorker(
+            mem,
+            interval=0,
+            meta_filter_substr=None,
+        )
+        res = wk._adapter_dry_run_collect(
+            namespace=str(getattr(args, "adapter_namespace", "") or "game:snake"),
+            state_schema_prefix=str(getattr(args, "adapter_state_schema_prefix", "") or "snake:pro_v2"),
+            limit=int(getattr(args, "adapter_limit", 20) or 20),
+            include_namespace_scan=bool(getattr(args, "adapter_include_namespace_scan", False)),
+        )
+        wk._adapter_dry_run_print(res, as_json=bool(getattr(args, "adapter_json", False)))
+        sys.exit(0)
 
     # Hauptlauf (Night/Dream-Loop)
     mem = LangzeitGedaechtnis()
